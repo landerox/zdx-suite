@@ -1,0 +1,45 @@
+# Third-party plugins (each is its own upstream repo)
+plugins/
+
+# OMZ default theme placeholder
+themes/
+
+# Local backup output (sys-backup-dots)
+backup/
+
+# Claude Code / agent local config (never commit)
+.claude/
+*.local.json
+
+# Backup files
+*.bak
+*.bak.*
+
+# OS / editor noise
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Logs / temp / scratch dirs
+*.log
+*.tmp
+.tmp/
+.antigravitycli/
+
+# Temporary frames extracted from .demo/demo.gif during recording iteration
+.demo/frame_*.png
+
+# Ignore the repomixignore file itself, as it may contain sensitive information or be specific to the local environment.
+.repomixignore
+
+# User-specific custom configuration / tools
+aliases.zsh
+zdir
+zclean
+
+# Ignore local scripts
+functions/zclean.zsh
+functions/zdir.zsh
+.dev-suite-backups
+.codex

@@ -1,0 +1,210 @@
+# =============================================================================
+# ZDX user configuration template
+# =============================================================================
+#
+# ZDX works without this file. Copy it only when you want to override a
+# documented default, then uncomment the smallest set of options you need.
+# From the reviewed local checkout, use the installer to preview and create
+# this file without overwriting existing configuration:
+#
+#   zsh -f scripts/install.zsh --dry-run
+#   zsh -f scripts/install.zsh
+#
+# Pass custom Oh My Zsh paths as exported ZSH/ZSH_CUSTOM variables. The runtime
+# reads ~/.config/zdx/config.zsh regardless of XDG_CONFIG_HOME.
+# Installation and activation contract: docs/installation.md
+#
+# This file is executable Zsh and is sourced during shell startup. Keep it
+# owner-controlled, review every line you add, and never paste untrusted shell
+# snippets into it. Prefer references to credential files over embedded
+# secrets. Start a new shell after editing to load the configuration cleanly.
+#
+# Full workflows and validation rules: docs/user-guide.md
+# Plugin trust model: docs/plugins.md
+
+# =============================================================================
+# Workspace and Git identities
+# =============================================================================
+
+# Root used by ws-menu. It must be an absolute, canonical path; /, HOME itself,
+# and symlink components are refused by workspace mutations.
+# WS_BASE_DIR="$HOME/workspaces"
+
+# Connection deadline used by Workspace SSH tests. Accepted range: 1-60.
+# WS_SSH_CONNECT_TIMEOUT=10
+
+# Git identity profiles used by git-menu and ws-menu. Name and Email are
+# required. GpgKey, GpgFormat (openpgp or ssh), and SshKey are optional.
+# Store only a key ID or key path here, never private-key contents. Profile
+# names should be short lowercase identifiers that are easy to recognize.
+# typeset -gA ZDX_GIT_IDENTITIES=(
+#   personal 'Name|Jane Doe;Email|jane@example.com;GpgKey|0123456789ABCDEF;GpgFormat|openpgp;SshKey|~/.ssh/id_ed25519_personal'
+#   work     'Name|Jane Doe;Email|jane@work.example;SshKey|~/.ssh/id_ed25519_work'
+# )
+
+# =============================================================================
+# Private state and installed backends
+# =============================================================================
+
+# Owner-only directory for named env-menu profiles. Overrides must be absolute,
+# canonical, symlink-free descendants of HOME.
+# ZDX_ENV_PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zdx/env-profiles"
+
+# Python interpreter containing an already-installed compatible
+# huggingface_hub (0.23 through 1.x). ZDX never installs it implicitly.
+# HF_PYTHON="$HOME/.venvs/huggingface/bin/python"
+
+# =============================================================================
+# Docker routing
+# =============================================================================
+
+# Prefer a named Docker context when possible. If you need a raw endpoint,
+# leave DOCKER_CONTEXT unset and configure DOCKER_HOST instead. ZDX gives
+# DOCKER_CONTEXT precedence and requires --allow-remote before remote daemon
+# mutations. Exporting these values also keeps the Docker CLI consistent with
+# ZDX outside its menus.
+# export DOCKER_CONTEXT="desktop-linux"
+# export DOCKER_HOST="unix:///run/user/1000/docker.sock"
+
+# Docker client configuration must stay in a private, canonical directory
+# below HOME. Existing directories and config.json files are expected to use
+# modes 700 and 600 respectively.
+# export DOCKER_CONFIG="$HOME/.docker"
+
+# =============================================================================
+# WireGuard VPN
+# =============================================================================
+
+# Linux and WSL default to /etc/wireguard. Another host is unsupported by
+# default; setting an explicit profile directory is a deliberate opt-in whose
+# local WireGuard integration ZDX cannot guarantee.
+# VPN_CONFIG_DIR="/etc/wireguard"
+# macOS example: VPN_CONFIG_DIR="/opt/homebrew/etc/wireguard"
+
+# Private state and diagnostic reports. Both locations must be canonical,
+# symlink-free descendants of HOME.
+# VPN_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/zdx/vpn"
+# VPN_MENU_REPORT_DIR="$HOME/vpn-stats"
+
+# Reports retained after a successful vpn-report. 0 keeps every report.
+# Accepted range: 0-1000.
+# VPN_MENU_REPORT_RETENTION=20
+
+# Plain IP literals used by the WSL resolver hardening hook while the tunnel is
+# down. Do not place shell syntax, hostnames, or URLs in these values.
+# VPN_DNS_FALLBACK_PRIMARY="1.1.1.1"
+# VPN_DNS_FALLBACK_SECONDARY="9.9.9.9"
+
+# Opt in to the IPv6 stripping tweak outside WSL. Accepted value: 1.
+# VPN_MENU_WSL_IPV6_FIX=1
+
+# Compare the public exit IP across the configured providers. This makes
+# additional network requests and exposes your public IP to each provider.
+# VPN_MENU_IP_CROSSCHECK=1
+
+# Advanced provider overrides. Use bounded HTTPS endpoints without embedded
+# credentials. Comma-separated values are queried in order.
+# VPN_MENU_IPINFO_URLS="https://ipinfo.io/json,https://ifconfig.co/json"
+# VPN_MENU_IPINFO_PLAIN_URLS="https://icanhazip.com"
+# VPN_MENU_IPINFO_TRACE_URLS="https://1.1.1.1/cdn-cgi/trace"
+
+# =============================================================================
+# System maintenance
+# =============================================================================
+
+# By default, APT may send one cooperative SIGTERM to an exactly validated
+# automatic unattended-upgrade after authorization. Set 0 to disable that
+# signal. This never enables waiting and accepts only 0 or 1.
+# SYS_APT_AUTOMATIC_TAKEOVER=1
+
+# Maximum private output tail retained for a running System command. Failure
+# rendering remains bounded and redacts common credential indicators.
+# Accepted range: 4096-16777216 bytes.
+# SYS_COMMAND_CAPTURE_MAX_BYTES=262144
+
+# =============================================================================
+# Developer project tools
+# =============================================================================
+
+# Keep remote package runners disabled unless you explicitly trust that model.
+# Setting 1 allows uvx or npx as last-resort quality-gate backends, which may
+# download and execute index-selected code. Accepted values: 0 or 1.
+# DEV_ALLOW_EPHEMERAL=0
+
+# Project-local state. Defaults are recommended. Overrides must remain in a
+# dedicated canonical, symlink-free directory below the project or HOME.
+# DEV_BACKUP_DIR=".dev-suite-backups"
+# DEV_PROFILE_DIR=".dev-suite-profiles"
+# DEV_REPORT_DIR="dev-suite-reports"
+# DEV_BACKUP_RETENTION=5       # 1-100 backups
+
+# Bounded discovery settings. Increase them only for a known project layout;
+# larger values increase scan cost and the size of reviewed cleanup plans.
+# DEV_CLEAN_DEPTH=12           # 1-64
+# DEV_CLEAN_MAX_TARGETS=10000  # 1-50000
+# DEV_SCAN_DEPTH=3             # 1-32
+
+# PyPI metadata query controls for dependency-specifier reviews.
+# DEV_PYPI_TIMEOUT=15          # seconds, 1-300
+# DEV_PYPI_RETRIES=2           # retries per package, 0-10
+# DEV_PYPI_JOBS=8              # concurrent requests, 1-32
+
+# Verbose Developer diagnostics are written to stderr. Leave disabled during
+# normal use to keep interactive output focused.
+# DEV_SUITE_DEBUG=0
+
+# =============================================================================
+# Interface, loading, and local telemetry
+# =============================================================================
+
+# Menus default to a 16-color palette with native terminal foreground/background.
+# Optional custom fzf theme; any non-empty NO_COLOR forces --no-color last.
+# ZDX_FZF_THEME="16,fg:-1,bg:-1,fg+:-1,bg+:-1,hl:4,hl+:4"
+# NO_COLOR=1
+
+# Any non-empty value (including "0") disables color and uses ASCII fzf chrome:
+# --no-unicode, pointer >, marker +. Row text can still contain Unicode.
+# C/POSIX locales select ASCII chrome automatically; TERM=dumb also disables
+# color, but interactive menus still require terminal cursor control.
+# ZDX_FZF_PLAIN=1
+# For one invocation only: ZDX_FZF_PLAIN=1 file-menu
+
+# Built-in pickers isolate inherited FZF_DEFAULT_OPTS, FZF_DEFAULT_OPTS_FILE,
+# and FZF_DEFAULT_COMMAND, and scope SHELL=/bin/sh to their preview invocation.
+# They do not change the caller's shell environment. Use zdx doctor to inspect
+# display settings and the loaded source path, then open a new terminal after
+# updating that installation so source guards cannot retain old functions.
+
+# Lazy suite loading is the default. Eager loading is useful only for
+# compatibility or diagnostics and increases shell startup work.
+# ZDX_EAGER_LOAD=1
+
+# Local telemetry is opt-in and never sent over the network. Records contain
+# only suite, canonical command identifier, duration, exit status, and UTC
+# timestamp; they never include arguments, paths, output, or environment data.
+# ZDX_TELEMETRY=1
+# ZDX_TELEMETRY_MAX_RECORDS=1000  # 1-1000000
+# ZDX_TELEMETRY_MAX_BYTES=5242880 # 1-134217728
+# SYS_TELEMETRY_MAX_READ_BYTES=5242880 # 1-134217728; keep >= writer limit
+
+# ZDX currently owns one global widget: Ctrl-G opens git-menu. Disable it with
+# ZDX_KEYBINDINGS=0, or assign another valid Zsh key sequence.
+# ZDX_KEYBINDINGS=1
+# ZDX_KEY_GIT="^G"
+
+# =============================================================================
+# Plugins and update-safe extensions
+# =============================================================================
+
+# Custom plugin root. It must be an owned, canonical, non-symlink directory.
+# Plugins are arbitrary Zsh code with your full shell authority: review their
+# source, origin, and selected commit before loading or updating them.
+# ZDX_PLUGINS_DIR="$HOME/.config/zdx/plugins"
+
+# Keep personal changes outside the tracked functions/ tree:
+#
+#   ~/.config/zdx/overrides.zsh
+#       Loaded last as arbitrary trusted Zsh with your full shell authority.
+#
+#   ~/.config/zdx/plugins/<plugin>/<plugin>-menu.zsh
+#       Loaded as a reviewed custom suite. Follow docs/plugins.md exactly.

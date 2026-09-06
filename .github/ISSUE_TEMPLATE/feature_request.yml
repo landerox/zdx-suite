@@ -1,0 +1,68 @@
+name: Feature request
+description: Suggest a new capability or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature ideas are welcome. Help us by explaining the *problem*
+        first; the proposed solution is secondary.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case. What is hard or impossible today?
+      placeholder: |
+        When I do X, I have to manually ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional. A sketch of how this might work, if you have one.
+      placeholder: |
+        Add a new `<suite>-<command>` that ...
+
+  - type: dropdown
+    id: suite
+    attributes:
+      label: Suite this would live in
+      options:
+        - Git (git-menu)
+        - Workspace (ws-menu)
+        - VPN (vpn-menu)
+        - Docker (docker-menu)
+        - System (sys-menu)
+        - File (file-menu)
+        - App (app-menu)
+        - CI (ci-menu)
+        - Environment (env-menu)
+        - Python (py-menu)
+        - Developer (dev-menu)
+        - Network (net-menu)
+        - GPU (gpu-menu)
+        - Hugging Face (hf-menu)
+        - AI (ai-menu)
+        - Core or plugin loader
+        - new suite
+        - cross-cutting / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools, workarounds, or approaches you have tried.
+
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true

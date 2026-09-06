@@ -1,0 +1,9 @@
+# command	module	risk	capability
+docker-containers	docker-containers.zsh	mixed	container-daemon
+docker-images	docker-images.zsh	mixed	image-daemon
+docker-clean	docker-clean.zsh	destructive	exact-resource-plan
+docker-login	docker-registry.zsh	network	registry-auth
+docker-compose-up	docker-compose.zsh	project-code	compose
+docker-compose-down	docker-compose.zsh	destructive	compose
+docker-compose-restart	docker-compose.zsh	reversible	compose
+docker-compose-logs	docker-compose.zsh	read-only	compose

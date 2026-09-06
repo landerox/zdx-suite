@@ -1,0 +1,123 @@
+#compdef ci-menu ci-status ci-run ci-clean-actions ci-clean-deployments ci-clean-releases ci-clean-notifications ci-clean-tags ci-clean-issues
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a ci_commands
+ci_commands=(
+  'ci-status:Inspect bounded GitHub Actions run data'
+  'ci-run:Dispatch one active workflow'
+  'ci-clean-actions:Delete exact non-latest workflow runs'
+  'ci-clean-deployments:Delete exact non-latest deployments'
+  'ci-clean-releases:Delete exact non-latest releases'
+  'ci-clean-notifications:Mark exact repository threads as read'
+  'ci-clean-tags:Delegate tag lifecycle to the Git suite'
+  'ci-clean-issues:Delegate issue lifecycle to the Git suite'
+)
+
+_ci_complete_status() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--limit[Limit the bounded run inventory to 1-100]:run limit:' \
+    '(--run)--list[Emit validated TSV run records]' \
+    '(--list)--run[View one exact run]:run ID:'
+}
+
+_ci_complete_run() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--workflow[Select a numeric workflow ID or YAML path]:workflow target:' \
+    '--ref[Dispatch against a commit-matched local and GitHub branch]:branch:' \
+    '(--yes)--dry-run[Show the exact dispatch plan without changing GitHub]' \
+    '(--dry-run)--yes[Authorize the validated dispatch without prompting]'
+}
+
+_ci_complete_clean_actions() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '*--run[Delete one exact non-latest run]:run ID:' \
+    '--limit[Limit the bounded run inventory to 1-100]:run limit:' \
+    '(--yes)--dry-run[Show the exact deletion plan without changing GitHub]' \
+    '(--dry-run)--yes[Authorize the validated deletion plan without prompting]'
+}
+
+_ci_complete_clean_deployments() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '*--deployment[Delete one exact non-latest deployment]:deployment ID:' \
+    '(--yes)--dry-run[Show the exact deletion plan without changing GitHub]' \
+    '(--dry-run)--yes[Authorize the validated deletion plan without prompting]'
+}
+
+_ci_complete_clean_releases() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '*--release[Delete one exact non-latest release]:release ID:' \
+    '(--yes)--dry-run[Show the exact deletion plan without changing GitHub]' \
+    '(--dry-run)--yes[Authorize the validated deletion plan without prompting]'
+}
+
+_ci_complete_clean_notifications() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '*--thread[Mark one exact notification thread as read]:thread ID:' \
+    '(--yes)--dry-run[Show the exact update plan without changing GitHub]' \
+    '(--dry-run)--yes[Authorize the validated update plan without prompting]'
+}
+
+_ci_complete_compatibility() {
+  _arguments '(-h --help)'{-h,--help}'[Show usage]'
+}
+
+case "$service" in
+  ci-status)
+    _ci_complete_status
+    ;;
+  ci-run)
+    _ci_complete_run
+    ;;
+  ci-clean-actions)
+    _ci_complete_clean_actions
+    ;;
+  ci-clean-deployments)
+    _ci_complete_clean_deployments
+    ;;
+  ci-clean-releases)
+    _ci_complete_clean_releases
+    ;;
+  ci-clean-notifications)
+    _ci_complete_clean_notifications
+    ;;
+  ci-clean-tags|ci-clean-issues)
+    _ci_complete_compatibility
+    ;;
+  ci-menu)
+    _arguments -C \
+      '(-h --help)'{-h,--help}'[Show usage]' \
+      '1:CI command:->command' \
+      '*::command arguments:->args'
+    case "$state" in
+      command)
+        _describe 'CI command' ci_commands
+        ;;
+      args)
+        case "${words[1]:-}" in
+          ci-status)              _ci_complete_status ;;
+          ci-run)                 _ci_complete_run ;;
+          ci-clean-actions)       _ci_complete_clean_actions ;;
+          ci-clean-deployments)   _ci_complete_clean_deployments ;;
+          ci-clean-releases)      _ci_complete_clean_releases ;;
+          ci-clean-notifications) _ci_complete_clean_notifications ;;
+          ci-clean-tags|ci-clean-issues)
+            _ci_complete_compatibility
+            ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+
+unfunction _ci_complete_status _ci_complete_run \
+  _ci_complete_clean_actions _ci_complete_clean_deployments \
+  _ci_complete_clean_releases _ci_complete_clean_notifications \
+  _ci_complete_compatibility 2>/dev/null

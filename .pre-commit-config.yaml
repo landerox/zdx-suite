@@ -1,0 +1,119 @@
+### .pre-commit-config.yaml
+# File hooks run before commits; the complete gate runs before pushes.
+# Install every configured hook type with `just pre-commit-install`.
+
+minimum_pre_commit_version: "3.2.0"
+fail_fast: false
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [pre-commit]
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+        exclude: ^\.demo/demo\.gif$
+        stages: [pre-commit]
+      - id: check-added-large-files
+        alias: check-demo-size
+        name: check README demo size
+        files: ^\.demo/demo\.gif$
+        args: [--maxkb=2048, --enforce-all]
+        stages: [pre-commit]
+      - id: check-yaml
+        args: [--unsafe]
+        stages: [pre-commit]
+      - id: check-json
+        stages: [pre-commit]
+      - id: check-toml
+        stages: [pre-commit]
+      - id: check-symlinks
+        stages: [pre-commit]
+      - id: destroyed-symlinks
+        stages: [pre-commit]
+      - id: check-case-conflict
+        stages: [pre-commit]
+      - id: check-executables-have-shebangs
+        stages: [pre-commit]
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 3db014c16a9d31997ab8c07a4d61fcce936c8f0d # frozen: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - --force-scope
+          - --strict
+          - --scopes
+          - git,vpn,docker,sys,dev,deps,init,docs,repo
+          - feat
+          - fix
+          - docs
+          - chore
+          - refactor
+          - test
+          - perf
+          - ci
+          - build
+          - revert
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: 5b5dddc4fb0f83c3ea1fc5616fa63e115dce83e0 # frozen: v0.49.1
+    hooks:
+      - id: markdownlint
+        args: [--fix, --config, .config/markdownlint.yaml]
+        stages: [pre-commit]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
+    hooks:
+      - id: gitleaks
+        stages: [pre-commit]
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+        stages: [pre-commit]
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # frozen: v1.29.0
+    hooks:
+      - id: zizmor
+        stages: [pre-commit]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: a6564f5d57444e123433a5c9af733e3975c77229 # frozen: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+        files: \.(sh|bash)$
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: zsh-syntax
+        name: zsh -n (parse check)
+        description: Parse-check staged .zsh files.
+        entry: zsh -n
+        language: system
+        files: \.zsh$
+        require_serial: false
+        stages: [pre-commit]
+      - id: repository-quality-gates
+        name: just check (pre-push)
+        description: Run the same complete quality gate used by CI.
+        entry: just check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

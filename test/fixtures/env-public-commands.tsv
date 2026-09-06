@@ -1,0 +1,9 @@
+# command	module	risk	capability
+env-switch	env-dotenv.zsh	mutating	dotenv
+env-create	env-dotenv.zsh	mutating	dotenv
+env-list	env-vars.zsh	read-only	session
+env-path	env-vars.zsh	mutating	session
+env-profile-save	env-profiles.zsh	mutating	profile
+env-profile-list	env-profiles.zsh	read-only	profile
+env-profile-load	env-profiles.zsh	mutating	profile
+env-profile-delete	env-profiles.zsh	destructive	profile

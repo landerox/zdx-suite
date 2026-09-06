@@ -1,0 +1,93 @@
+#compdef ws-menu ws-auth ws-create ws-list ws-info ws-doctor ws-clone ws-clone-multi ws-sync ws-repos ws-migrate ws-show-key ws-rotate-key ws-test ws-autoclean ws-remove
+
+local context state state_descr line
+typeset -A opt_args
+
+_ws_menu_complete_workspaces() {
+  local base_dir="${WS_BASE_DIR:-$HOME/workspaces}"
+  local -a workspace_names=()
+  local platform_dir identity_dir workspace_name
+
+  [[ "$base_dir" == /* && -d "$base_dir" && ! -L "$base_dir" \
+    && "${base_dir:a}" == "${base_dir:A}" ]] || return 0
+  for platform_dir in "$base_dir"/(github|gitlab)(/N); do
+    [[ ! -L "$platform_dir" && "${platform_dir:a}" == "${platform_dir:A}" ]] \
+      || continue
+    for identity_dir in "$platform_dir"/*(/N); do
+      [[ ! -L "$identity_dir" \
+        && "${identity_dir:a}" == "${identity_dir:A}" \
+        && "${identity_dir:t}" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] \
+        || continue
+      workspace_name="${platform_dir:t}/${identity_dir:t}"
+      workspace_names+=("$workspace_name")
+      (( ${#workspace_names[@]} < 256 )) || break 2
+    done
+  done
+  (( ${#workspace_names[@]} > 0 )) \
+    && _describe -t workspaces 'workspace' workspace_names
+}
+
+local -a subcmds
+subcmds=(
+  'ws-auth:Check authentication across configured workspaces'
+  'ws-create:Create an isolated workspace'
+  'ws-list:List configured workspaces'
+  'ws-info:Inspect one workspace'
+  'ws-doctor:Diagnose workspace configuration'
+  'ws-clone:Clone one repository into a workspace'
+  'ws-clone-multi:Clone multiple repositories into one workspace'
+  'ws-sync:Fetch and update workspace repositories'
+  'ws-repos:Inspect repositories in one workspace'
+  'ws-migrate:Move repositories into one workspace'
+  'ws-show-key:Display a workspace public key'
+  'ws-rotate-key:Replace a workspace SSH key'
+  'ws-test:Test a workspace SSH route'
+  'ws-autoclean:Remove selected stale branches'
+  'ws-remove:Remove one workspace and its routing configuration'
+)
+
+local command_name=""
+if [[ "$service" == "ws-menu" ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '1:subcommand:->subcommands' \
+    '*::arguments:->arguments'
+
+  case "$state" in
+    subcommands)
+      _describe -t subcmds 'subcommand' subcmds
+      return
+      ;;
+    arguments)
+      command_name="${words[2]:-}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+  ws-clone)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '1:repository (owner/name or URL):'
+    ;;
+  ws-clone-multi)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '*:repository (owner/name or URL):'
+    ;;
+  ws-remove)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --dry-run)--dry-run[Show the exact removal plan without changing files]' \
+      '(-h --help -y --yes)'{-y,--yes}'[Skip the exact-name confirmation]' \
+      '1:workspace:_ws_menu_complete_workspaces'
+    ;;
+  *)
+    _arguments '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+esac

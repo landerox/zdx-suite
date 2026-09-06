@@ -1,0 +1,163 @@
+#compdef docker-menu docker-containers docker-images docker-clean docker-login docker-compose-up docker-compose-down docker-compose-restart docker-compose-logs
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a docker_subcommands
+docker_subcommands=(
+  'docker-containers:Inspect and act on exact containers'
+  'docker-images:Inspect, run, or remove exact images'
+  'docker-clean:Plan and remove exact unused resources'
+  'docker-login:Authenticate to a validated registry'
+  'docker-compose-up:Start one reviewed Compose project'
+  'docker-compose-down:Stop one reviewed Compose project'
+  'docker-compose-restart:Restart one reviewed Compose project'
+  'docker-compose-logs:Read bounded Compose logs'
+)
+
+_docker_menu_selected_action() {
+  REPLY=""
+  local -i word_index=1
+  while (( word_index <= ${#words[@]} )); do
+    case "${words[word_index]}" in
+      --action)
+        (( word_index < ${#words[@]} )) \
+          && REPLY="${words[word_index + 1]}"
+        return 0
+        ;;
+    esac
+    (( word_index += 1 ))
+  done
+}
+
+_docker_menu_command_arguments() {
+  local command_name="$1"
+  local -a argument_specs=()
+  local selected_action=""
+  case "$command_name" in
+    docker-containers)
+      _docker_menu_selected_action
+      selected_action="$REPLY"
+      argument_specs=(
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--action[select action]:action:(list exec logs start stop remove)'
+      )
+      case "$selected_action" in
+        exec)
+          argument_specs+=(
+            '--id[full 64-character container ID]:container ID:'
+            '--shell[container shell]:shell:(/bin/sh /bin/bash)'
+            '--allow-remote[allow execution on a remote endpoint]'
+          )
+          ;;
+        logs)
+          argument_specs+=(
+            '--id[full 64-character container ID]:container ID:'
+            '--tail[initial log lines]:line count:(100 250 500 1000)'
+            '--follow[follow container logs]'
+          )
+          ;;
+        start|stop)
+          argument_specs+=(
+            '--id[full 64-character container ID]:container ID:'
+            '--dry-run[show mutation without executing it]'
+            '--allow-remote[allow mutation of a remote endpoint]'
+          )
+          ;;
+        remove)
+          argument_specs+=(
+            '--id[full 64-character container ID]:container ID:'
+            '--dry-run[show mutation without executing it]'
+            '--yes[authorize removal non-interactively]'
+            '--force[allow removal of an active container]'
+            '--allow-remote[allow mutation of a remote endpoint]'
+          )
+          ;;
+      esac
+      _arguments "${argument_specs[@]}"
+      ;;
+    docker-images)
+      _docker_menu_selected_action
+      selected_action="$REPLY"
+      argument_specs=(
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--action[select action]:action:(list run remove)'
+      )
+      case "$selected_action" in
+        run)
+          argument_specs+=(
+            '--id[full sha256 image ID]:image ID:'
+            '--shell[ephemeral container shell]:shell:(/bin/sh /bin/bash)'
+            '--dry-run[show action without executing it]'
+            '--yes[authorize execution non-interactively]'
+            '--allow-remote[allow execution on a remote endpoint]'
+          )
+          ;;
+        remove)
+          argument_specs+=(
+            '--id[full sha256 image ID]:image ID:'
+            '--dry-run[show action without executing it]'
+            '--yes[authorize removal non-interactively]'
+            '--force[force image removal explicitly]'
+            '--allow-remote[allow mutation of a remote endpoint]'
+          )
+          ;;
+      esac
+      _arguments "${argument_specs[@]}"
+      ;;
+    docker-clean)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--scope[select exact cleanup scope]:scope:(stopped-containers dangling-images unused-networks unused-volumes all)' \
+        '--dry-run[show exact targets without removing them]' \
+        '--yes[authorize cleanup non-interactively]' \
+        '--allow-remote[allow mutation of a remote endpoint]'
+      ;;
+    docker-login)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--registry[registry hostname or hostname\:port]:registry:' \
+        '--username[registry username]:username:' \
+        '--password-stdin[read the password directly in Docker]' \
+        '1:registry hostname:'
+      ;;
+    docker-compose-up|docker-compose-down|docker-compose-restart)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--file[safe direct-child Compose descriptor]:descriptor:_files -g "*.(yml|yaml)"' \
+        '--dry-run[review without executing Compose]' \
+        '--yes[authorize mutation non-interactively]' \
+        '--allow-remote[allow mutation of a remote endpoint]'
+      ;;
+    docker-compose-logs)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--file[safe direct-child Compose descriptor]:descriptor:_files -g "*.(yml|yaml)"' \
+        '--tail[initial log lines]:line count:(100 250 500 1000)' \
+        '--follow[follow logs after the initial tail]'
+      ;;
+  esac
+}
+
+local invoked_command="${words[1]:t}"
+if [[ "$invoked_command" != "docker-menu" ]]; then
+  _docker_menu_command_arguments "$invoked_command"
+  return
+fi
+
+local nested_command="${words[2]:-}"
+_arguments -C \
+  '(-h --help)'{-h,--help}'[show Docker suite help]' \
+  '1:Docker command:->docker-commands' \
+  '*::Docker command arguments:->docker-command-arguments'
+
+case "$state" in
+  docker-commands)
+    _describe -t docker-commands 'Docker command' docker_subcommands
+    ;;
+  docker-command-arguments)
+    local command_name="$nested_command"
+    [[ -n "$command_name" ]] || return
+    _docker_menu_command_arguments "$command_name"
+    ;;
+esac

@@ -1,0 +1,35 @@
+[project]
+name = "zdx-suite"
+version = "0.1.0"
+description = "Interactive, fzf-powered developer suites and custom plugin loader for Zsh — built as a drop-in for Oh My Zsh."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.18.0",
+    "pip-audit>=2.10.1",
+    "pre-commit>=4.6.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/landerox/zdx-suite"
+Repository = "https://github.com/landerox/zdx-suite"
+Issues = "https://github.com/landerox/zdx-suite/issues"
+
+[tool.uv]
+package = false
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+version_files = [
+    "pyproject.toml:^version",
+    # The `zdx --version` string is hardcoded in the router; without this entry
+    # a bump updates the packaging metadata and leaves the CLI reporting the
+    # previous release.
+    "functions/zdx-menu.zsh:Developer Experience",
+]

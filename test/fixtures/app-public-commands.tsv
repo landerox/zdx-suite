@@ -1,0 +1,3 @@
+# command	module	risk	current-capability
+app-list	app-tasks.zsh	read-only	descriptor-and-sha256
+app-run	app-tasks.zsh	project-code	selected-backend

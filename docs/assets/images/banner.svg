@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 100" width="700" height="100">
+  <defs>
+    <style>
+      .logo-text {
+        fill: #f8fafc;
+      }
+    </style>
+    <linearGradient id="slateGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#82b0ff" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <linearGradient id="darkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#94a3b8" />
+      <stop offset="100%" stop-color="#334155" />
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f19" />
+      <stop offset="100%" stop-color="#1e1e2f" />
+    </linearGradient>
+  </defs>
+  <!-- Background Card with Rounded Corners -->
+  <rect width="700" height="100" rx="12" fill="url(#bgGrad)" />
+
+  <!-- Centered Combined Logo & Text Group -->
+  <!-- Logo Symbol (Centered group translation) -->
+  <g transform="translate(48, 10) scale(0.8)">
+    <!-- Slab 1: Slate/Grey -->
+    <polygon points="20,70 40,20 52,20 32,70" fill="url(#darkGrad)" />
+    <!-- Slab 2: Glowing Blue-Indigo -->
+    <polygon points="42,80 62,30 74,30 54,80" fill="url(#slateGrad)" />
+  </g>
+
+  <!-- Text aligned next to the logo -->
+  <text x="128" y="61" class="logo-text" font-family="Outfit, Inter, system-ui, -apple-system, sans-serif" font-size="28" font-weight="700">ZDX (Zsh Developer Experience Suite)</text>
+</svg>

@@ -1,0 +1,127 @@
+#compdef file-menu file-compress file-extract file-bulk-ops file-permissions file-find-large file-find file-diff file-encode-decode file-checksum file-line-endings
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a subcommands
+subcommands=(
+  'file-compress:Create a staged TAR, ZIP, or 7z archive'
+  'file-extract:Preflight and extract a TAR archive into a new directory'
+  'file-bulk-ops:Plan copy, move, delete, rename, or duplicate operations'
+  'file-permissions:Plan and apply permissions to local paths'
+  'file-find-large:Find large files and optionally delete them'
+  'file-find:Find files by name, extension, content, or age'
+  'file-diff:Compare two local files or directories'
+  'file-encode-decode:Encode or decode Base64 text and files'
+  'file-checksum:Generate or verify SHA-256 and legacy MD5 digests'
+  'file-line-endings:Atomically convert regular files to LF or CRLF'
+)
+
+local command_name=""
+if [[ "$service" == file-menu ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[show usage]' \
+    '1:subcommand:->file_subcommand' \
+    '*::subcommand argument:->file_arguments'
+  case "$state" in
+    file_subcommand)
+      _describe -t file-subcommands 'File subcommand' subcommands
+      return
+      ;;
+    file_arguments)
+      command_name="${words[1]:-}"
+      ;;
+    *) return ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+  file-compress)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--format[archive format]:format:(tar.gz tar.xz tar.bz2 zip 7z)' \
+      '--output[output archive]:archive:_files' \
+      '--overwrite[replace one unchanged regular output]' \
+      '--dry-run[print the exact plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '*:input path:_files'
+    ;;
+  file-extract)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--destination[new extraction directory]:directory:_directories' \
+      '--dry-run[validate and print the plan]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '1:TAR archive:_files -g "*.(tar|tar.gz|tgz|tar.xz|tar.bz2)"'
+    ;;
+  file-bulk-ops)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--destination[existing copy or move destination]:directory:_directories' \
+      '--search[literal filename text to replace]:text:' \
+      '--replace[literal replacement text]:text:' \
+      '--dry-run[print the exact plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '1:operation:(copy move delete rename duplicate)' \
+      '*:target path:_files'
+    ;;
+  file-permissions)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--mode[chmod mode]:mode:(+x -x 600 644 755)' \
+      '--dry-run[print the exact plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '*:target path:_files'
+    ;;
+  file-find-large)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--min-size[minimum byte size with optional K/M/G/T suffix]:size:' \
+      '--delete[plan deletion of every match]' \
+      '--dry-run[print the deletion plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]'
+    ;;
+  file-find)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '(--extension --content --days)--name[filename glob]:glob:' \
+      '(--name --content --days)--extension[filename extension]:extension:' \
+      '(--name --extension --days)--content[literal content]:text:' \
+      '(--name --extension --content)--days[maximum age in days]:days:'
+    ;;
+  file-diff)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '1:left path:_files' \
+      '2:right path:_files'
+    ;;
+  file-encode-decode)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '(--decode-text --encode-file --decode-file --output --overwrite --dry-run --yes)--encode-text[text to encode]:text:' \
+      '(--encode-text --encode-file --decode-file --output --overwrite --dry-run --yes)--decode-text[Base64 text]:text:' \
+      '(--encode-text --decode-text --decode-file)--encode-file[input file]:file:_files' \
+      '(--encode-text --decode-text --encode-file)--decode-file[input file]:file:_files' \
+      '(--encode-text --decode-text)--output[file output]:file:_files' \
+      '(--encode-text --decode-text)--overwrite[replace one unchanged regular output]' \
+      '(--encode-text --decode-text)--dry-run[print the exact plan without mutation]' \
+      '(--encode-text --decode-text)--yes[confirm an overwrite non-interactively]'
+    ;;
+  file-checksum)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '(--verify)--algorithm[digest algorithm]:algorithm:(sha256 md5)' \
+      '(--algorithm)--verify[expected hexadecimal digest]:digest:' \
+      '1:input file:_files'
+    ;;
+  file-line-endings)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--to[target line-ending convention]:format:(lf crlf)' \
+      '--dry-run[print the exact plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '*:input file:_files'
+    ;;
+esac

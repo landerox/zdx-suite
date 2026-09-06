@@ -1,0 +1,6 @@
+net-dashboard	net-dashboard.zsh	read-only	section-capabilities
+net-public-ip	net-public.zsh	read-only-network	curl
+net-interfaces	net-interfaces.zsh	read-only	local-interface-capability
+net-ping	net-diagnostics.zsh	read-only-network	ping-and-timeout
+net-dns	net-diagnostics.zsh	read-only-network	dns-client-and-timeout
+net-speedtest	net-throughput.zsh	authorized-network-transfer	speedtest-or-curl

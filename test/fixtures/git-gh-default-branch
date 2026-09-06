@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -eu
+
+if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
+  printf '%s\n' "main"
+  exit 0
+fi
+
+printf 'unexpected gh invocation:' >&2
+printf ' %q' "$@" >&2
+printf '\n' >&2
+exit 97

@@ -1,0 +1,2 @@
+# command	module	risk	current-capability
+gpu-visualizer	gpu-visualizer.zsh	read-only	nvidia-or-explicit-simulation

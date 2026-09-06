@@ -1,0 +1,6 @@
+# command	module	risk	capability
+hf-search	hf-search.zsh	network	hub-metadata
+hf-repo-stats	hf-search.zsh	network	hub-metadata
+hf-cache-inspect	hf-cache.zsh	read-only	local-cache
+hf-cache-clear	hf-cache.zsh	destructive	local-cache
+hf-download	hf-download.zsh	network	hub-download

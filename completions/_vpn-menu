@@ -1,0 +1,135 @@
+#compdef vpn-menu
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a subcmds
+subcmds=(
+  'vpn-access-unlock:Authenticate with sudo so profiles and tunnel state are readable'
+  'vpn-access-lock:Invalidate this session sudo timestamp, which other sudo commands may share'
+  'vpn-access-status:Explain whether profiles and live tunnel state are readable'
+  'vpn-on:Bring a profile up with wg-quick'
+  'vpn-off:Disconnect one active tunnel'
+  'vpn-off-all:Bring down every active WireGuard interface'
+  'vpn-reconnect-last:Reconnect the profile recorded as last used'
+  'vpn-default-connect:Bring up the configured default profile'
+  'vpn-default-set:Record one profile as the default target'
+  'vpn-default-clear:Remove the saved default profile pointer'
+  'vpn-refresh:Re-read access, profile, tunnel, and cached-pointer state'
+  'vpn-summary:List safe profiles, active tunnels, backups, and cached pointers'
+  'vpn-details:Show detailed WireGuard state for each active tunnel'
+  'vpn-ip-info:Show tunnel addresses, endpoint, public exit, and DNS'
+  'vpn-report:Atomically publish an owner-only Markdown diagnostic report'
+  'vpn-profile-create:Atomically install a private profile skeleton'
+  'vpn-profile-import:Validate and install a private hook-free .conf file'
+  'vpn-profile-rename:Plan and rename a profile, backup, and saved pointers'
+  'vpn-config-edit:Edit a profile through sudoedit'
+  'vpn-config-dir:List a bounded inventory of safe profiles and backups'
+  'vpn-config-restore:Atomically restore a profile and keep a private undo copy'
+  'vpn-profile-remove:Plan and remove a profile after confirmation'
+)
+
+# Profile names come from the configured directory when it is readable without
+# privileges. Completion never invokes sudo.
+_vpn_menu_profiles() {
+  local dir="${VPN_CONFIG_DIR:-/etc/wireguard}"
+  local -a profiles=()
+  local candidate profile_name
+
+  while [[ "$dir" != "/" && "$dir" == */ ]]; do
+    dir="${dir%/}"
+  done
+
+  if [[ "$dir" == /* && "${dir:a}" == "${dir:A}" \
+    && -d "$dir" && ! -L "$dir" && -r "$dir" && -x "$dir" ]] \
+    && zmodload zsh/stat 2>/dev/null; then
+    local -A metadata=()
+    for candidate in "$dir"/*.conf(N.); do
+      profile_name="${${candidate:t}%.conf}"
+      (( ${#profile_name} <= 64 )) || continue
+      [[ "$profile_name" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || continue
+      metadata=()
+      zstat -H metadata -- "$candidate" 2>/dev/null || continue
+      (( metadata[nlink] == 1 \
+        && (metadata[uid] == 0 || metadata[uid] == EUID) \
+        && (metadata[mode] & 8#77) == 0 \
+        && metadata[size] <= 1048576 )) || continue
+      profiles+=("$profile_name")
+      (( ${#profiles[@]} < 256 )) || break
+    done
+  fi
+
+  (( ${#profiles[@]} > 0 )) && _describe -t profiles 'profile' profiles
+}
+
+_arguments -C \
+  '(- *)'{-h,--help}'[Show usage]' \
+  '1:subcommand:->subcommands' \
+  '*::arguments:->arguments'
+
+case "$state" in
+  subcommands)
+    _describe -t subcmds 'subcommand' subcmds
+    ;;
+  arguments)
+    case "${words[1]}" in
+      vpn-on|vpn-off|vpn-default-set)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-off-all)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the disconnect plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]'
+        ;;
+      vpn-profile-create)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:new profile name:'
+        ;;
+      vpn-profile-import)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:configuration file:_files -g "*.conf"'
+        ;;
+      vpn-profile-rename)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the rename plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompts]' \
+          '1:current profile:_vpn_menu_profiles' \
+          '2:new profile name:'
+        ;;
+      vpn-config-edit)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-config-restore)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the restore plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-profile-remove)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the removal plan and stop]' \
+          '(-h --help --with-backup)--with-backup[Also remove the matching backup file]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompts]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-default-clear)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]'
+        ;;
+      *)
+        _arguments '(- *)'{-h,--help}'[Show command usage]'
+        ;;
+    esac
+    ;;
+esac

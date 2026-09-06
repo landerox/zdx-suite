@@ -1,0 +1,85 @@
+#compdef zdx zdx-menu
+
+local -a zdx_suites
+zdx_suites=(
+  'ai:AI assistant and MCP menu'
+  'app:Discover and run project tasks'
+  'ci:CI/CD workflow menu'
+  'dev:Developer project tools'
+  'docker:Docker container menu'
+  'env:Environment and dotenv menu'
+  'file:File and archive utilities'
+  'git:Git repository operations'
+  'gpu:NVIDIA GPU telemetry'
+  'hf:Hugging Face Hub workflows'
+  'net:Network diagnostics'
+  'plugins:ZDX plugin manager'
+  'py:Python environments, packages, and tools'
+  'sys:System diagnostics and maintenance'
+  'vpn:WireGuard VPN workflows'
+  'ws:Workspace profile workflows'
+  'doctor:Dependency diagnostics'
+  'help:Show wrapper help'
+  'version:Show the installed version'
+)
+
+if [[ "$service" == "zdx-menu" ]]; then
+  _arguments '(-h --help)'{-h,--help}'[show wrapper help]'
+  return
+fi
+
+# Completion may run before the lazy master loader. Match its loaded-name,
+# reserved-namespace, and menu-function checks without sourcing any plugin.
+local -a custom_suites=()
+local -a reserved_suites=("${(@)zdx_suites%%:*}")
+local plugin_name=""
+if (( ${+ZDX_LOADED_PLUGINS} )); then
+  for plugin_name in "${ZDX_LOADED_PLUGINS[@]}"; do
+    (( ${#plugin_name} >= 1 && ${#plugin_name} <= 128 )) || continue
+    [[ "$plugin_name" =~ '^[a-z0-9_-]+$' ]] || continue
+    (( ${reserved_suites[(Ie)$plugin_name]} == 0 \
+      && ${custom_suites[(Ie)$plugin_name]} == 0 \
+      && ${+functions[${plugin_name}-menu]} )) || continue
+    custom_suites+=("$plugin_name")
+    zdx_suites+=("$plugin_name:Loaded custom plugin")
+  done
+fi
+
+local context state state_descr line
+typeset -A opt_args
+_arguments -C \
+  '(- *)'{-h,--help}'[show wrapper help]' \
+  '(- *)'{-v,--version}'[show the installed version]' \
+  '1:ZDX suite:->suite' \
+  '*::suite arguments:->suite-arguments'
+
+case "$state" in
+  suite)
+    _describe -t zdx-suites 'ZDX suite' zdx_suites
+    ;;
+  suite-arguments)
+    local suite_name="${words[1]:-}"
+    local nested_menu=""
+    case "$suite_name" in
+      ai|app|ci|dev|docker|env|file|git|gpu|hf|net|py|sys|vpn|ws)
+        nested_menu="${suite_name}-menu"
+        ;;
+      plugins)
+        nested_menu="zdx-plugins"
+        ;;
+      doctor)
+        nested_menu="zdx-doctor"
+        ;;
+      *)
+        (( ${custom_suites[(Ie)$suite_name]} )) || return
+        nested_menu="${suite_name}-menu"
+        ;;
+    esac
+
+    local completion_function="_${nested_menu}"
+    (( ${+functions[$completion_function]} )) || return
+    words[1]="$nested_menu"
+    service="$nested_menu"
+    "$completion_function"
+    ;;
+esac

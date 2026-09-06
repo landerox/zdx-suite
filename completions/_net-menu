@@ -1,0 +1,71 @@
+#compdef net-menu net-dashboard net-public-ip net-interfaces net-ping net-dns net-speedtest
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a net_commands
+net_commands=(
+  'net-dashboard:Render a bounded connectivity snapshot'
+  'net-public-ip:Resolve and optionally cross-check the public exit IP'
+  'net-interfaces:Inspect bounded local interface state'
+  'net-ping:Measure bounded ICMP latency'
+  'net-dns:Resolve bounded A, AAAA, and MX records'
+  'net-speedtest:Run an explicitly authorized throughput transfer'
+)
+
+_net_direct_arguments() {
+  local command_name="$1"
+  case "$command_name" in
+    net-dashboard)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]' \
+        '--local-only[Skip all remote probes]'
+      ;;
+    net-public-ip)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]' \
+        '--cross-check[Query every fixed public-IP provider]'
+      ;;
+    net-interfaces)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]'
+      ;;
+    net-ping)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]' \
+        '--count[Number of packets, from 1 through 20]:packet count:' \
+        '1:target host:'
+      ;;
+    net-dns)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]' \
+        '1:domain name:'
+      ;;
+    net-speedtest)
+      _arguments \
+        '(- *)'{-h,--help}'[Show usage]' \
+        '--dry-run[Show backend and transfer scope only]' \
+        '--yes[Skip transfer confirmation]'
+      ;;
+  esac
+}
+
+if [[ "$service" != "net-menu" ]]; then
+  _net_direct_arguments "$service"
+else
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '1:Network command:->command' \
+    '*::command arguments:->args'
+
+  case "$state" in
+    command)
+      _describe 'Network command' net_commands
+      ;;
+    args)
+      _net_direct_arguments "${words[1]:-}"
+      ;;
+  esac
+fi
+
+unfunction _net_direct_arguments 2>/dev/null

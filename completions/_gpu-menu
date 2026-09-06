@@ -1,0 +1,40 @@
+#compdef gpu-menu gpu-visualizer
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a gpu_commands
+gpu_commands=(
+  'gpu-visualizer:Display validated NVIDIA telemetry'
+)
+
+if [[ "$service" == "gpu-visualizer" ]]; then
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--once[Render one frame and exit]' \
+    '--simulate[Use explicit synthetic telemetry]' \
+    '--gpu[Select NVIDIA GPU index]:GPU index:'
+  return
+fi
+
+_arguments -C \
+  '(-h --help)'{-h,--help}'[Show usage]' \
+  '1:GPU command:->command' \
+  '*::command arguments:->args'
+
+case "$state" in
+  command)
+    _describe 'GPU command' gpu_commands
+    ;;
+  args)
+    case "${words[1]:-}" in
+      gpu-visualizer)
+        _arguments \
+          '(-h --help)'{-h,--help}'[Show usage]' \
+          '--once[Render one frame and exit]' \
+          '--simulate[Use explicit synthetic telemetry]' \
+          '--gpu[Select NVIDIA GPU index]:GPU index:'
+        ;;
+    esac
+    ;;
+esac

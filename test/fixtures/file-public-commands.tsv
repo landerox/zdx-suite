@@ -1,0 +1,10 @@
+file-compress	Create a staged TAR, ZIP, or 7z archive
+file-extract	Preflight and extract a TAR archive
+file-bulk-ops	Plan bounded bulk file operations
+file-permissions	Plan and change file permissions
+file-find-large	Find and optionally delete large files
+file-find	Find files with bounded search modes
+file-diff	Compare two local paths
+file-encode-decode	Encode or decode Base64 data
+file-checksum	Generate or verify file digests
+file-line-endings	Atomically convert line endings

@@ -1,0 +1,4 @@
+
+# AI CLI symlinks (point to AGENTS.md)
+CLAUDE.md symlink=true
+GEMINI.md symlink=true

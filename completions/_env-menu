@@ -1,0 +1,126 @@
+#compdef env-menu env-switch env-create env-list env-path env-profile-save env-profile-list env-profile-load env-profile-delete
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a env_commands
+env_commands=(
+  'env-switch:Passively parse and load a reviewed dotenv file'
+  'env-create:Atomically publish a private dotenv file'
+  'env-list:Inspect exported variables with mandatory secret masking'
+  'env-path:Inspect PATH or review active-session deduplication'
+  'env-profile-save:Persist selected exported scalars in a private profile'
+  'env-profile-list:List validated private profile metadata'
+  'env-profile-load:Passively parse and load a reviewed private profile'
+  'env-profile-delete:Quarantine and delete one unchanged profile'
+)
+
+_env_complete_switch() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '--dry-run[print the exact hidden-value load plan]' \
+    '--yes[accept the reviewed plan non-interactively]' \
+    '1:dotenv file:_files'
+}
+
+_env_complete_create() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '--template[read defaults from a passive dotenv template]:template:_files' \
+    '--output[publish this private dotenv file]:output file:_files' \
+    '--overwrite[replace one unchanged regular output]' \
+    '--dry-run[validate and print the publication plan]' \
+    '--yes[accept the reviewed plan non-interactively]'
+}
+
+_env_complete_list() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '(--copy)--list[emit masked TSV records]' \
+    '(--list)--copy[copy one exact exported value without printing it]:variable:'
+}
+
+_env_complete_path() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '(--dedupe)--list[emit PATH diagnostics as TSV]' \
+    '(--list)--dedupe[review removal of later duplicate entries]' \
+    '--dry-run[print the exact deduplication plan]' \
+    '--yes[accept the reviewed plan non-interactively]'
+}
+
+_env_complete_profile_save() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '--overwrite[replace one unchanged private profile]' \
+    '--dry-run[print the exact profile publication plan]' \
+    '--yes[accept the reviewed plan non-interactively]' \
+    '1:profile name:' \
+    '*:exported variable:'
+}
+
+_env_complete_profile_list() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '--list[emit profile metadata as TSV]'
+}
+
+_env_complete_profile_mutation() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '--dry-run[print the exact hidden-value plan]' \
+    '--yes[accept the reviewed plan non-interactively]' \
+    '1:profile name:'
+}
+
+case "$service" in
+  env-switch)
+    _env_complete_switch
+    ;;
+  env-create)
+    _env_complete_create
+    ;;
+  env-list)
+    _env_complete_list
+    ;;
+  env-path)
+    _env_complete_path
+    ;;
+  env-profile-save)
+    _env_complete_profile_save
+    ;;
+  env-profile-list)
+    _env_complete_profile_list
+    ;;
+  env-profile-load|env-profile-delete)
+    _env_complete_profile_mutation
+    ;;
+  env-menu)
+    _arguments -C \
+      '(-h --help)'{-h,--help}'[show usage]' \
+      '1:Environment command:->command' \
+      '*::command arguments:->args'
+    case "$state" in
+      command)
+        _describe -t commands 'Environment command' env_commands
+        ;;
+      args)
+        case "${words[1]:-}" in
+          env-switch) _env_complete_switch ;;
+          env-create) _env_complete_create ;;
+          env-list) _env_complete_list ;;
+          env-path) _env_complete_path ;;
+          env-profile-save) _env_complete_profile_save ;;
+          env-profile-list) _env_complete_profile_list ;;
+          env-profile-load|env-profile-delete)
+            _env_complete_profile_mutation
+            ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+
+unfunction _env_complete_switch _env_complete_create _env_complete_list \
+  _env_complete_path _env_complete_profile_save _env_complete_profile_list \
+  _env_complete_profile_mutation 2>/dev/null

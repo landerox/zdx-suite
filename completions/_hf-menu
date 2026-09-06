@@ -1,0 +1,95 @@
+#compdef hf-menu hf-search hf-repo-stats hf-cache-inspect hf-cache-clear hf-download
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a hf_commands
+hf_commands=(
+  'hf-search:Search models or datasets'
+  'hf-repo-stats:Display repository metadata'
+  'hf-cache-inspect:Inspect the local Hub cache'
+  'hf-cache-clear:Plan and remove one exact cache entry'
+  'hf-download:Download a snapshot or one file'
+)
+
+_hf_complete_search() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--type[Select repository type]:repository type:(model dataset)' \
+    '--query[Set the search query]:search query:' \
+    '--limit[Limit results to 1-100]:result limit:' \
+    '--list[Emit TSV search records]'
+}
+
+_hf_complete_stats() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--type[Select repository type]:repository type:(model dataset)' \
+    '--repo[Set repository ID]:repository ID:'
+}
+
+_hf_complete_cache_inspect() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--list[Emit TSV cache records]'
+}
+
+_hf_complete_cache_clear() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--type[Select repository type]:repository type:(model dataset)' \
+    '--repo[Set repository ID]:repository ID:' \
+    '--dry-run[Show the exact deletion plan without removing data]' \
+    '--yes[Authorize the validated plan without prompting]'
+}
+
+_hf_complete_download() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[Show usage]' \
+    '--type[Select repository type]:repository type:(model dataset)' \
+    '--repo[Set repository ID]:repository ID:' \
+    '(--file)--snapshot[Download the whole repository snapshot]' \
+    '(--snapshot)--file[Download one repository file]:repository filename:'
+}
+
+case "$service" in
+  hf-search)
+    _hf_complete_search
+    ;;
+  hf-repo-stats)
+    _hf_complete_stats
+    ;;
+  hf-cache-inspect)
+    _hf_complete_cache_inspect
+    ;;
+  hf-cache-clear)
+    _hf_complete_cache_clear
+    ;;
+  hf-download)
+    _hf_complete_download
+    ;;
+  hf-menu)
+    _arguments -C \
+      '(-h --help)'{-h,--help}'[Show usage]' \
+      '1:Hugging Face command:->command' \
+      '*::command arguments:->args'
+    case "$state" in
+      command)
+        _describe 'Hugging Face command' hf_commands
+        ;;
+      args)
+        case "${words[1]:-}" in
+          hf-search)        _hf_complete_search ;;
+          hf-repo-stats)    _hf_complete_stats ;;
+          hf-cache-inspect) _hf_complete_cache_inspect ;;
+          hf-cache-clear)   _hf_complete_cache_clear ;;
+          hf-download)      _hf_complete_download ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+
+unfunction _hf_complete_search _hf_complete_stats \
+  _hf_complete_cache_inspect _hf_complete_cache_clear \
+  _hf_complete_download 2>/dev/null

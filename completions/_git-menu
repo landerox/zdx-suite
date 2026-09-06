@@ -1,0 +1,586 @@
+#compdef git-menu clean-branches clean-remote-merged git-amend git-auth git-blame git-branch-create git-branch-rename git-cherry-pick git-commit git-commit-verify git-config-edit git-diff git-discard git-file-history git-identity-switcher git-issues git-log-search git-merge git-pr-checkout git-pr-create git-prs git-pull git-push git-rebase git-reflog git-repo-create git-restore-from git-stage git-staged git-stash git-status git-switch git-tag-create git-tag-delete git-tag-list git-tag-push git-tag-verify git-undo-commit git-unstage
+
+local context state state_descr line
+typeset -A opt_args
+
+# Value discovery reads only local Git metadata and caps every candidate list.
+_git_menu_complete_identity_profile() {
+  local -a profile_names=()
+  if [[ "${(t)ZDX_GIT_IDENTITIES}" == *association* ]]; then
+    profile_names=("${(@ok)ZDX_GIT_IDENTITIES}")
+    (( ${#profile_names[@]} > 500 )) \
+      && profile_names=("${profile_names[1,500]}")
+  fi
+  if (( ${#profile_names[@]} )); then
+    _describe -t git-identity-profiles 'Git identity profile' profile_names
+  else
+    _message 'configured Git identity profile'
+  fi
+}
+
+_git_menu_complete_local_branches() {
+  local branch_output=""
+  local -aU branch_names=()
+
+  branch_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/heads 2>/dev/null) || branch_output=""
+  local branch_ref
+  for branch_ref in "${(@f)branch_output}"; do
+    [[ "$branch_ref" == refs/heads/* ]] || continue
+    branch_names+=("${branch_ref#refs/heads/}")
+  done
+
+  if (( ${#branch_names[@]} )); then
+    _describe -t git-local-branches 'local Git branch' branch_names
+  else
+    _message 'local Git branch'
+  fi
+}
+
+_git_menu_complete_branches() {
+  local branch_output=""
+  local -aU branch_names=()
+
+  branch_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/heads refs/remotes 2>/dev/null) \
+    || branch_output=""
+  local branch_ref
+  for branch_ref in "${(@f)branch_output}"; do
+    case "$branch_ref" in
+      refs/heads/*)
+        branch_names+=("${branch_ref#refs/heads/}")
+        ;;
+      refs/remotes/*)
+        [[ "$branch_ref" == refs/remotes/*/HEAD ]] && continue
+        branch_names+=("${branch_ref#refs/remotes/}")
+        ;;
+    esac
+  done
+
+  if (( ${#branch_names[@]} )); then
+    _describe -t git-branches \
+      'local or remote-tracking Git branch' branch_names
+  else
+    _message 'local or remote-tracking Git branch'
+  fi
+}
+
+_git_menu_complete_switch_branches() {
+  local branch_output=""
+  local -aU branch_names=()
+
+  branch_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/heads refs/remotes 2>/dev/null) \
+    || branch_output=""
+  local branch_ref remote_branch
+  for branch_ref in "${(@f)branch_output}"; do
+    case "$branch_ref" in
+      refs/heads/*)
+        branch_names+=("${branch_ref#refs/heads/}")
+        ;;
+      refs/remotes/*)
+        [[ "$branch_ref" == refs/remotes/*/HEAD ]] && continue
+        remote_branch="${branch_ref#refs/remotes/}"
+        branch_names+=("${remote_branch#*/}")
+        ;;
+    esac
+  done
+
+  if (( ${#branch_names[@]} )); then
+    _describe -t git-switch-branches \
+      'local or uniquely cached remote Git branch' branch_names
+  else
+    _message 'local or uniquely cached remote Git branch'
+  fi
+}
+
+_git_menu_complete_remote_branches() {
+  local branch_output=""
+  local -aU branch_names=()
+
+  branch_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/remotes 2>/dev/null) || branch_output=""
+  local branch_ref remote_branch
+  for branch_ref in "${(@f)branch_output}"; do
+    [[ "$branch_ref" == refs/remotes/* \
+      && "$branch_ref" != refs/remotes/*/HEAD ]] || continue
+    remote_branch="${branch_ref#refs/remotes/}"
+    branch_names+=("${remote_branch#*/}")
+  done
+
+  if (( ${#branch_names[@]} )); then
+    _describe -t git-remote-branches \
+      'cached remote Git branch' branch_names
+  else
+    _message 'cached remote Git branch'
+  fi
+}
+
+_git_menu_complete_revisions() {
+  local ref_output=""
+  local -aU revision_names=(HEAD)
+
+  ref_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null) \
+    || ref_output=""
+  local ref_name
+  for ref_name in "${(@f)ref_output}"; do
+    case "$ref_name" in
+      refs/heads/*)
+        revision_names+=("${ref_name#refs/heads/}")
+        ;;
+      refs/remotes/*)
+        [[ "$ref_name" == refs/remotes/*/HEAD ]] && continue
+        revision_names+=("${ref_name#refs/remotes/}")
+        ;;
+      refs/tags/*)
+        revision_names+=("${ref_name#refs/tags/}")
+        ;;
+    esac
+  done
+
+  _describe -t git-revisions 'local Git revision' revision_names
+}
+
+_git_menu_complete_full_branch_refs() {
+  local ref_output=""
+  local -aU branch_refs=()
+
+  ref_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/heads refs/remotes 2>/dev/null) \
+    || ref_output=""
+  local ref_name remote_branch
+  for ref_name in "${(@f)ref_output}"; do
+    case "$ref_name" in
+      refs/heads/*)
+        branch_refs+=("$ref_name")
+        ;;
+      refs/remotes/*)
+        [[ "$ref_name" == refs/remotes/*/HEAD ]] && continue
+        remote_branch="${ref_name#refs/remotes/}"
+        branch_refs+=("refs/heads/${remote_branch#*/}")
+        ;;
+    esac
+  done
+
+  if (( ${#branch_refs[@]} )); then
+    _describe -t git-full-branch-refs \
+      'full refs/heads Git reference' branch_refs
+  else
+    _message 'full refs/heads Git reference'
+  fi
+}
+
+_git_menu_complete_tags() {
+  local tag_output=""
+  local -aU tag_names=()
+
+  tag_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/tags 2>/dev/null) || tag_output=""
+  local tag_ref
+  for tag_ref in "${(@f)tag_output}"; do
+    [[ "$tag_ref" == refs/tags/* ]] || continue
+    tag_names+=("${tag_ref#refs/tags/}")
+  done
+
+  if (( ${#tag_names[@]} )); then
+    _describe -t git-tags 'local Git tag' tag_names
+  else
+    _message 'local Git tag'
+  fi
+}
+
+_git_menu_complete_stashes() {
+  local stash_output=""
+  local -aU stash_targets=()
+
+  stash_output=$(command git stash list --max-count=500 \
+    --format='%gd%x09%H' 2>/dev/null) || stash_output=""
+  local stash_record stash_selector stash_oid
+  for stash_record in "${(@f)stash_output}"; do
+    [[ "$stash_record" == *$'\t'* ]] || continue
+    stash_selector="${stash_record%%$'\t'*}"
+    stash_oid="${stash_record#*$'\t'}"
+    [[ "$stash_selector" == stash@\{<->\} ]] \
+      && stash_targets+=("$stash_selector")
+    [[ "$stash_oid" =~ '^[0-9A-Fa-f]{40,64}$' ]] \
+      && stash_targets+=("$stash_oid")
+  done
+
+  if (( ${#stash_targets[@]} )); then
+    _describe -t git-stashes 'current Git stash selector or OID' stash_targets
+  else
+    _message 'current Git stash selector or OID'
+  fi
+}
+
+_git_menu_complete_remotes() {
+  local remote_output=""
+  local -aU remote_names=()
+
+  remote_output=$(command git remote 2>/dev/null) || remote_output=""
+  [[ -n "$remote_output" ]] && remote_names=("${(@f)remote_output}")
+  (( ${#remote_names[@]} > 500 )) \
+    && remote_names=("${remote_names[1,500]}")
+  if (( ${#remote_names[@]} )); then
+    _describe -t git-remotes 'configured Git remote' remote_names
+  else
+    _message 'configured Git remote'
+  fi
+}
+
+_git_menu_complete_pr_number() {
+  local pr_output=""
+  local -aU pr_numbers=()
+  local -i completion_rc=1
+
+  pr_output=$(command git for-each-ref \
+    --count=500 --sort=refname \
+    --format='%(refname)' refs/pull 2>/dev/null) || pr_output=""
+  local pr_ref pr_number
+  for pr_ref in "${(@f)pr_output}"; do
+    [[ "$pr_ref" == refs/pull/<->/* ]] || continue
+    pr_number="${${pr_ref#refs/pull/}%%/*}"
+    [[ "$pr_number" == <-> && 10#$pr_number -ge 1 ]] || continue
+    pr_numbers+=("$pr_number")
+  done
+
+  if (( ${#pr_numbers[@]} )); then
+    _describe -t git-cached-prs \
+      'locally cached pull request number' pr_numbers \
+      && completion_rc=0
+  fi
+  _guard '[1-9][0-9]#' 'positive pull request number' \
+    && completion_rc=0
+  return $completion_rc
+}
+
+local -a subcmds
+subcmds=(
+  'clean-branches:Preview and remove selected local branches'
+  'clean-remote-merged:Preview and remove merged remote branches'
+  'git-amend:Amend the latest commit'
+  'git-auth:Show repository identity and authentication state'
+  'git-blame:Browse line-by-line file authorship'
+  'git-branch-create:Create a branch from a selected base'
+  'git-branch-rename:Rename a local branch'
+  'git-cherry-pick:Apply selected commits to the current branch'
+  'git-commit:Create a commit'
+  'git-commit-verify:Verify a commit signature'
+  'git-config-edit:Edit local repository identity'
+  'git-diff:Browse repository differences'
+  'git-discard:Preview and discard working-tree changes'
+  'git-file-history:Browse history for one file'
+  'git-identity-switcher:Inspect or apply a configured Git identity'
+  'git-issues:Browse and manage GitHub issues'
+  'git-log-search:Search commit history'
+  'git-merge:Merge another branch into the current branch'
+  'git-pr-checkout:Check out a pull request branch'
+  'git-pr-create:Create a GitHub pull request'
+  'git-prs:Browse and manage GitHub pull requests'
+  'git-pull:Pull or fetch remote changes'
+  'git-push:Push commits or tags'
+  'git-rebase:Rebase the current branch'
+  'git-reflog:Browse reference history'
+  'git-repo-create:Create a GitHub repository'
+  'git-restore-from:Restore files from a revision'
+  'git-stage:Stage selected files'
+  'git-staged:Browse staged changes'
+  'git-stash:Manage stash entries'
+  'git-status:Show repository status'
+  'git-switch:Switch branches'
+  'git-tag-create:Create a tag'
+  'git-tag-delete:Preview and delete tags'
+  'git-tag-list:Browse and manage tags'
+  'git-tag-push:Push a tag to a remote'
+  'git-tag-verify:Verify a tag signature'
+  'git-undo-commit:Preview and undo the latest commit'
+  'git-unstage:Unstage selected files'
+)
+
+if (( ${words[(I)-h]} || ${words[(I)--help]} )); then
+  _message 'no additional arguments'
+  return
+fi
+
+local subcommand=""
+if [[ "${words[1]:-}" == "git-menu" ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '(-h --help)1:subcommand:->subcommands' \
+    '(-h --help)*::argument:->arguments'
+
+  case "$state" in
+    subcommands)
+      _describe -t git-subcommands 'Git command' subcmds
+      return
+      ;;
+    arguments)
+      subcommand="${words[1]:-}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+else
+  subcommand="${words[1]:-}"
+fi
+
+case "$subcommand" in
+  clean-branches)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help -y --yes)--dry-run[Display the frozen deletion plan without changing refs]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the frozen deletion plan]' \
+      '(-h --help)*:local branch:_git_menu_complete_local_branches'
+    ;;
+  clean-remote-merged)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --remote)--remote[Select a configured remote]:remote:_git_menu_complete_remotes' \
+      '(-h --help -y --yes)--dry-run[Display the frozen deletion plan without changing refs]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the frozen deletion plan]' \
+      '(-h --help)*:remote branch:_git_menu_complete_remote_branches'
+    ;;
+  git-identity-switcher)
+    if (( ${words[(I)--status]} )); then
+      _message 'no additional arguments'
+    elif (( ${words[(I)--switch]} )); then
+      _arguments \
+        '(- *)'{-h,--help}'[Show command usage]' \
+        '(--status --switch)--switch[Apply a configured identity]:profile:_git_menu_complete_identity_profile' \
+        '1:scope:(local global)'
+    else
+      _arguments \
+        '(- *)'{-h,--help}'[Show command usage]' \
+        '(-h --help --switch)--status[Show active local and global identity]' \
+        '(-h --help --status)--switch[Apply a configured identity]:profile:_git_menu_complete_identity_profile'
+    fi
+    ;;
+  git-switch)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:branch:_git_menu_complete_switch_branches'
+    ;;
+  git-branch-create)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:new branch name:' \
+      '(-h --help)2:base revision:_git_menu_complete_revisions'
+    ;;
+  git-branch-rename)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:existing local branch:_git_menu_complete_local_branches' \
+      '(-h --help)2:new branch name:'
+    ;;
+  git-merge)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --ff-only --squash)--no-ff[Always create a merge commit]' \
+      '(-h --help --no-ff --squash)--ff-only[Require a fast-forward merge]' \
+      '(-h --help --no-ff --ff-only)--squash[Stage a squashed merge result]' \
+      '(-h --help)--yes[Confirm the displayed merge plan]' \
+      '(-h --help)1:source branch:_git_menu_complete_branches'
+    ;;
+  git-rebase)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help 1 --continue --abort --skip)--interactive[Interactively rebase a bounded number of commits]:commit count (1-10000):_guard "[0-9]#" "commit count from 1 to 10000"' \
+      '(-h --help 1 --interactive --abort --skip)--continue[Continue the rebase in progress]' \
+      '(-h --help 1 --interactive --continue --skip)--abort[Abort the rebase in progress]' \
+      '(-h --help 1 --interactive --continue --abort)--skip[Skip the current rebase commit]' \
+      '(-h --help --continue --abort --skip)--yes[Confirm the displayed rebase plan]' \
+      '(-h --help --interactive --continue --abort --skip)1:onto branch:_git_menu_complete_branches'
+    ;;
+  git-config-edit)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--name[Set repository-local user.name]:name:' \
+      '(-h --help)--email[Set repository-local user.email]:email address:' \
+      '(-h --help -y --yes)--dry-run[Display the identity plan without changing configuration]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the identity plan]'
+    ;;
+  git-discard)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --yes)--dry-run[Display the immutable restore plan without changing files]' \
+      '(-h --help --dry-run)--yes[Confirm the immutable restore plan]'
+    ;;
+  git-restore-from)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--source[Restore from a specific commit]:revision:_git_menu_complete_revisions' \
+      '(-h --help --yes)--dry-run[Display the immutable restore plan without changing files]' \
+      '(-h --help --dry-run)--yes[Confirm the immutable restore plan]'
+    ;;
+  git-stash)
+    local stash_action=""
+    local stash_word
+    for stash_word in "${words[@]}"; do
+      [[ "$stash_word" == (create|apply|pop|drop|branch) ]] || continue
+      stash_action="$stash_word"
+      break
+    done
+    case "$stash_action" in
+      create)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --keep-index)--include-untracked[Include untracked non-ignored files]' \
+          '(-h --help --include-untracked)--keep-index[Keep staged changes in the index]' \
+          '(-h --help)--message[Set the stash message]:message:' \
+          '(-h --help --yes)--dry-run[Display the exact create plan without changing state]' \
+          '(-h --help --dry-run)--yes[Confirm stash creation]' \
+          '1:action:(create)'
+        ;;
+      apply|pop)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --yes)--dry-run[Display the exact stash plan without changing state]' \
+          '(-h --help --dry-run)--yes[Confirm the stash mutation]' \
+          '1:action:('"$stash_action"')' \
+          '2:stash target:_git_menu_complete_stashes'
+        ;;
+      drop)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --yes)--dry-run[Display the exact drop plan without changing state]' \
+          '(-h --help --dry-run)--yes[Confirm stash deletion]' \
+          '1:action:(drop)' \
+          '*:stash target:_git_menu_complete_stashes'
+        ;;
+      branch)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --yes)--dry-run[Display the exact branch plan without changing state]' \
+          '(-h --help --dry-run)--yes[Confirm branch creation]' \
+          '1:action:(branch)' \
+          '2:stash target:_git_menu_complete_stashes' \
+          '3:new branch name:'
+        ;;
+      *)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --yes)--dry-run[Display stash mutation plans without changing state]' \
+          '(-h --help --dry-run)--yes[Confirm stash mutations]' \
+          '1:action:(create apply pop drop branch)'
+        ;;
+    esac
+    ;;
+  git-undo-commit)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --mixed --hard)--soft[Keep index and worktree changes]' \
+      '(-h --help --soft --hard)--mixed[Reset the index and keep worktree changes]' \
+      '(-h --help --soft --mixed)--hard[Discard index and worktree changes]' \
+      '(-h --help --yes)--dry-run[Display target OIDs and affected paths without resetting]' \
+      '(-h --help --dry-run)--yes[Confirm the reset plan]'
+    ;;
+  git-pr-create)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--base[Select the pull request base branch]:base branch:_git_menu_complete_switch_branches' \
+      '(-h --help --fill)--title[Set the pull request title]:title:' \
+      '(-h --help --fill)--body[Set the pull request body; requires --title]:body:' \
+      '(-h --help --title --body)--fill[Derive title and body from commits]' \
+      '(-h --help)--draft[Create a draft pull request]' \
+      '(-h --help -y --yes)--dry-run[Display the pull request plan without publishing]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm branch publication and pull request creation]'
+    ;;
+  git-pr-checkout)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:pull request number:_git_menu_complete_pr_number'
+    ;;
+  git-pull)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --remote)--remote[Select a configured remote]:remote:_git_menu_complete_remotes' \
+      '(-h --help --ref --fetch-prune)--ref[Fetch a full refs/heads source ref]:full branch ref:_git_menu_complete_full_branch_refs' \
+      '(-h --help --rebase --ff-only --fetch --fetch-prune)--merge[Merge the fetched object]' \
+      '(-h --help --merge --ff-only --fetch --fetch-prune)--rebase[Rebase onto the fetched object]' \
+      '(-h --help --merge --rebase --fetch --fetch-prune)--ff-only[Require a fast-forward merge]' \
+      '(-h --help --merge --rebase --ff-only --fetch-prune)--fetch[Fetch without changing HEAD]' \
+      '(-h --help --ref --merge --rebase --ff-only --fetch)--fetch-prune[Fetch all refs and prune stale tracking refs]' \
+      '(-h --help -y --yes)--dry-run[Display the fetch plan without changing repository state]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the fetch and integration plan]'
+    ;;
+  git-push)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --remote)--remote[Select a configured remote]:remote:_git_menu_complete_remotes' \
+      '(-h --help --ref --tags --all)--ref[Select a full refs/heads destination]:full branch ref:_git_menu_complete_full_branch_refs' \
+      '(-h --help --set-upstream --force-with-lease --tags --all)--set-upstream[Record the destination as the branch upstream]' \
+      '(-h --help --set-upstream --force-with-lease --tags --all)--force-with-lease[Rewrite one branch with an exact OID lease]' \
+      '(-h --help --ref --set-upstream --force-with-lease --all)--tags[Push every changed local tag]' \
+      '(-h --help --ref --set-upstream --force-with-lease --tags)--all[Push every local branch]' \
+      '(-h --help -y --yes)--dry-run[Display the push plan without changing the remote]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the push plan]'
+    ;;
+  git-repo-create)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--name[Set the GitHub repository name]:repository name:' \
+      '(-h --help --public --internal)--private[Create a private repository]' \
+      '(-h --help --private --internal)--public[Create a public repository]' \
+      '(-h --help --private --public)--internal[Create an internal repository]' \
+      '(-h --help)--description[Set the repository description]:description:' \
+      '(-h --help --remote)--remote[Set the local Git remote name]:remote name:' \
+      '(-h --help --no-push)--push[Push the current branch after creation]' \
+      '(-h --help --push)--no-push[Do not push after creation]' \
+      '(-h --help -y --yes)--dry-run[Display the repository creation plan without publishing]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm repository creation]'
+    ;;
+  git-tag-create)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --name)--name[Set the new tag name]:new tag name:' \
+      '(-h --help)--target[Select the commit to tag]:revision:_git_menu_complete_revisions' \
+      '(-h --help --message --lightweight)--message[Set the annotation or signature message]:message:' \
+      '(-h --help --annotated --signed --lightweight)--annotated[Create an annotated tag; requires --message]' \
+      '(-h --help --annotated --signed --lightweight)--signed[Create a signed tag; requires --message]' \
+      '(-h --help --message --annotated --signed --lightweight)--lightweight[Create a lightweight tag]' \
+      '(-h --help)--push[Push the new tag after local creation]' \
+      '(-h --help --remote)--remote[Select the remote used by --push]:remote:_git_menu_complete_remotes' \
+      '(-h --help -y --yes)--dry-run[Display the tag creation plan without changing refs]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm tag creation]'
+    ;;
+  git-tag-list|git-tag-verify)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:tag:_git_menu_complete_tags'
+    ;;
+  git-tag-push)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --remote)--remote[Select a configured remote]:remote:_git_menu_complete_remotes' \
+      '(-h --help -y --yes)--dry-run[Display the push plan without changing the remote]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the tag push plan]' \
+      '(-h --help)*:tag:_git_menu_complete_tags'
+    ;;
+  git-tag-delete)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --delete-remote --remote)--local-only[Delete only local tag refs]' \
+      '(-h --help --local-only)--delete-remote[Delete tags from the current remote before local deletion]' \
+      '(-h --help --local-only --remote)--remote[Delete tags from this configured remote]:remote:_git_menu_complete_remotes' \
+      '(-h --help -y --yes)--dry-run[Display the deletion plan without changing refs]' \
+      '(-h --help --dry-run -y --yes)'{-y,--yes}'[Confirm the tag deletion plan]' \
+      '(-h --help)*:tag:_git_menu_complete_tags'
+    ;;
+  git-amend|git-auth|git-blame|git-cherry-pick|git-commit|git-commit-verify|git-diff|git-file-history|git-issues|git-log-search|git-prs|git-reflog|git-stage|git-staged|git-status|git-unstage)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+  *)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+esac

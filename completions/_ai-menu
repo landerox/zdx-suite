@@ -1,0 +1,177 @@
+#compdef ai-menu global-clean-ai global-clean-claude global-clean-codex global-clean-antigravity global-clean-opencode global-clean-copilot global-clean-cursor global-clean-amp project-sweep-ai ai-init-agents ai-update ai-update-claude ai-update-codex ai-update-antigravity ai-update-opencode ai-update-cursor ai-update-copilot ai-update-amp ai-update-hermes ai-mcp-list ai-mcp-doctor ai-mcp-update ai-config-backup ai-config-restore ai-doctor ai-disk-usage ai-versions ai-log-tail
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a ai_subcommands
+ai_subcommands=(
+  'global-clean-ai:Clean bounded ephemeral data for all supported assistants'
+  'global-clean-claude:Clean bounded Claude cache and debug data'
+  'global-clean-codex:Clean bounded Codex logs and temporary data'
+  'global-clean-antigravity:Clean bounded Antigravity logs'
+  'global-clean-opencode:Clean bounded OpenCode logs'
+  'global-clean-copilot:Clean bounded Copilot logs'
+  'global-clean-cursor:Report eligible Cursor targets (currently none)'
+  'global-clean-amp:Report eligible Amp targets (currently none)'
+  'project-sweep-ai:Quarantine known project AI cache directories'
+  'ai-init-agents:Create no-clobber project instruction artifacts'
+  'ai-update:Update every installed supported assistant'
+  'ai-update-claude:Update Claude Code to the latest version'
+  'ai-update-codex:Update Codex CLI to the latest version'
+  'ai-update-antigravity:Update Antigravity CLI to the latest version'
+  'ai-update-opencode:Update OpenCode to the latest version'
+  'ai-update-cursor:Update Cursor Agent to the latest version'
+  'ai-update-copilot:Update Copilot CLI to the latest version'
+  'ai-update-amp:Update Amp CLI to the latest version'
+  'ai-update-hermes:Update Hermes Agent with an upstream backup'
+  'ai-mcp-list:List configured MCP servers'
+  'ai-mcp-doctor:Audit declarations and local command availability'
+  'ai-mcp-update:Run a passive MCP compatibility audit'
+  'ai-config-backup:Create a private manifest-backed snapshot'
+  'ai-config-restore:Restore one validated snapshot, picked or named'
+  'ai-doctor:Inspect assistant health and configuration'
+  'ai-disk-usage:Show assistant disk usage'
+  'ai-versions:Show assistant and runtime versions'
+  'ai-log-tail:Print bounded and redacted recent-log excerpts'
+)
+
+# Snapshot tokens come from the private backup root only when it and each
+# candidate are owned, non-symlink, mode-0700 directories. Completion reads
+# directory names; it never opens a manifest or snapshot file.
+_ai_menu_snapshot_tokens() {
+  local backup_root="$HOME/.ai-suite-backups"
+  local -a tokens=()
+  local candidate token
+  local -A metadata=()
+
+  [[ "$backup_root" == /* && -d "$backup_root" && ! -L "$backup_root" \
+    && -O "$backup_root" && "${backup_root:a}" == "${backup_root:A}" ]] \
+    && zmodload zsh/stat 2>/dev/null || return 0
+  zstat -H metadata -- "$backup_root" 2>/dev/null \
+    && (( (metadata[mode] & 8#77) == 0 )) || return 0
+  for candidate in "$backup_root"/*(N/On); do
+    token="${candidate:t}"
+    [[ "$token" =~ '^[0-9]{8}T[0-9]{6}-[0-9]{1,5}$' ]] || continue
+    [[ ! -L "$candidate" && -O "$candidate" ]] || continue
+    metadata=()
+    zstat -H metadata -- "$candidate" 2>/dev/null || continue
+    (( (metadata[mode] & 8#77) == 0 )) || continue
+    tokens+=("$token")
+    (( ${#tokens[@]} < 256 )) || break
+  done
+
+  (( ${#tokens[@]} > 0 )) && _describe -t snapshots 'snapshot token' tokens
+}
+
+_ai_menu_command_arguments() {
+  local command_name="$1"
+  case "$command_name" in
+    global-clean-ai|global-clean-claude|global-clean-codex|\
+    global-clean-antigravity|global-clean-opencode|global-clean-copilot|\
+    global-clean-cursor|global-clean-amp)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[show the exact cleanup plan without mutation]' \
+        '(-y --yes)'{-y,--yes}'[authorize the reviewed plan non-interactively]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    project-sweep-ai)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--root=[canonical sweep root inside HOME]:directory:_directories' \
+        '--depth=[maximum traversal depth from 1 to 8]:depth:(1 2 3 4 5 6 7 8)' \
+        '--xdev[keep discovery on the sweep-root filesystem]' \
+        '--dry-run[show the exact cleanup plan without mutation]' \
+        '(-y --yes)'{-y,--yes}'[authorize the reviewed plan non-interactively]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-init-agents)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[show exact no-clobber creations]' \
+        '(-y --yes)'{-y,--yes}'[authorize creation non-interactively]' \
+        '--minimal[use the shortest neutral AGENTS template]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-update|ai-update-claude|ai-update-codex|ai-update-antigravity|\
+    ai-update-opencode|ai-update-cursor|ai-update-copilot|ai-update-amp|\
+    ai-update-hermes)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[preview exact installed targets without updating]' \
+        '--skip-homebrew-managed[leave Homebrew-owned assistants to Homebrew]' \
+        '--result-tsv[emit bounded per-target result records on stdout]' \
+        '(-y --yes)'{-y,--yes}'[authorize the reviewed plan non-interactively]'
+      ;;
+    ai-mcp-update)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[acknowledge passive compatibility audit]' \
+        '(-y --yes)'{-y,--yes}'[accepted for automation compatibility]'
+      ;;
+    ai-mcp-list|ai-mcp-doctor)
+      _arguments '(-h --help)'{-h,--help}'[show command help]'
+      ;;
+    ai-config-backup)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[show allowlisted files without creating a snapshot]' \
+        '(-y --yes)'{-y,--yes}'[authorize snapshot creation non-interactively]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-config-restore)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--dry-run[validate and show the restore plan without mutation]' \
+        '(-y --yes)'{-y,--yes}'[authorize restore non-interactively]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]' \
+        '1::validated snapshot token:_ai_menu_snapshot_tokens'
+      ;;
+    ai-doctor)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--report[publish a private bounded Markdown report]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-disk-usage)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-versions)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--json[emit machine-readable JSON on stdout]' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+    ai-log-tail)
+      _arguments \
+        '(-h --help)'{-h,--help}'[show command help]' \
+        '--lines=[number of redacted lines from 1 to 500]:line count:(25 50 100 250 500)' \
+        '(-v --verbose)'{-v,--verbose}'[show additional diagnostics]'
+      ;;
+  esac
+}
+
+local invoked_command="${words[1]:t}"
+if [[ "$invoked_command" != "ai-menu" ]]; then
+  _ai_menu_command_arguments "$invoked_command"
+  return
+fi
+
+local nested_command="${words[2]:-}"
+_arguments -C \
+  '(-h --help)'{-h,--help}'[show AI suite help]' \
+  '(-m --multi)'{-m,--multi}'[select multiple read-only inspection commands]' \
+  '1:AI command:->ai-commands' \
+  '*::AI command arguments:->ai-command-arguments'
+
+case "$state" in
+  ai-commands)
+    _describe -t ai-commands 'AI command' ai_subcommands
+    ;;
+  ai-command-arguments)
+    [[ -n "$nested_command" ]] || return
+    _ai_menu_command_arguments "$nested_command"
+    ;;
+esac

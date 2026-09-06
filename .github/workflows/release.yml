@@ -1,0 +1,105 @@
+name: CD · Release
+run-name: >-
+  Release · ${{
+    github.event.inputs.tag
+    || github.event_name == 'workflow_dispatch' && 'manual dispatch'
+    || github.ref_name
+  }}
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Existing tag to release (e.g. v0.1.0)"
+                required: true
+
+permissions:
+    contents: read
+
+jobs:
+    sign:
+        name: Attest and release
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+            id-token: write
+            attestations: write
+        env:
+            TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+                  ref: ${{ env.TAG }}
+                  persist-credentials: false
+
+            - name: Extract release notes from CHANGELOG
+              run: |
+                  set -euo pipefail
+                  version="${TAG#v}"
+                  awk -v marker="## [${version}]" '
+                      index($0, marker) == 1 { flag=1; next }
+                      flag && (index($0, "## [") == 1 || index($0, "[Unreleased]:") == 1) { exit }
+                      flag { print }
+                  ' CHANGELOG.md > release-notes.md
+                  if [ ! -s release-notes.md ]; then
+                      echo "::error::No CHANGELOG.md section found for tag ${TAG} (expected '## [${version}]'). Add the section before tagging."
+                      exit 1
+                  fi
+                  echo "--- Release notes preview ($(wc -l < release-notes.md) lines):"
+                  head -10 release-notes.md
+
+            - name: Build deterministic source tarball
+              run: |
+                  set -euo pipefail
+                  mkdir -p dist
+                  version="${TAG#v}"
+                  archive_name="zdx-${version}.tar.gz"
+                  archive="dist/${archive_name}"
+                  git archive \
+                      --format=tar.gz \
+                      --prefix="zdx-${version}/" \
+                      -o "${archive}" \
+                      "${TAG}"
+                  (
+                      cd dist
+                      sha256sum "${archive_name}" > "${archive_name}.sha256"
+                      sha256sum --check "${archive_name}.sha256"
+                  )
+                  ls -la dist/
+
+            - name: Generate build provenance attestation
+              if: ${{ ! github.event.repository.private }}
+              uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+              with:
+                  subject-path: dist/zdx-*.tar.gz
+
+            - name: Publish release (create if absent, re-upload if present)
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  repo="${{ github.repository }}"
+                  if gh release view "${TAG}" --repo "${repo}" >/dev/null 2>&1; then
+                      echo "Release ${TAG} already exists; re-uploading assets (clobber)..."
+                      gh release upload "${TAG}" \
+                          dist/zdx-*.tar.gz \
+                          dist/zdx-*.tar.gz.sha256 \
+                          --repo "${repo}" \
+                          --clobber
+                  else
+                      echo "Creating release ${TAG}..."
+                      gh release create "${TAG}" \
+                          dist/zdx-*.tar.gz \
+                          dist/zdx-*.tar.gz.sha256 \
+                          --repo "${repo}" \
+                          --title "${TAG}" \
+                          --notes-file release-notes.md \
+                          --target main \
+                          --latest
+                  fi

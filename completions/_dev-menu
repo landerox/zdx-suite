@@ -1,0 +1,342 @@
+#compdef dev-menu dev-check-health dev-check-outdated dev-check-licenses dev-run-all-checks dev-run-hooks dev-check-types dev-run-ruff dev-run-ruff-format dev-run-ty dev-run-pyright dev-run-eslint dev-run-prettier dev-run-clippy dev-run-shellcheck dev-run-markdownlint dev-run-tflint dev-run-tests dev-run-coverage dev-run-audit dev-run-bandit dev-update-deps-dry dev-update-deps dev-update-lock dev-update-precommit dev-update-toolchain dev-update-python dev-update-terraform dev-update-tflint dev-export-deps dev-build-package dev-backup-pyproject venv-list venv-create venv-activate venv-info venv-rebuild venv-remove venv-python-list venv-python-install venv-python-pin dev-profile-run dev-profile-save dev-profile-list dev-profile-delete dev-clean-py dev-clean-repo dev-clean-terraform dev-clean-all dev-update-all
+
+local context state state_descr
+local -a line
+typeset -A opt_args
+
+local -a subcmds
+subcmds=(
+  'dev-check-health:Diagnose Python environment, lockfile, hooks, and toolchain state'
+  'dev-check-outdated:Compare declared direct dependencies against installed versions'
+  'dev-check-licenses:Report installed licenses and flag restrictive copyleft terms'
+  'dev-run-all-checks:Run every gate; pre-commit hooks may rewrite files'
+  'dev-run-hooks:Execute configured file-stage pre-commit hooks'
+  'dev-check-types:Detect and run the configured type checkers'
+  'dev-run-ruff:Run the Ruff linter without modifying any file'
+  'dev-run-ruff-format:Rewrite Python files in place using the Ruff formatter'
+  'dev-run-ty:Run the Astral ty type checker explicitly'
+  'dev-run-pyright:Run the Pyright type checker explicitly'
+  'dev-run-eslint:Lint JavaScript and TypeScript sources'
+  'dev-run-prettier:Check formatting without rewriting files'
+  'dev-run-clippy:Run cargo clippy; Cargo may write target artifacts'
+  'dev-run-shellcheck:Lint sh and bash files and parse .zsh with zsh -n'
+  'dev-run-markdownlint:Check Markdown style; --fix rewrites files'
+  'dev-run-tflint:Lint Terraform; optionally initialize configured plugins'
+  'dev-run-tests:Run the pytest suite without coverage'
+  'dev-run-coverage:Run pytest with the project coverage backend'
+  'dev-run-audit:Check installed packages against vulnerability advisories'
+  'dev-run-bandit:Run Bandit static analysis over Python sources'
+  'dev-update-deps-dry:Show which pyproject specifiers would change'
+  'dev-update-deps:Bump pyproject >= specifiers after backup and confirmation'
+  'dev-update-lock:Refresh uv.lock and sync without editing pyproject'
+  'dev-update-precommit:Validate and publish safe frozen hook revisions'
+  'dev-update-toolchain:Delegate host uv maintenance without touching ambient pip'
+  'dev-update-python:Select and install a runtime or safely replace an existing .venv'
+  'dev-update-terraform:Inspect Terraform ownership and its safest update workflow'
+  'dev-update-tflint:Report its host owner or print the verified procedure'
+  'dev-export-deps:Write requirements from project metadata and the lockfile'
+  'dev-build-package:Run the project build backend and write distributions'
+  'dev-backup-pyproject:Store a timestamped pyproject.toml copy'
+  'venv-list:List validated project-local virtual environments'
+  'venv-create:Create with uv or stdlib; Poetry currently fails closed'
+  'venv-activate:Activate one reviewed project-local environment'
+  'venv-info:Inspect one validated project-local environment'
+  'venv-rebuild:Review the fail-closed environment rebuild plan'
+  'venv-remove:Remove one fingerprinted environment after confirmation'
+  'venv-python-list:List Python runtimes already installed through uv'
+  'venv-python-install:Install one reviewed Python runtime through uv'
+  'venv-python-pin:Write one reviewed project Python pin through uv'
+  'dev-profile-run:Run every validated batch-eligible task in a saved profile'
+  'dev-profile-save:Store the selected tasks as a reusable named profile'
+  'dev-profile-list:Show saved profiles and the tasks each one runs'
+  'dev-profile-delete:Remove a saved profile after confirmation'
+  'dev-clean-py:Preview and remove Python caches and build artifacts'
+  'dev-clean-repo:Preview and remove OS and editor junk files'
+  'dev-clean-terraform:Preview and remove Terraform caches and state backups'
+  'dev-clean-all:Preview one combined removal plan and confirm it once'
+  'dev-update-all:Run a frozen maintenance scope, then confirm exact cleanup targets'
+)
+
+_dev_menu_profiles() {
+  local profile_dir="${DEV_PROFILE_DIR-.dev-suite-profiles}"
+  local -a profiles=()
+  local candidate
+  local -A metadata=()
+
+  [[ -n "$profile_dir" \
+    && -d "$profile_dir" \
+    && ! -L "$profile_dir" \
+    && "${profile_dir:a}" == "${profile_dir:A}" ]] || return 1
+  zmodload zsh/stat 2>/dev/null || return 1
+  zstat -H metadata -- "$profile_dir" 2>/dev/null || return 1
+  (( metadata[uid] == EUID \
+    && (metadata[mode] & 8#7777) == 8#700 )) || return 1
+
+  for candidate in "$profile_dir"/*.profile(N.); do
+    [[ ! -L "$candidate" ]] || continue
+    local profile_name="${${candidate:t}%.profile}"
+    [[ ${#profile_name} -le 64 \
+      && "$profile_name" == [a-zA-Z0-9]* \
+      && "$profile_name" != *[^a-zA-Z0-9_.-]* ]] || continue
+    metadata=()
+    zstat -H metadata -- "$candidate" 2>/dev/null || continue
+    (( metadata[uid] == EUID \
+      && metadata[nlink] == 1 \
+      && (metadata[mode] & 8#77) == 0 \
+      && metadata[size] <= 8192 )) || continue
+    profiles+=("$profile_name")
+    (( ${#profiles[@]} >= 100 )) && break
+  done
+
+  if (( ${#profiles[@]} > 0 )); then
+    _describe -t dev-profiles 'saved task profile' profiles
+  else
+    _message 'saved task profile'
+  fi
+}
+
+if (( ${words[(I)-h]} || ${words[(I)--help]} )); then
+  _message 'no additional arguments'
+  return
+fi
+
+local subcommand=""
+if [[ "${words[1]:-}" == "dev-menu" ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '(-h --help -p --profile)'{-m,--multi}'[Select independent batch-eligible tasks]' \
+    '(-h --help -m --multi)'{-p,--profile}'[Run a saved task profile]::profile:_dev_menu_profiles' \
+    '(-h --help -m --multi -p --profile)1:subcommand:->subcommands' \
+    '(-h --help -m --multi -p --profile)*::argument:->arguments'
+
+  case "$state" in
+    subcommands)
+      _describe -t dev-subcommands 'Developer command' subcmds
+      return
+      ;;
+    arguments)
+      subcommand="${line[1]:-${words[2]:-}}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+else
+  subcommand="${words[1]:-}"
+fi
+
+case "$subcommand" in
+  dev-check-health|dev-check-outdated)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--report[Also write a private Markdown report]'
+    ;;
+  dev-check-licenses)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--report[Also write a private Markdown report]' \
+      '(-h --help)--strict[Fail when a restrictive copyleft license is found]'
+    ;;
+  dev-run-all-checks)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--verbose[Show each check output]'
+    ;;
+  dev-run-hooks)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:pre-commit argument:_default'
+    ;;
+  dev-run-ruff)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Ruff check argument:_default'
+    ;;
+  dev-run-ruff-format)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Ruff format argument:_default'
+    ;;
+  dev-run-ty)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:ty argument:_default'
+    ;;
+  dev-run-pyright)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Pyright argument:_default'
+    ;;
+  dev-run-eslint)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:ESLint argument:_default'
+    ;;
+  dev-run-prettier)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Prettier argument:_default'
+    ;;
+  dev-run-clippy)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:cargo clippy argument:_default'
+    ;;
+  dev-run-tflint)
+    local -a tflint_specs=(
+      '(- *)'{-h,--help}'[Show command usage]'
+      '(-h --help)--init[Initialize configured plugins before linting]'
+    )
+    if (( ${words[(I)--init]} )); then
+      tflint_specs+=(
+        '(-h --help)'{-y,--yes}'[Confirm plugin initialization]'
+      )
+    fi
+    _arguments "${tflint_specs[@]}" \
+      '(-h --help)*:TFLint argument:_default'
+    ;;
+  dev-run-markdownlint)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--fix[Rewrite Markdown files in place]'
+    ;;
+  dev-run-tests)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:pytest argument:_default'
+    ;;
+  dev-run-coverage)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--html[Also write an HTML coverage report]' \
+      '(-h --help)--fail-under=[Fail below this coverage percentage]:percentage (0-100):_guard "[0-9]#" "percentage from 0 to 100"' \
+      '(-h --help)*:pytest argument:_default'
+    ;;
+  dev-run-audit)
+    local -a audit_specs=(
+      '(- *)'{-h,--help}'[Show command usage]'
+      '(-h --help)--fix[Upgrade vulnerable direct dependencies]'
+    )
+    if (( ${words[(I)--fix]} )); then
+      audit_specs+=(
+        '(-h --help)'{-y,--yes}'[Confirm automatic remediation]'
+      )
+    fi
+    _arguments "${audit_specs[@]}"
+    ;;
+  dev-run-bandit)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--high-only[Report only high-severity findings]'
+    ;;
+  dev-update-deps|dev-update-deps-dry)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show planned specifier changes without writing]' \
+      '(-h --help)'{-y,--yes}'[Confirm dependency updates]' \
+      '(-h --help)--verbose[Enable debug output for this run]' \
+      '(-h --help --minor-only --patch-only)--major-only[Apply only major version bumps]' \
+      '(-h --help --major-only --patch-only)--minor-only[Apply only minor version bumps]' \
+      '(-h --help --major-only --minor-only)--patch-only[Apply only patch version bumps]'
+    ;;
+  dev-update-python)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)'{-y,--yes}'[Skip confirmation; delegated version selection may still prompt]'
+    ;;
+  dev-export-deps)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help --all)--dev[Include the dev dependency group]' \
+      '(-h --help --dev)--all[Include every dependency group]' \
+      '(-h --help)--output=[Set output filename]:output file:_files' \
+      '(-h --help)-o+[Set output filename]:output file:_files' \
+      '(-h --help)'{-y,--yes}'[Overwrite an existing output file]'
+    ;;
+  dev-profile-run|dev-profile-save)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)1:profile:_dev_menu_profiles'
+    ;;
+  dev-profile-delete)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)'{-y,--yes}'[Confirm profile deletion]' \
+      '(-h --help)1:profile:_dev_menu_profiles'
+    ;;
+  dev-clean-py)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]' \
+      '(-h --help)--keep-build[Preserve root build and dist directories]'
+    ;;
+  dev-clean-all)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]' \
+      '(-h --help)--keep-build[Preserve root build, dist, and Cargo target directories]'
+    ;;
+  dev-clean-repo|dev-clean-terraform)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]'
+    ;;
+  dev-update-all)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Preview dependency and cleanup plans]' \
+      '(-h --help)'{-y,--yes}'[Authorize aggregate and exact child plans]'
+    ;;
+  venv-create)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command usage]' \
+      '(--uv --venv --poetry)--uv[create with uv]' \
+      '(--uv --venv --poetry)--venv[create with stdlib venv]' \
+      '(--uv --venv --poetry)--poetry[show the fail-closed Poetry plan]' \
+      '--python=[select Python version]:version' \
+      '--dry-run[print the plan without changing files]' \
+      '--yes[accept the reviewed plan non-interactively]'
+    ;;
+  venv-activate)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command usage]' \
+      '--path[select a validated local environment]:directory:_directories' \
+      '--dry-run[print the activation plan without sourcing code]' \
+      '--yes[accept the reviewed activation plan non-interactively]'
+    ;;
+  venv-info)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command usage]' \
+      '--path[select a validated local environment]:directory:_directories'
+    ;;
+  venv-rebuild|venv-remove)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command usage]' \
+      '--path[select a validated local environment]:directory:_directories' \
+      '--dry-run[print the plan without changing files]' \
+      '--yes[accept the reviewed plan non-interactively]'
+    ;;
+  venv-python-install|venv-python-pin)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command usage]' \
+      '--dry-run[print the plan without changing state]' \
+      '--yes[accept the reviewed plan non-interactively]' \
+      '1::Python version'
+    ;;
+  venv-list|venv-python-list)
+    _arguments '(-h --help)'{-h,--help}'[show command usage]'
+    ;;
+  dev-check-types|dev-run-shellcheck|dev-update-lock|dev-update-precommit\
+    |dev-update-toolchain|dev-update-terraform|dev-update-tflint\
+    |dev-build-package|dev-backup-pyproject|dev-profile-list)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+  *)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+esac

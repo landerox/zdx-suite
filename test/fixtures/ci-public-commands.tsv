@@ -1,0 +1,9 @@
+# command	module	risk	capability
+ci-status	ci-actions.zsh	read-only	repository+gh
+ci-run	ci-actions.zsh	remote-code	repository+gh
+ci-clean-actions	ci-clean.zsh	destructive	repository+gh
+ci-clean-deployments	ci-clean.zsh	destructive	repository+gh
+ci-clean-releases	ci-clean.zsh	destructive	repository+gh
+ci-clean-notifications	ci-clean.zsh	mutating	repository+gh
+ci-clean-tags	ci-clean.zsh	delegated	git-suite
+ci-clean-issues	ci-clean.zsh	delegated	git-suite

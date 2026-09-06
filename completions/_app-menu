@@ -1,0 +1,47 @@
+#compdef app-menu app-list app-run
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a subcommands
+subcommands=(
+  'app-list:List the bounded typed task inventory'
+  'app-run:Run one exact rediscovered project task'
+)
+
+local command_name=""
+if [[ "$service" == app-menu ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[show App menu usage]' \
+    '(- *)'{-m,--multi}'[select multiple tasks to run sequentially]' \
+    '1:App subcommand:->app_subcommand' \
+    '*::subcommand argument:->app_arguments'
+  case "$state" in
+    app_subcommand)
+      _describe -t app-subcommands 'App subcommand' subcommands
+      return
+      ;;
+    app_arguments)
+      command_name="${words[1]:-}"
+      ;;
+    *) return ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+  app-list)
+    _arguments '(-h --help)'{-h,--help}'[show app-list usage]'
+    ;;
+  app-run)
+    _arguments -s \
+      '(-h --help)'{-h,--help}'[show app-run usage]' \
+      '--backend[select the fixed task backend]:backend:(just npm pnpm yarn bun make compose)' \
+      '--task[select the exact task, service, or compose all target]:task:' \
+      '--action[select the backend action]:action:(run up down ps up-service restart-service logs-service)' \
+      '--directory[use an exact workspace directory]:directory:_directories' \
+      '--dry-run[validate and print the task plan without executing it]' \
+      '--yes[authorize non-interactive project task execution]'
+    ;;
+esac

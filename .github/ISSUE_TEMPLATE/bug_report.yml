@@ -1,0 +1,89 @@
+name: Bug report
+description: Report something that isn't working as expected
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. The more precise
+        the repro, the faster it can be fixed.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug. What did you expect vs. what occurred?
+      placeholder: |
+        I ran `ai-update` and ...
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal sequence to trigger the bug.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: suite
+    attributes:
+      label: Suite affected
+      description: Which suite owns the bug?
+      options:
+        - Git (git-menu)
+        - Workspace (ws-menu)
+        - VPN (vpn-menu)
+        - Docker (docker-menu)
+        - System (sys-menu)
+        - File (file-menu)
+        - App (app-menu)
+        - CI (ci-menu)
+        - Environment (env-menu)
+        - Python (py-menu)
+        - Developer (dev-menu)
+        - Network (net-menu)
+        - GPU (gpu-menu)
+        - Hugging Face (hf-menu)
+        - AI (ai-menu)
+        - Core or plugin loader
+        - other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Zsh version, OMZ version, distro / WSL, relevant CLI tools.
+      placeholder: |
+        zsh --version: zsh 5.9 ...
+        OS: Ubuntu 22.04 (WSL2)
+        fzf --version: 0.44.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste any error messages or log snippets. Redact secrets.
+      render: shell
+
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I have read SECURITY.md and confirm this is not a security issue
+          required: true
+        - label: I searched existing issues and this is not a duplicate
+          required: true

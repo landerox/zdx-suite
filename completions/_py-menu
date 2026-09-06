@@ -1,0 +1,145 @@
+#compdef py-menu venv-list venv-create venv-activate venv-info venv-rebuild venv-remove venv-python-list venv-python-install venv-python-pin package-search package-install package-uninstall tool-list tool-install tool-uninstall tool-upgrade venv-python
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a py_commands
+py_commands=(
+  'venv-list:List validated project-local virtual environments'
+  'venv-create:Create an empty validated project-local .venv'
+  'venv-activate:Activate a reviewed project-local environment'
+  'venv-info:Inspect a validated project-local environment'
+  'venv-rebuild:Review the fail-closed rebuild plan'
+  'venv-remove:Remove one fingerprinted project-local environment'
+  'venv-python-list:List Python runtimes installed through uv'
+  'venv-python-install:Install a reviewed Python runtime through uv'
+  'venv-python-pin:Write a reviewed project Python pin through uv'
+  'package-search:Fetch bounded metadata for one PyPI package'
+  'package-install:Install one package into a validated project target'
+  'package-uninstall:Uninstall one package from a validated project target'
+  'tool-list:List isolated tools managed by uv and pipx'
+  'tool-install:Install one reviewed isolated Python tool'
+  'tool-uninstall:Uninstall one isolated Python tool'
+  'tool-upgrade:Upgrade one or all reviewed isolated Python tools'
+)
+
+local command_name=""
+if [[ "$service" == py-menu ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[show usage]' \
+    '(- *)'{-m,--multi}'[select non-interactive read-only tasks]' \
+    '1:Py command:->command' \
+    '*::command argument:->arguments'
+  case "$state" in
+    command)
+      _describe -t commands 'Py command' py_commands
+      return
+      ;;
+    arguments)
+      command_name="${words[1]:-}"
+      ;;
+    *) return ;;
+  esac
+elif [[ "$service" == venv-python ]]; then
+  local -a compatibility_commands=(
+    'list:List Python runtimes installed through uv'
+    'install:Install a reviewed Python runtime through uv'
+    'pin:Write a reviewed project Python pin through uv'
+  )
+  _arguments -C \
+    '(- *)'{-h,--help}'[show compatibility usage]' \
+    '1:compatibility command:->compatibility-command' \
+    '*::compatibility argument:->compatibility-arguments'
+  case "$state" in
+    compatibility-command)
+      _describe -t compatibility-commands \
+        'compatibility command' compatibility_commands
+      return
+      ;;
+    compatibility-arguments)
+      command_name="venv-python-${words[1]:-}"
+      ;;
+    *) return ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+      venv-list|venv-python-list|tool-list)
+        _arguments '(-h --help)'{-h,--help}'[show command usage]'
+        ;;
+      venv-create)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '(--uv --venv --poetry)--uv[create with uv]' \
+          '(--uv --venv --poetry)--venv[create with stdlib venv]' \
+          '(--uv --venv --poetry)--poetry[show the fail-closed Poetry plan]' \
+          '--python=[select Python version]:version' \
+          '--dry-run[print the plan without changing files]' \
+          '--yes[accept the reviewed plan non-interactively]'
+        ;;
+      venv-activate)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--path[select a validated local environment]:directory:_directories' \
+          '--dry-run[print the activation plan without sourcing code]' \
+          '--yes[accept the reviewed activation plan non-interactively]'
+        ;;
+      venv-info)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--path[select a validated local environment]:directory:_directories'
+        ;;
+      venv-rebuild|venv-remove)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--path[select a validated local environment]:directory:_directories' \
+          '--dry-run[print the plan without changing files]' \
+          '--yes[accept the reviewed plan non-interactively]'
+        ;;
+      venv-python-install|venv-python-pin)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--dry-run[print the plan without changing state]' \
+          '--yes[accept the reviewed plan non-interactively]' \
+          '1::Python version'
+        ;;
+      package-search)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '1:PyPI package'
+        ;;
+      package-install)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--dev[add the package to the development dependency group]' \
+          '--dry-run[print the plan without changing package state]' \
+          '--yes[accept the reviewed plan non-interactively]' \
+          '1:package name'
+        ;;
+      package-uninstall)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--dry-run[print the plan without changing package state]' \
+          '--yes[accept the reviewed plan non-interactively]' \
+          '1:package name'
+        ;;
+      tool-install|tool-uninstall)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '--backend=[select isolated tool backend]:backend:(uv pipx)' \
+          '--dry-run[print the plan without changing tool state]' \
+          '--yes[accept the reviewed plan non-interactively]' \
+          '1:tool package'
+        ;;
+      tool-upgrade)
+        _arguments \
+          '(-h --help)'{-h,--help}'[show command usage]' \
+          '(1)--all[upgrade the exact frozen installed tool set]' \
+          '--backend=[select isolated tool backend]:backend:(uv pipx)' \
+          '--dry-run[print the plan without changing tool state]' \
+          '--yes[accept the reviewed plan non-interactively]' \
+          '(--all)1:tool package'
+        ;;
+esac

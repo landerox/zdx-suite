@@ -1,0 +1,66 @@
+name: Maintenance · Link Check
+run-name: >-
+  Link Check · ${{
+    github.event_name == 'schedule' && 'weekly'
+    || github.event_name == 'workflow_dispatch' && 'manual dispatch'
+    || github.ref_name
+  }}
+
+on:
+    schedule:
+        # Mondays 07:00 UTC.
+        - cron: "0 7 * * 1"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    link-check:
+        name: Lychee
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: Run Lychee link checker
+              uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+              with:
+                  args: >-
+                      --no-progress
+                      --exclude-path .venv
+                      --exclude-path .demo
+                      './**/*.md'
+                  fail: true
+                  failIfEmpty: true
+                  jobSummary: false
+                  output: ${{ runner.temp }}/lychee-report.md
+                  token: ""
+
+            - name: Publish report to job summary
+              if: failure()
+              shell: bash
+              run: |
+                  {
+                      echo "## Link check report"
+                      echo
+                      if [[ -s "${RUNNER_TEMP}/lychee-report.md" ]]; then
+                          sed -n '1,500p' "${RUNNER_TEMP}/lychee-report.md"
+                      else
+                          echo "Lychee failed without producing a Markdown report."
+                      fi
+                  } >> "${GITHUB_STEP_SUMMARY}"
+
+                  if [[ -s "${RUNNER_TEMP}/lychee-report.md" ]]; then
+                      line_count=$(wc -l < "${RUNNER_TEMP}/lychee-report.md")
+                      if (( line_count > 500 )); then
+                          echo "::warning::Link report was truncated to 500 lines in the job summary."
+                      fi
+                  fi

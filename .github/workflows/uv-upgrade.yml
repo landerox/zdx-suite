@@ -1,0 +1,114 @@
+name: Maintenance · Dependency Report
+run-name: >-
+  Dependency Report · ${{
+    github.event_name == 'schedule' && 'weekly'
+    || github.event_name == 'workflow_dispatch' && 'manual dispatch'
+    || github.ref_name
+  }}
+
+on:
+    schedule:
+        # Tuesdays 06:00 UTC — away from Monday's maintenance workflows.
+        - cron: "0 6 * * 2"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    report:
+        name: Lockfile Report
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        env:
+            NO_COLOR: "1"
+            UV_NO_PROGRESS: "1"
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+              with:
+                  version: "0.12.6"
+
+            - name: Verify committed lockfile
+              run: uv lock --check
+
+            - name: Report available lockfile updates
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  umask 077
+
+                  report_file=$(mktemp "${RUNNER_TEMP}/uv-lock-upgrade.XXXXXX")
+                  trap 'rm -f "${report_file}"' EXIT
+
+                  set +e
+                  uv lock --upgrade --dry-run >"${report_file}" 2>&1
+                  report_status=$?
+                  set -e
+
+                  if (( report_status != 0 )); then
+                      {
+                          echo "## Python dependency update report"
+                          echo
+                          echo "The dependency resolver failed with exit code ${report_status}."
+                          echo "No repository changes were made."
+                      } >> "${GITHUB_STEP_SUMMARY}"
+                      echo "::error::Unable to calculate available dependency updates."
+                      exit "${report_status}"
+                  fi
+
+                  git diff --exit-code -- uv.lock
+
+                  report_size=$(wc -c < "${report_file}")
+                  if (( report_size > 262144 )); then
+                      {
+                          echo "## Python dependency update report"
+                          echo
+                          echo "The resolver report exceeded the 256 KiB safety limit."
+                          echo "No repository changes were made."
+                      } >> "${GITHUB_STEP_SUMMARY}"
+                      exit 1
+                  fi
+
+                  update_count=$(awk '
+                      /^(Add|Remove|Update|Downgrade) / { count++ }
+                      END { print count + 0 }
+                  ' "${report_file}")
+
+                  {
+                      echo "## Python dependency update report"
+                      echo
+                      echo "- Source commit: \`${GITHUB_SHA}\`"
+                      echo "- Remote mutations: **none**"
+                      echo "- Candidate lockfile changes: **${update_count}**"
+                      echo
+                  } >> "${GITHUB_STEP_SUMMARY}"
+
+                  if (( update_count == 0 )); then
+                      echo "All locked dependencies are current." >> "${GITHUB_STEP_SUMMARY}"
+                  else
+                      {
+                          echo "Proposed resolver changes:"
+                          echo
+                      } >> "${GITHUB_STEP_SUMMARY}"
+                      awk '
+                          /^(Add|Remove|Update|Downgrade) / {
+                              count++
+                              if (count <= 200) print "    " $0
+                          }
+                          END {
+                              if (count > 200) {
+                                  print "    ... report truncated after 200 changes ..."
+                              }
+                          }
+                      ' "${report_file}" >> "${GITHUB_STEP_SUMMARY}"
+                  fi

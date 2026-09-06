@@ -1,0 +1,16 @@
+# command	module	risk	capability
+ws-auth	ws-info.zsh	network	auth
+ws-create	ws-create.zsh	mutating	workspace
+ws-list	ws-info.zsh	read-only	workspace
+ws-info	ws-info.zsh	read-only	workspace
+ws-doctor	ws-info.zsh	network	diagnostics
+ws-clone	ws-clone.zsh	mutating	repository
+ws-clone-multi	ws-clone.zsh	mutating	repository
+ws-sync	ws-sync.zsh	mutating	repository
+ws-repos	ws-sync.zsh	read-only	repository
+ws-migrate	ws-danger.zsh	destructive	repository
+ws-show-key	ws-keys.zsh	read-only	ssh-key
+ws-rotate-key	ws-keys.zsh	destructive	ssh-key
+ws-test	ws-keys.zsh	network	ssh-key
+ws-autoclean	ws-autoclean.zsh	destructive	branch
+ws-remove	ws-danger.zsh	destructive	workspace
