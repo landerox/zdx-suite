@@ -577,7 +577,7 @@ _docker_fzf() {
     --border=rounded
     --pointer='▶'
   )
-  fzf_options+=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1')
+  fzf_options+=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow')
 
   if typeset -f _tk_fzf_color_opts &>/dev/null; then
     local theme_option=""

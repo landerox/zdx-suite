@@ -272,15 +272,27 @@ The core runtime provides the visual theme. The currently exported compatibility
 helper is `_tk_fzf_color_opts`. A suite may consume it only when it is already
 defined; a suite MUST NOT source `git-common.zsh` to obtain it.
 
-The default is `--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1`: ANSI palette accents
-with foreground and background inherited together from the terminal, including
-the current row. Do not combine a fixed light RGB foreground with an inherited
-background. This keeps ordinary text consistent with both light and dark
-terminal profiles without requiring truecolor or a terminal query.
+The default is `--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow`:
+ANSI palette accents with foreground and background inherited together from
+the terminal, including the current row. Do not combine a fixed light RGB
+foreground with an inherited background. This keeps ordinary text consistent
+with both light and dark terminal profiles without requiring truecolor or a
+terminal query.
+
+The `border` and `info` entries MUST remain explicit. fzf releases before
+0.66.0, including Ubuntu 24.04's 0.44.1, resolve the `16` base scheme's
+border, separator, scrollbar, and preview border to ANSI black and the match
+counter to ANSI white; they disappear on dark and light profiles whose palette
+matches the background. The pinned values are what fzf 0.66.0 and newer use by
+default, so newer releases render identically. Older releases still omit the
+`▌` gutter introduced in fzf 0.66.0; no option reproduces it there.
 
 The core honors an explicit `ZDX_FZF_THEME` override. Non-empty `NO_COLOR` or
 `ZDX_FZF_PLAIN`, and `TERM=dumb`, take precedence and return `--no-color`.
 Standalone wrappers use the same native-color fallback without loading core.
+A custom theme that names a base scheme such as `16`, `dark`, or `light`
+replaces the earlier default keys, so it should repeat the pinned entries when
+older fzf releases matter.
 
 Functional options are constructed at invocation time in a suite wrapper:
 
@@ -293,7 +305,7 @@ _<prefix>_fzf() {
     --delimiter='[|]'
     --with-nth=1
     --pointer='▶'
-    --color=16,fg:-1,bg:-1,fg+:-1,bg+:-1
+    --color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow
   )
 
   if typeset -f _tk_fzf_color_opts &>/dev/null; then

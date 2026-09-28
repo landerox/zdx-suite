@@ -94,6 +94,9 @@ for path in files:
         assert fields[0] in ('16', 'base16'), (path, spec)
         for role in ('fg', 'bg', 'fg+', 'bg+'):
             assert f'{role}:-1' in fields, (path, role, spec)
+        # fzf < 0.66 otherwise draws chrome in ANSI black and the counter in white.
+        for pinned in ('border:-1:dim', 'info:yellow'):
+            assert pinned in fields, (path, pinned, spec)
         assert '#' not in spec, (path, spec)
     elif mode == 'custom':
         assert color[-1] == '--color=16,fg:0,bg:7,fg+:7,bg+:0', (path, color)
