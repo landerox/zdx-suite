@@ -38,6 +38,13 @@ palette by default. Set `ZDX_FZF_THEME` only for an intentional custom theme.
 Any nonempty `NO_COLOR` value forces fzf's `--no-color` as a final option,
 including when a theme or a caller-supplied color option is present.
 
+Borders, separators, scrollbars, and the match counter use pinned colors, so
+they remain visible with older fzf releases such as Ubuntu 24.04's packaged
+0.44.1. fzf 0.66 and newer also draw a thin `▌` gutter beside unselected rows;
+older releases leave that column blank. For identical menus on every machine,
+install the same current fzf release on each one; `fzf --version` shows which
+release a shell uses.
+
 If entries are difficult to see, try one invocation in plain mode:
 
 ```zsh

@@ -1,7 +1,18 @@
 # Changelog
 
-This document describes the complete initial `v0.1.0` repository baseline,
-including implemented behavior, verification, and remaining limitations.
+This document records user-visible changes by release. The initial `v0.1.0`
+entry describes the complete repository baseline, including implemented
+behavior, verification, and remaining limitations.
+
+## [Unreleased]
+
+### Fixed
+
+- Menus keep their borders, info separator, scrollbar, and preview frame with
+  fzf releases before 0.66, such as Ubuntu 24.04's packaged 0.44.1, which drew
+  them in ANSI black and the match counter in white. The shared theme now pins
+  `border:-1:dim,info:yellow`, the values that fzf 0.66 and newer already use,
+  so newer releases render unchanged.
 
 ## [0.1.0] — 2026-09-06
 
@@ -317,4 +328,5 @@ network, cloud, AI, and hardware workflows.
   project task descriptors are trusted code surfaces rather than sandboxed
   data.
 
+[Unreleased]: https://github.com/landerox/zdx-suite/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/landerox/zdx-suite/releases/tag/v0.1.0

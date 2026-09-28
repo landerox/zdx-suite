@@ -35,7 +35,10 @@ _tk_fzf_color_opts() {
     print -r -- "--color=${ZDX_FZF_THEME}"
   else
     # Keep foreground and background paired with the terminal's own palette.
-    print -r -- '--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1'
+    # fzf before 0.66 draws borders, separators, and scrollbars in ANSI black
+    # and the match counter in white, which vanish on dark or light profiles;
+    # pin them to the values that newer releases already use by default.
+    print -r -- '--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow'
   fi
 }
 

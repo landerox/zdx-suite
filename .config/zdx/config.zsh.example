@@ -159,7 +159,9 @@
 
 # Menus default to a 16-color palette with native terminal foreground/background.
 # Optional custom fzf theme; any non-empty NO_COLOR forces --no-color last.
-# ZDX_FZF_THEME="16,fg:-1,bg:-1,fg+:-1,bg+:-1,hl:4,hl+:4"
+# A base scheme such as 16 resets the default keys; keep border and info so
+# fzf releases before 0.66 do not draw borders in black or the counter in white.
+# ZDX_FZF_THEME="16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow,hl:4,hl+:4"
 # NO_COLOR=1
 
 # Any non-empty value (including "0") disables color and uses ASCII fzf chrome:

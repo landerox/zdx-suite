@@ -214,7 +214,9 @@ identified the exact historical cause.
 | Always remove colors and Unicode | Simple fallback | Removes useful presentation even when supported | Explicit plain mode |
 
 The core and suite-owned wrappers now use
-`--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1`. An explicit core theme remains available.
+`--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow`; the final
+two entries are explained in the older-release follow-up below. An explicit
+core theme remains available.
 `NO_COLOR` is an explicit `--no-color` override, including on fzf versions that
 do not understand the environment variable themselves. Non-empty
 `ZDX_FZF_PLAIN` adds ASCII borders, pointer, and marker; `C` and `POSIX` locales
@@ -277,3 +279,25 @@ literal pipe expression that works on both versions without raising the
 minimum. This preserves the record format, selected bytes, and numeric field
 transformation. CI installs its distribution fzf so the native filtering
 regressions execute rather than skip.
+
+### Older-release chrome follow-up
+
+A later report showed the System menu on a second WSL host with no visible
+outer border, info separator, scrollbar, or preview frame, and a white match
+counter. That host used Ubuntu's packaged fzf 0.44.1. Upstream
+[fzf 0.66.0](https://github.com/junegunn/fzf/releases/tag/v0.66.0) updated the
+`16` base scheme: 0.44.1 resolves its border, and the separator, scrollbar,
+and preview border derived from it, to ANSI black and the counter to ANSI
+white, while 0.66.0 and newer use the dim default foreground and yellow. A
+terminal profile whose black equals its background therefore hides that
+chrome. The same release introduced the `▌` gutter beside unselected rows.
+
+Captured tmux output of the real System menu confirmed the difference: 0.44.1
+emitted 29 `ESC[30m` sequences for chrome, 0.74.4 emitted `ESC[2m`. The
+shared preset now pins `border:-1:dim,info:yellow`, which fzf 0.28.0 and newer
+parse, covering the 0.31 baseline. With it, 0.44.1 emits no black chrome and a
+yellow counter, and the
+0.74.4 capture is byte-identical to the capture without the pinned entries.
+The gutter glyph has no equivalent before 0.66.0, so identical rendering on an
+older host still requires a newer fzf; that remains the user's installation
+choice rather than a raised minimum.

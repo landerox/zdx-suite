@@ -259,7 +259,7 @@ _mytool_fzf() {
     --delimiter='[|]'
     --with-nth=1
     --pointer='▶'
-    --color=16,fg:-1,bg:-1,fg+:-1,bg+:-1
+    --color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow
   )
 
   if typeset -f _tk_fzf_color_opts &>/dev/null; then

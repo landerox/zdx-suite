@@ -1556,7 +1556,7 @@ _vpn_fzf() {
     --pointer='▶'
   )
 
-  options+=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1')
+  options+=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow')
 
   if typeset -f _tk_fzf_color_opts &>/dev/null; then
     local theme_option
