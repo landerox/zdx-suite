@@ -38,6 +38,29 @@ behavior, verification, and remaining limitations.
   - `sys-info` shows Homebrew package counts, `sys-startup` counts single-line
     plugin arrays correctly, and telemetry is recorded under decimal-comma
     locales.
+- Developer suite review:
+  - An unreadable directory, such as a container volume owned by another user,
+    is skipped with a warning instead of blocking the menu, cleanup, and gate
+    discovery.
+  - Bandit, ShellCheck, Markdownlint, and test detection inventory 32
+    directory levels, so an ordinary `src/` layout is scanned;
+    `DEV_SCAN_DEPTH` now bounds only the menu's stack summary.
+  - Ctrl-C or TERM during `dev-update-deps` stops before publication or rolls
+    back exactly; `dev-update-all` and `dev-run-all-checks` stop after an
+    interrupted step and return its status.
+  - Cleanup never plans installed-package metadata in `site-packages`,
+    `.tox`, or `.nox`, skips a directory that contains a nested repository,
+    keeps the contents of `--keep-build` outputs, requires Cargo evidence for
+    `target/`, and runs large plans in linear time.
+  - `dev-export-deps` keeps normal file permissions instead of publishing
+    mode `0600`; Markdownlint `--fix` rewrites only project files; Ruff no
+    longer widens explicit paths; clustered short write flags and ESLint's
+    remote-code `--inspect-config`/`--mcp` are refused; strict license checks
+    recognize spelled-out copyleft names.
+  - `.python-version` comment lines, leading whitespace in dependency strings,
+    locale-independent name and version checks, a partial hook plan with an
+    unchanged mutable revision, the PyPI cache of `dev-update-precommit`, and
+    an interrupted `.venv` rename now behave correctly.
 
 ## [0.1.0] — 2026-09-06
 

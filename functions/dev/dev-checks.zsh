@@ -211,6 +211,8 @@ _dev_health_read_python_pin() {
     raw_line="${raw_line##[[:space:]]#}"
     raw_line="${raw_line%%[[:space:]]#}"
     [[ -n "$raw_line" ]] || continue
+    # uv ignores comment lines, for example a "# Managed by uv" header.
+    [[ "$raw_line" == '#'* ]] && continue
     if [[ "$raw_line" == *[[:space:]]* ]]; then
       _dev_error ".python-version contains an unsupported whitespace-delimited request."
       return 1
@@ -612,9 +614,13 @@ _dev_license_capture_output() {
   captured=$(
     "$@" | command head -c $(( _DEV_LICENSE_OUTPUT_LIMIT + 1 ))
     local -a pipeline_status=("${pipestatus[@]}")
+    # Command substitution strips trailing newlines, which could hide the
+    # limit+1 overflow byte; a sentinel keeps every captured byte countable.
+    print -rn -- .
     (( pipeline_status[2] == 0 )) || exit "${pipeline_status[2]}"
     exit "${pipeline_status[1]}"
   ) || capture_status=$?
+  captured="${captured%.}"
 
   if (( ${#captured} > _DEV_LICENSE_OUTPUT_LIMIT )); then
     _dev_error "$label exceeds the 10 MiB safety limit."
@@ -624,6 +630,10 @@ _dev_license_capture_output() {
     return $capture_status
   fi
 
+  # Consumers expect the former command-substitution shape.
+  while [[ "$captured" == *$'\n' ]]; do
+    captured="${captured%$'\n'}"
+  done
   REPLY="$captured"
   return 0
 }
@@ -699,9 +709,17 @@ except (json.JSONDecodeError, UnicodeError):
 if not isinstance(records, list):
     raise SystemExit(1)
 
+# Acronyms and the spelled-out names that Trove classifiers use. A plain
+# "General Public License" preceded by Lesser or Library is the LGPL.
 restrictive = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?:AGPL|GPL|SSPL|EUPL|OSL|CPAL)"
+    r"(?i)(?:(?<![A-Za-z0-9])(?:AGPL|GPL|SSPL|EUPL|OSL|CPAL)"
     r"(?:[- ]?v?[0-9][A-Za-z0-9.+-]*)?(?![A-Za-z])"
+    r"|Affero General Public License"
+    r"|(?<!Lesser )(?<!Library )General Public License"
+    r"|Server Side Public License"
+    r"|European Union Public Licen[cs]e"
+    r"|Open Software License"
+    r"|Common Public Attribution License)"
 )
 
 
@@ -818,14 +836,21 @@ dev-check-types() {
     return 1
   fi
 
-  local -i exit_code=0
+  local -i exit_code=0 checker_status=0
 
   if (( has_ty )); then
-    _dev_timed "dev:dev-run-ty" dev-run-ty || exit_code=1
+    _dev_timed "dev:dev-run-ty" dev-run-ty || checker_status=$?
+    (( checker_status == 130 || checker_status == 143 )) \
+      && return $checker_status
+    (( checker_status == 0 )) || exit_code=1
   fi
 
   if (( has_pyright )); then
-    _dev_timed "dev:dev-run-pyright" dev-run-pyright || exit_code=1
+    checker_status=0
+    _dev_timed "dev:dev-run-pyright" dev-run-pyright || checker_status=$?
+    (( checker_status == 130 || checker_status == 143 )) \
+      && return $checker_status
+    (( checker_status == 0 )) || exit_code=1
   fi
 
   if (( exit_code == 0 )); then
@@ -901,11 +926,13 @@ _dev_run_ruff_mode() {
   local -a mode_arguments=("$mode")
   [[ "$mode" == "check" ]] && mode_arguments+=(--no-fix --no-cache)
 
+  # Ruff defaults to the current directory when no path is given; appending
+  # "." would widen an explicit file selection to the whole project.
   if [[ "$mode" == "check" ]]; then
     command env -u RUFF_OUTPUT_FILE \
-      "${runner[@]}" "${mode_arguments[@]}" "$@" . >&2
+      "${runner[@]}" "${mode_arguments[@]}" "$@" >&2
   else
-    "${runner[@]}" "${mode_arguments[@]}" "$@" . >&2
+    "${runner[@]}" "${mode_arguments[@]}" "$@" >&2
   fi
   local -i exit_code=$?
 
@@ -937,7 +964,7 @@ dev-run-ruff() {
     case "$argument" in
       --fix|--fix=*|--fix-only|--fix-only=*|--unsafe-fixes|--unsafe-fixes=*|\
       --add-noqa|--add-noqa=*|--output-file|--output-file=*|-o|-o?*|\
-      --cache-dir|--cache-dir=*)
+      --cache-dir|--cache-dir=*|-[!-]*o*)
         _dev_error \
           "dev-run-ruff is read-only; refusing mutating option: $argument"
         _dev_info "Use dev-run-ruff-format for an explicit rewrite workflow."
@@ -1169,15 +1196,18 @@ dev-run-markdownlint() {
   _dev_header "Running Markdownlint"
   _dev_validate_scan_depth || return 1
 
-  local -i markdown_probe_status=0
-  _dev_project_has_files '*.md' || markdown_probe_status=$?
-  (( markdown_probe_status == 2 )) && return 1
-  if (( markdown_probe_status == 1 )); then
+  # The suite's bounded inventory prunes node_modules, vendored and generated
+  # trees, and nested repositories; a bare '**/*.md' glob would lint (and with
+  # --fix rewrite) all of them.
+  local -a reply=()
+  _dev_project_files 512 '*.md' || return 1
+  local -a markdown_files=("${reply[@]}")
+  if (( ${#markdown_files[@]} == 0 )); then
     _dev_info "No Markdown files found in this project."
     return 0
   fi
 
-  local -a reply=()
+  reply=()
   _dev_node_tool_runner markdownlint markdownlint-cli || return 1
   local -a runner=("${reply[@]}")
 
@@ -1185,14 +1215,23 @@ dev-run-markdownlint() {
   if [[ -f ".config/markdownlint.yaml" ]]; then
     arguments+=(--config ".config/markdownlint.yaml")
   fi
-  arguments+=('**/*.md')
   (( fix )) && arguments+=(--fix)
 
   if (( fix )); then
     _dev_warn "--fix rewrites Markdown files in place."
   fi
-  "${runner[@]}" "${arguments[@]}" >&2
-  local -i exit_code=$?
+  local -i exit_code=0 batch_status=0 offset=1
+  local -a batch=()
+  while (( offset <= ${#markdown_files[@]} )); do
+    batch=("${markdown_files[@][$offset,$(( offset + 63 ))]}")
+    batch_status=0
+    "${runner[@]}" "${arguments[@]}" "${batch[@]}" >&2 || batch_status=$?
+    if (( batch_status == 130 || batch_status == 143 )); then
+      return $batch_status
+    fi
+    (( batch_status != 0 && exit_code == 0 )) && exit_code=$batch_status
+    offset=$(( offset + 64 ))
+  done
 
   if (( exit_code == 0 )); then
     _dev_success "Markdownlint passed."
@@ -1217,8 +1256,15 @@ dev-run-eslint() {
   local argument
   for argument in "$@"; do
     case "$argument" in
+      --inspect-config|--inspect-config=*|--mcp|--mcp=*)
+        # ESLint launches `npx @eslint/...@latest` for these, which is an
+        # ephemeral remote-code runner outside DEV_ALLOW_EPHEMERAL.
+        _dev_error \
+          "dev-run-eslint refuses $argument: it downloads and runs remote code."
+        return 2
+        ;;
       --fix|--fix=*|--init|--init=*|\
-      --output-file|--output-file=*|-o|-o?*|\
+      --output-file|--output-file=*|-o|-o?*|-[!-]*o*|\
       --suppress-all|--suppress-all=*|\
       --suppress-rule|--suppress-rule=*|\
       --prune-suppressions|--prune-suppressions=*|\
@@ -1264,7 +1310,8 @@ dev-run-prettier() {
   local argument
   for argument in "$@"; do
     case "$argument" in
-      --write|--write=*|-w|--cache|--cache=*|--cache-location|--cache-location=*)
+      --write|--write=*|-w|--cache|--cache=*|--cache-location|--cache-location=*\
+      |-[!-]*w*)
         _dev_error \
           "dev-run-prettier is read-only; refusing state-writing option: $argument"
         return 2
@@ -1765,6 +1812,12 @@ _dev_run_check() {
   local name="$1"
   shift
 
+  # After an interrupted gate no later gate starts; it is listed as not run.
+  if (( ${_DEV_CHECK_INTERRUPTED:-0} )); then
+    _DEV_CHECK_RESULTS+=("${name}|not run|—")
+    return 0
+  fi
+
   local start
   start=$(_dev_now)
 
@@ -1778,7 +1831,11 @@ _dev_run_check() {
   local elapsed
   elapsed=$(_dev_elapsed "$start")
 
-  if (( exit_code == 0 )); then
+  if (( exit_code == 130 || exit_code == 143 )); then
+    (( ${+_DEV_CHECK_INTERRUPTED} )) && _DEV_CHECK_INTERRUPTED=$exit_code
+    _DEV_CHECK_RESULTS+=("${name}|interrupted|${elapsed}s")
+    _DEV_CHECK_FAILURES=$(( _DEV_CHECK_FAILURES + 1 ))
+  elif (( exit_code == 0 )); then
     _DEV_CHECK_RESULTS+=("${name}|passed|${elapsed}s")
   else
     _DEV_CHECK_RESULTS+=("${name}|failed|${elapsed}s")
@@ -1856,6 +1913,7 @@ dev-run-all-checks() {
   local -i previous_verbose=$_DEV_CHECK_VERBOSE
   local -a results=()
   local -i failures=0
+  local -i _DEV_CHECK_INTERRUPTED=0 interrupted_status=0
 
   {
     _DEV_CHECK_RESULTS=()
@@ -1931,6 +1989,7 @@ dev-run-all-checks() {
 
     results=("${_DEV_CHECK_RESULTS[@]}")
     failures=$_DEV_CHECK_FAILURES
+    interrupted_status=$_DEV_CHECK_INTERRUPTED
   } always {
     _DEV_CHECK_VERBOSE=$previous_verbose
     _DEV_CHECK_RESULTS=()
@@ -1948,6 +2007,11 @@ dev-run-all-checks() {
   total_elapsed=$(_dev_elapsed "$total_start")
 
   _dev_blank
+  if (( interrupted_status )); then
+    _dev_error \
+      "Checks were interrupted (status $interrupted_status); later checks did not run."
+    return $interrupted_status
+  fi
   if (( failures == 0 )); then
     _dev_success "All ${#results[@]} check(s) passed in ${total_elapsed}s."
     return 0

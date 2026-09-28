@@ -408,7 +408,7 @@ _dev_menu_context() {
   [[ -f "package.json" ]] && detected+=("node")
   [[ -f "Cargo.toml" ]] && detected+=("rust")
   local -i terraform_probe_status=0
-  _dev_project_has_files '*.tf' || terraform_probe_status=$?
+  _dev_project_has_stack_files '*.tf' || terraform_probe_status=$?
   (( terraform_probe_status == 2 )) && return 1
   (( terraform_probe_status == 0 )) && detected+=("terraform")
   (( ${#detected[@]} > 0 )) || detected=("none detected")

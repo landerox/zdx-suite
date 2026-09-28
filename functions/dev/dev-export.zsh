@@ -388,6 +388,40 @@ dev-export-deps() {
         return 1
       fi
 
+      # The owner-only temporary becomes the published file. Give it the
+      # replaced file's permissions, or the caller's umask for a new file, so
+      # a requirements file stays readable by builds and other accounts.
+      local -i publish_mode=0
+      if [[ "$destination_identity" == "absent" ]]; then
+        publish_mode=$(( 8#666 & ~8#$(umask) ))
+      else
+        local destination_mode=""
+        destination_mode=$(zstat +mode -- "$resolved_output" 2>/dev/null) \
+          && [[ "$destination_mode" == <-> ]] || {
+          _dev_error "Could not read the export destination permissions."
+          return 1
+        }
+        publish_mode=$(( destination_mode & 8#777 ))
+      fi
+      command chmod "$(printf '%o' "$publish_mode")" -- "$temp_output" \
+        2>/dev/null || {
+        _dev_error "Could not set permissions on the dependency export."
+        return 1
+      }
+      # Only the mode and ctime may differ from the verified generated file.
+      local published_temp_fd_identity=""
+      published_temp_fd_identity=$(
+        _dev_export_fd_identity "$temp_descriptor"
+      ) || return 1
+      local -a generated_fields=("${(@s.:.)generated_temp_fd_identity}")
+      local -a published_fields=("${(@s.:.)published_temp_fd_identity}")
+      generated_fields[3]="" generated_fields[7]=""
+      published_fields[3]="" published_fields[7]=""
+      if [[ "${(j.:.)published_fields}" != "${(j.:.)generated_fields}" ]]; then
+        _dev_error "The generated export changed before publication."
+        return 1
+      fi
+
       if [[ "$destination_identity" == "absent" ]]; then
         command ln -- "$temp_output" "$resolved_output" 2>/dev/null || {
           _dev_error \

@@ -220,13 +220,15 @@ _dev_clean_repository_roots() {
   local -i marker_depth=$(( depth + 1 ))
   local markers=""
   markers=$(
-    command find "$root" -mindepth 1 -maxdepth "$marker_depth" \
+    _dev_find warn "$root" -mindepth 1 -maxdepth "$marker_depth" \
       \( -name '.git' -print0 -prune \) -o \
       \( -type d \( \
         -name '.venv' -o -name 'node_modules' \
         -o -name 'vendor' -o -name 'vendored' \
+        -o -name 'site-packages' -o -name 'dist-packages' \
+        -o -name '.tox' -o -name '.nox' \
         -o -name '*.git' \
-      \) -prune \) 2>/dev/null \
+      \) -prune \) \
       | _dev_clean_limit_nul_stream \
         "Nested repository marker inventory" "$limit"
     local -a pipeline_status=("${pipestatus[@]}")
@@ -278,11 +280,15 @@ _dev_clean_find() {
     repository_roots=("${reply[@]}")
   fi
 
+  # Installed-package trees (any virtualenv, not only .venv) and tox/nox
+  # environments hold package metadata such as *.egg-info; never scan them.
   local -a exclusions=(
     \( -type d \( \
       -name '.git' -o -name '*.git' \
       -o -name '.venv' -o -name 'node_modules' \
       -o -name 'vendor' -o -name 'vendored' \
+      -o -name 'site-packages' -o -name 'dist-packages' \
+      -o -name '.tox' -o -name '.nox' \
     \) -prune \) -o
   )
   local repository_root
@@ -290,13 +296,20 @@ _dev_clean_find() {
     _dev_clean_find_path_pattern "$repository_root"
     exclusions+=(\( -path "$REPLY" -prune \) -o)
   done
+  # --keep-build keeps the root build outputs whole, including their contents.
+  if (( _DEV_CLEAN_KEEP_BUILD )); then
+    local kept_directory
+    for kept_directory in build dist target; do
+      _dev_clean_find_path_pattern "$root/$kept_directory"
+      exclusions+=(\( -path "$REPLY" -prune \) -o)
+    done
+  fi
 
   _dev_validate_clean_limit || return 1
   local -i limit=$(( 10#$DEV_CLEAN_MAX_TARGETS ))
-  command find "$root" -mindepth 1 -maxdepth "$depth" \
+  _dev_find quiet "$root" -mindepth 1 -maxdepth "$depth" \
     "${exclusions[@]}" \
     -type "$node_type" \( "${name_expression[@]}" \) -print0 \
-    2>/dev/null \
     | _dev_clean_limit_nul_stream "Cleanup discovery" "$limit"
   local -a pipeline_status=("${pipestatus[@]}")
   if (( pipeline_status[1] != 0 || pipeline_status[2] != 0 )); then
@@ -379,7 +392,10 @@ _dev_clean_collect() {
       }
       ;;
     rust)
-      if (( ! _DEV_CLEAN_KEEP_BUILD )); then
+      # A root target/ is Cargo output only when Cargo.toml or Cargo's own
+      # CACHEDIR.TAG marker proves it; otherwise it may be project data.
+      if (( ! _DEV_CLEAN_KEEP_BUILD )) \
+        && [[ -f "$root/Cargo.toml" || -f "$root/target/CACHEDIR.TAG" ]]; then
         directories=$(_dev_clean_find "$root" d 1 'target') || {
           _dev_error "Cargo build-artifact discovery failed."
           return 1
@@ -399,7 +415,11 @@ _dev_clean_collect() {
     return 1
   fi
 
-  local candidate
+  local -a nested_repositories=()
+  (( ${+parameters[_dev_clean_pruned_repositories]} )) \
+    && nested_repositories=("${_dev_clean_pruned_repositories[@]}")
+  local candidate nested_repository
+  local -i contains_repository=0
   for candidate in "${collected[@]}"; do
     [[ -n "$candidate" ]] || continue
     # Scope is a literal prefix proof. Recanonicalizing here could resolve a
@@ -408,6 +428,21 @@ _dev_clean_collect() {
       _dev_warn "Skipping out-of-scope target: $candidate"
       continue
     }
+    # Removing a directory would also remove a nested repository inside it.
+    # Terraform's module cache legitimately contains Git clones.
+    contains_repository=0
+    if [[ "${candidate:t}" != .terraform ]]; then
+      for nested_repository in "${nested_repositories[@]}"; do
+        if [[ "$nested_repository" == "$candidate"/* ]]; then
+          contains_repository=1
+          break
+        fi
+      done
+    fi
+    if (( contains_repository )); then
+      _dev_warn "Skipping a target that contains a nested repository: $(_dev_display_escape "${candidate#$root/}")"
+      continue
+    fi
     reply+=("$candidate")
   done
 
@@ -538,12 +573,12 @@ _dev_clean_apply() {
   local -a current_identity=()
   local result_summary=""
 
-  while (( ${#records[@]} > 0 )); do
-    relative="${records[1]}"
-    expected_device="${records[2]}"
-    expected_inode="${records[3]}"
-    expected_type="${records[4]}"
-    records=("${records[@]:4}")
+  local -i record_index
+  for (( record_index = 1; record_index <= ${#records[@]}; record_index += 4 )); do
+    relative="${records[record_index]}"
+    expected_device="${records[record_index + 1]}"
+    expected_inode="${records[record_index + 2]}"
+    expected_type="${records[record_index + 3]}"
 
     if ! _dev_clean_relative_is_safe "$relative"; then
       _dev_warn \

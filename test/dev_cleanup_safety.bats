@@ -234,6 +234,7 @@ EOF
   printf '%s\n' "keep" > "$DEV_PROJECT/stale.pyc"
   printf '%s\n' "keep" > "$DEV_PROJECT/.DS_Store"
   mkdir -p "$DEV_PROJECT/target"
+  : > "$DEV_PROJECT/Cargo.toml"
 
   run run_zsh '
     cd "$DEV_PROJECT"
@@ -258,4 +259,77 @@ EOF
   [ "$status" -eq 0 ]
   [ ! -d "$DEV_PROJECT/.terraform" ]
   [ ! -f "$DEV_PROJECT/old.tfstate.backup" ]
+}
+
+@test "dev cleanup safety: an unreadable directory is skipped, not fatal" {
+  [ "$(id -u)" -ne 0 ] || skip "root can read every directory"
+  mkdir -p "$DEV_PROJECT/pgdata/base" "$DEV_PROJECT/pkg/__pycache__"
+  printf '%s\n' remove > "$DEV_PROJECT/pkg/__pycache__/m.pyc"
+  chmod 000 "$DEV_PROJECT/pgdata"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --yes'
+  chmod 700 "$DEV_PROJECT/pgdata"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipping unreadable directory:"*"pgdata"* ]]
+  [ ! -e "$DEV_PROJECT/pkg/__pycache__" ]
+  [ -d "$DEV_PROJECT/pgdata/base" ]
+}
+
+@test "dev cleanup safety: installed-package trees in any virtualenv are never planned" {
+  mkdir -p \
+    "$DEV_PROJECT/venv/lib/python3.12/site-packages/legacy-1.0.egg-info" \
+    "$DEV_PROJECT/.tox/py312/lib/python3.12/site-packages/other-2.0.egg-info" \
+    "$DEV_PROJECT/.nox/tests/lib/python3.12/site-packages/third-3.0.egg-info" \
+    "$DEV_PROJECT/src/project.egg-info"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --dry-run'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"src/project.egg-info"* ]]
+  [[ "$output" != *"site-packages"* ]]
+  [[ "$output" != *".tox"* && "$output" != *".nox"* ]]
+}
+
+@test "dev cleanup safety: --keep-build keeps build outputs and their contents" {
+  mkdir -p "$DEV_PROJECT/build/lib/pkg/__pycache__" "$DEV_PROJECT/dist" \
+    "$DEV_PROJECT/pkg/__pycache__"
+  : > "$DEV_PROJECT/dist/.DS_Store"
+  : > "$DEV_PROJECT/Cargo.toml"
+  mkdir -p "$DEV_PROJECT/target/debug"
+  : > "$DEV_PROJECT/target/debug/x.pyc"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --keep-build --dry-run'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dir   pkg/__pycache__"* ]]
+  [[ "$output" != *"build/lib"* && "$output" != *"dist/.DS_Store"* ]]
+  [[ "$output" != *"target/debug"* ]]
+}
+
+@test "dev cleanup safety: a planned directory containing a nested repository is skipped" {
+  mkdir -p "$DEV_PROJECT/build/checkout" "$DEV_PROJECT/pkg/__pycache__"
+  git -C "$DEV_PROJECT/build/checkout" init --quiet
+  printf '%s\n' keep > "$DEV_PROJECT/build/checkout/work.txt"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --yes'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"contains a nested repository: build"* ]]
+  [ -f "$DEV_PROJECT/build/checkout/work.txt" ]
+  [ ! -e "$DEV_PROJECT/pkg/__pycache__" ]
+}
+
+@test "dev cleanup safety: a root target/ is Cargo output only with Cargo evidence" {
+  mkdir -p "$DEV_PROJECT/target/data"
+  printf '%s\n' keep > "$DEV_PROJECT/target/data/important.csv"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --dry-run'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"dir   target"* ]]
+
+  : > "$DEV_PROJECT/Cargo.toml"
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --dry-run'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dir   target"* ]]
 }

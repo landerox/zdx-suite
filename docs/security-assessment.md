@@ -379,15 +379,20 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   type; root and target identities are revalidated after authorization and
   around each relative removal. Discovery is bounded and NUL-delimited, does
   not follow links, and prunes `.git`, `*.git`, `.venv`, `node_modules`,
-  `vendor`, `vendored`, and nested repositories discovered from `.git`
-  markers. Each discovery stream and marker inventory stops at one above the
+  `vendor`, `vendored`, installed-package trees of any virtual environment
+  (`site-packages`, `dist-packages`, `.tox`, `.nox`), and nested repositories
+  discovered from `.git` markers; a directory target containing a nested
+  repository is skipped, except `.terraform/`. An unreadable directory is
+  skipped with a warning because nothing below it can be discovered or
+  removed; other discovery errors still fail closed. Each discovery stream and marker inventory stops at one above the
   configured plan bound; each category is capped after its streams are
   combined, and associative first-seen deduplication caps the final plan at
   10,000 unique targets by default. An excess fails before display,
   authorization, or mutation. The filesystem root, home directory, symlinked
   or replaced roots, and changed targets are refused. Root `build/`, `dist/`,
-  and Cargo `target/` are the only build directories selected,
-  `.terraform.lock.hcl` is preserved, and `--keep-build` preserves all three.
+  and Cargo `target/` are the only build directories selected (`target/` only
+  with a root `Cargo.toml` or `target/CACHEDIR.TAG`), `.terraform.lock.hcl` is
+  preserved, and `--keep-build` preserves all three including their contents.
 - Developer dependency updates construct and fingerprint a private plan before
   authorization. Specifier edits bind to parsed dependency-array elements and
   verify the complete resulting TOML, preserving unrelated strings, comments,
@@ -1014,6 +1019,8 @@ in a compromised release channel and then installed, potentially as root.
   are confined to `.venv`, and a script fallback must name the exact project
   interpreter in its shebang. Every index-selected ephemeral step requires
   `DEV_ALLOW_EPHEMERAL=1` and the actual `uvx` or `npx` runner executable.
+  ESLint `--inspect-config` and `--mcp` are refused because ESLint itself
+  would launch `npx ...@latest` outside that opt-in.
 - Developer pytest, coverage, and pre-commit hook invocations use that exact
   project-environment boundary. A missing installed dependency fails visibly;
   global pytest, coverage, and pre-commit binaries cannot manufacture success.
