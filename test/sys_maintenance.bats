@@ -2828,7 +2828,8 @@ NO_COLOR=1 update-system'" \
   grep -Fxq -- "prompt:0" "$MAINT_MUTATION_LOG"
   grep -Fq -- "ssh:ssh -o BatchMode=yes -o ConnectTimeout=15" \
     "$MAINT_MUTATION_LOG"
-  grep -Fxq -- "askpass:unset:unset" "$MAINT_MUTATION_LOG"
+  # An empty GIT_ASKPASS also disables core.askPass; unset would not.
+  grep -Fxq -- "askpass::unset" "$MAINT_MUTATION_LOG"
   grep -Fxq -- \
     "cfg:2:http.lowSpeedLimit=1024:http.lowSpeedTime=60" \
     "$MAINT_MUTATION_LOG"
@@ -3789,7 +3790,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "omz-pull git -C $omz_repo pull --ff-only" ]
+    "omz-pull git -C $omz_repo pull --ff-only origin" ]
   [[ "$output" == *"tools/upgrade.sh will not be executed"* ]]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
@@ -3826,7 +3827,7 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"Refusing an unsafe fzf integration installer"* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "fzf-pull git -C $fzf_repo pull --ff-only" ]
+    "fzf-pull git -C $fzf_repo pull --ff-only origin" ]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
   [ ! -s "$MAINT_SIGNAL_LOG" ]
@@ -3854,7 +3855,7 @@ EOF
   [[ "$output" == *"1 repository failed safety validation"* ]]
   [[ "$output" == *"1 repository updated; 1 failed"* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "zsh-valid git -C $valid_repo pull --ff-only --quiet" ]
+    "zsh-valid git -C $valid_repo pull --ff-only --quiet origin" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_SIGNAL_LOG" ]
@@ -3896,7 +3897,7 @@ EOF
   [[ "$output" != *"Excluded unsafe repository: $zdx_link"* ]]
   [[ "$output" != *"failed safety validation"* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "zsh-valid git -C $valid_repo pull --ff-only --quiet" ]
+    "zsh-valid git -C $valid_repo pull --ff-only --quiet origin" ]
   assert_no_privilege_network_or_signal
 }
 
@@ -4747,4 +4748,187 @@ EOF
   [ "$(cat "$MAINT_MUTATION_LOG")" = "nested:1" ]
   [[ "$output" == *"already running in this shell"* ]]
   assert_no_privilege_network_or_signal
+}
+
+hide_cleanup_tools_except() {
+  printf '%s' "
+    command() {
+      if [[ \"\${1:-}\" == \"-v\" ]]; then
+        case \"\${2:-}\" in
+          $1) ;;
+          apt-get|brew|npm|uv|pip|cargo|rustup|go|snap) return 1 ;;
+        esac
+      fi
+      builtin command \"\$@\"
+    }
+  "
+}
+
+@test "sys maintenance: deep cleanup plans succeed when the Go cache is absent" {
+  mkdir -p "$HOME/.cache/tmp"
+  cat <<'EOF_GO' > "$TEST_MOCK_BIN/go"
+#!/usr/bin/env bash
+[[ "$*" == "env GOMODCACHE" ]] || exit 97
+printf '%s\n' "$HOME/go/pkg/mod"
+EOF_GO
+  chmod +x "$TEST_MOCK_BIN/go"
+
+  run run_maintenance_zsh "$(hide_cleanup_tools_except go)
+    clean-system-deep --dry-run
+  "
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Temporary files"* ]]
+  [[ "$output" != *"Go module cache"* ]]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a failed cache probe skips only that tool" {
+  mkdir -p "$HOME/.cache/tmp"
+  printf '%s\n' remove > "$HOME/.cache/tmp/user-cache"
+  cat <<'EOF_PIP' > "$TEST_MOCK_BIN/pip"
+#!/usr/bin/env bash
+if [[ "$*" == "cache dir" ]]; then
+  printf '%s\n' "ERROR: pip cache commands can not function since cache is disabled." >&2
+  exit 1
+fi
+printf 'pip %s\n' "$*" >> "$MAINT_MUTATION_LOG"
+exit 97
+EOF_PIP
+  chmod +x "$TEST_MOCK_BIN/pip"
+
+  run run_maintenance_zsh "$(hide_cleanup_tools_except pip)
+    clean-system-quick --yes
+  "
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipping pip cache"* ]]
+  [ ! -e "$HOME/.cache/tmp/user-cache" ]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: cargo cache removal failures fail the cleanup" {
+  [ "$(id -u)" -ne 0 ] || skip "root can remove read-only entries"
+  local cargo_cache="$HOME/.cargo/registry/cache"
+  mkdir -p "$cargo_cache/locked"
+  printf '%s\n' keep > "$cargo_cache/locked/crate"
+  chmod 500 "$cargo_cache/locked"
+  printf '#!/usr/bin/env bash\nexit 97\n' > "$TEST_MOCK_BIN/cargo"
+  chmod +x "$TEST_MOCK_BIN/cargo"
+
+  run run_maintenance_zsh "$(hide_cleanup_tools_except cargo)
+    clean-system-quick --yes
+  "
+  chmod 700 "$cargo_cache/locked"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cargo registry cache entries could not be removed"* ]]
+  [[ "$output" != *"completed successfully"* ]]
+  [ -f "$cargo_cache/locked/crate" ]
+}
+
+@test "sys maintenance: clean-snaps removes only disabled revisions and keeps stdout empty" {
+  cat <<'EOF_SNAP' > "$TEST_MOCK_BIN/snap"
+#!/usr/bin/env bash
+case "$1" in
+  list)
+    printf '%s\n' \
+      'Name          Version  Rev    Tracking       Publisher   Notes' \
+      'core          16       100    latest/stable  canonical   base,disabled' \
+      'core          16       101    latest/stable  canonical   base' \
+      'disabled-app  1        7      latest/stable  someone     -' \
+      'lxd           5        21029  5.0/stable     canonical   disabled'
+    ;;
+  remove)
+    printf 'snap %s\n' "$*" >> "$MAINT_MUTATION_LOG"
+    printf '%s (revision %s) removed\n' "$2" "${3#--revision=}"
+    ;;
+  *) exit 97 ;;
+esac
+EOF_SNAP
+  chmod +x "$TEST_MOCK_BIN/snap"
+  export MOCK_SUDO_ALLOW="__validate__,snap"
+
+  run run_maintenance_zsh '
+    _sys_snap_ready() { return 0; }
+    clean-snaps --yes >"$HOME/snaps.stdout" 2>"$HOME/snaps.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/snaps.stdout" ]
+  [ "$(cat "$MAINT_MUTATION_LOG")" = \
+    $'snap remove core --revision=100\nsnap remove lxd --revision=21029' ]
+  grep -q "core (revision 100) removed" "$HOME/snaps.stderr"
+}
+
+@test "sys maintenance: clean-journal reports systemd's suffix-only size" {
+  cat <<'EOF_JOURNAL' > "$TEST_MOCK_BIN/journalctl"
+#!/usr/bin/env bash
+[[ "$*" == "--disk-usage" ]] || exit 97
+printf '%s\n' 'Archived and active journals take up 377.0M in the file system.'
+EOF_JOURNAL
+  chmod +x "$TEST_MOCK_BIN/journalctl"
+
+  run run_maintenance_zsh 'clean-journal --dry-run' unavailable systemd
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Current journal size: 377.0M"* ]]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+}
+
+@test "sys maintenance: the active fzf executable decides Git versus APT ownership" {
+  local fzf_repo="$HOME/.fzf"
+  create_maintenance_git_repo "$fzf_repo" 'https://example.invalid/fzf.git'
+  mkdir -p "$fzf_repo/bin"
+  printf '#!/usr/bin/env bash\nprintf "0.99.0 (git)\\n"\n' > "$fzf_repo/bin/fzf"
+  chmod +x "$fzf_repo/bin/fzf"
+
+  run run_maintenance_zsh '
+    path=("$HOME/.fzf/bin" $path)
+    dpkg() { [[ "$1" == -s && "$2" == fzf ]]; }
+    _sys_run_logged() {
+      print -r -- "$*" >> "$MAINT_MUTATION_LOG"
+      return 0
+    }
+    _sys_step_applies update-fzf || return 21
+    update-fzf --yes
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Managed by APT"* ]]
+  [[ "$output" == *"fzf updated to 0.99.0"* ]]
+  [ "$(cat "$MAINT_MUTATION_LOG")" = \
+    "fzf-pull git -C $fzf_repo pull --ff-only origin" ]
+
+  : > "$MAINT_MUTATION_LOG"
+  run run_maintenance_zsh '
+    dpkg() { [[ "$1" == -s && "$2" == fzf ]]; }
+    _sys_run_logged() {
+      print -r -- "$*" >> "$MAINT_MUTATION_LOG"
+      return 0
+    }
+    _sys_step_applies update-fzf && return 22
+    update-fzf --yes
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Managed by APT"* ]]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: Git transport disables configured askpass helpers" {
+  run run_maintenance_zsh '
+    export GIT_ASKPASS=/usr/bin/false SSH_ASKPASS=/usr/bin/false
+    _sys_run_logged() {
+      print -r -- "git=${+GIT_ASKPASS}[${GIT_ASKPASS-}] ssh=${+SSH_ASKPASS} prompt=${GIT_TERMINAL_PROMPT-}" \
+        >> "$MAINT_MUTATION_LOG"
+    }
+    _sys_update_git_logged probe -C "$HOME" status
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MAINT_MUTATION_LOG")" = "git=1[] ssh=0 prompt=0" ]
 }

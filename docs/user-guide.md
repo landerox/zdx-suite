@@ -480,8 +480,11 @@ execute a destructive command inside `fzf`.
   memory, and command fields as TSV. `--terminate PID` sends `SIGTERM`;
   `--force` explicitly selects `SIGKILL`. Protected PIDs are rejected.
 - **Ports (`sys-ports`)**: `--list` emits protocol, port, address, PID, and
-  command records from `lsof` or `ss`. Use an explicit PID or port target; a
-  bare number is intentionally ambiguous and rejected.
+  command records from `ss` (preferred on Linux) or `lsof`. Use an explicit
+  PID or port target; a bare number is intentionally ambiguous and rejected.
+  A port target must still have exactly one visible owner after confirmation.
+  `lsof` without root cannot see sockets owned by other users, so only `ss`
+  can refuse a port that has such a hidden owner.
 - **Services (`sys-services`)**: `--list` emits systemd or launchd records.
   `--show ID` is read-only. Start, stop, restart, enable, and disable require an
   exact validated identifier and confirmation.
@@ -601,14 +604,16 @@ not execute. The aggregate forwards `--verbose` only to APT.
 
 ZDX-owned orchestration avoids hidden prompts and open-ended APT waits, while
 external package tools retain the transaction semantics described below.
-Git-owned steps never prompt for credentials: terminal and askpass prompts are
-disabled, SSH runs in batch mode with a connect deadline unless you export your
-own `GIT_SSH_COMMAND`, and Git aborts a transfer stalled below 1 KiB/s for 60
-seconds. The Homebrew metadata refresh has a 120-second deadline and sets
-`HOMEBREW_CURL_RETRIES=0` for curl-level retries. A Snap preview error or
-deadline is reported as a failed step rather than "no pending updates". Every
-aggregate step reports its elapsed time so a slow step is visible in the final
-summary.
+Git-owned steps never prompt for credentials: terminal prompts and every
+askpass helper, including a configured `core.askPass`, are disabled, SSH runs
+in batch mode with a connect deadline unless you export your own
+`GIT_SSH_COMMAND`, and Git aborts a transfer stalled below 1 KiB/s for 60
+seconds. They pull only from the displayed `origin`; a branch that tracks
+another remote fails instead of updating from it. The Homebrew metadata
+refresh has a 120-second deadline and sets `HOMEBREW_CURL_RETRIES=0` for
+curl-level retries. A Snap preview error or deadline is reported as a failed
+step rather than "no pending updates". Every aggregate step reports its
+elapsed time so a slow step is visible in the final summary.
 
 When the confirmed plan contains privileged package steps, ZDX reuses a valid
 non-interactive sudo timestamp or announces and runs one `sudo -v` right after

@@ -615,3 +615,28 @@ teardown() {
   grep -q "4242" "$HOME/enter.stderr"
   [ "$(cat "$HOME/route.log")" = $'terminate:4242:0:0\nterminate:4242:1:0' ]
 }
+
+@test "sys interface: an action key on an empty filter is a quiet cancellation" {
+  run run_zsh '
+    _sys_processes_records() {
+      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo'\''
+    }
+    _sys_processes_terminate() {
+      print -r -- "terminate:$*" >>"$HOME/route.log"
+    }
+    # Real fzf prints the pressed --expect key and exits 1 when no row matches.
+    fzf() {
+      command cat >/dev/null
+      print -r -- "ctrl-k"
+      return 1
+    }
+
+    sys-processes >"$HOME/empty.stdout" 2>"$HOME/empty.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/empty.stdout" ]
+  [ ! -e "$HOME/route.log" ]
+  ! grep -q "unexpected data" "$HOME/empty.stderr"
+  ! grep -q "status 125" "$HOME/empty.stderr"
+}

@@ -285,10 +285,14 @@ its parent are protected. A process owned by another UID uses only
 fingerprint, runs `sudo -v` to authenticate, revalidates again in case the
 prompt consumed time, and executes the final signal with `sudo -n`.
 
-A port mutation must resolve to exactly one visible PID. The protocol, address,
-port, and PID record is rescanned, and the process fingerprint is revalidated
-before the signal is sent. Hidden owners, multiple owners, and changed
-listeners fail closed.
+A port mutation must resolve to exactly one visible PID. After confirmation, a
+port target is resolved again under the same rule and must still name the
+same PID; the protocol, address, port, and PID record is rescanned, and the
+process fingerprint is revalidated before the signal is sent. Hidden owners,
+multiple owners, and changed listeners fail closed. Linux prefers `ss`, which
+lists sockets whose owning process is not visible to the current user. A
+non-root `lsof`, the only macOS backend and the Linux fallback, omits those
+sockets entirely, so it cannot detect a hidden owner.
 
 Systemd identifiers and launchd labels have separate validators. A service
 action captures its backend state, confirms the exact operation, and compares
@@ -689,10 +693,13 @@ timestamp scope. The authorized mutation always uses
 skip an upgrade without a TTY while returning success. A real Homebrew failure
 is reported for that step while later independent updates continue.
 
-The aggregate assigns each installation to one updater. Homebrew-owned AWS
-CLI, Starship, fzf, uv, Google Cloud SDK, Repomix, and supported AI assistant
-installations are covered by `update-brew` rather than repeated by a
-tool-specific step. The uv decision is bound to the active external
+The aggregate assigns each installation to one updater. For fzf, the active
+executable decides: when the `fzf` found in `PATH` lies inside a discovered
+Git checkout, that checkout is updated even if an inactive APT or Homebrew
+package is also installed; otherwise an installed package owns it.
+Homebrew-owned AWS CLI, Starship, fzf, uv, Google Cloud SDK, Repomix, and
+supported AI assistant installations are covered by `update-brew` rather than
+repeated by a tool-specific step. The uv decision is bound to the active external
 executable: System resolves it canonically and attributes it to Homebrew only
 when that path is the uv formula below the resolved Homebrew prefix. A
 separately installed Homebrew formula therefore does not hide an earlier
@@ -715,9 +722,13 @@ sudo refresher window.
 Git-owned fzf, Oh My Zsh, and custom plugin updates require owned,
 symlink-free checkouts below `HOME`. Their plans show the origin and current
 commit, repository identity and origin are revalidated after authorization,
-and mutation uses `git pull --ff-only`. The fzf integration installer must be
-an owned, singly linked executable whose content matches the checked-out Git
-blob. Oh My Zsh does not execute the mutable `tools/upgrade.sh` helper.
+and mutation uses `git pull --ff-only origin`. Naming the displayed remote
+makes Git refuse a branch whose upstream is another remote or a bare URL,
+instead of fetching from a source the plan never showed. The transport exports
+an empty `GIT_ASKPASS`, which also disables a configured `core.askPass`. The
+fzf integration installer must be an owned, singly linked executable whose
+content matches the checked-out Git blob. Oh My Zsh does not execute the
+mutable `tools/upgrade.sh` helper.
 
 There is one non-mutating discovery exception for the installation layout
 created when the ZDX installer runs from a local checkout. An exact
@@ -828,13 +839,17 @@ never prunes Docker resources. Docker lifecycle remains owned by the Docker
 suite. Execution accepts only the unique typed records in the confirmed plan,
 passes each recorded scope to its owning helper, and revalidates dynamic cache
 paths before mutation. Each failed step is reported and makes the aggregate
-return non-zero.
+return non-zero; that includes a cache entry that `rm` could not remove. A
+cache whose directory probe fails or times out, such as `pip cache dir` with
+the cache disabled or a tool that is only a lazy shell function, is omitted
+from the plan with a warning; nothing is removed for it.
 
 Disabled Snap revisions are treated as dynamic privileged targets. The helper
 authenticates once with `sudo -v`, re-queries each recorded snap and revision,
 confirms it is still disabled, and runs only the final `snap remove` through
-`sudo -n`. A changed or missing revision fails closed and is reported as a
-partial failure.
+`sudo -n`. A revision is disabled only when the `Notes` column says so. A
+changed or missing revision fails closed and is reported as a partial failure.
+Snap's own progress output goes to stderr.
 
 ### Dotfile backup and restore
 
@@ -846,10 +861,18 @@ destination and must run with `HOME` set to the canonical directory. A
 sidecar digest without a trailing newline is still read.
 `SYS_DOTFILES_BACKUP_DIR` overrides the default `~/.dotfiles-backups`
 location; it must be an absolute path below `HOME`, trailing slashes are
-ignored, and a relative value is refused before any filesystem check.
+ignored, and a relative value is refused before any filesystem check. The
+path is resolved, including `.` and `..`, before any directory is created or
+its mode restricted, so a value naming `HOME` itself never changes it.
 
 `sys-backup-dots [--dry-run] [--yes]` accepts only existing, non-link paths
-below `HOME`; a directory containing symbolic links is skipped. It creates an
+below `HOME`; a directory containing symbolic links is skipped. So is a root
+whose relative path, or any name below it, is outside printable ASCII or
+contains a backslash: the manifest is tar's C-locale listing, which escapes
+those bytes, so such a backup could not be restored. Retention never removes
+the archive the same invocation created, even when an older backup has a
+later modification time. A failed publication removes only the sidecars it
+published itself. It creates an
 owner-only archive, an exact tar manifest, and a SHA-256 sidecar below the
 owner-only backup directory. Creation enforces configured limits on source
 entries, logical bytes, compressed bytes, manifest bytes, and path length
@@ -857,7 +880,9 @@ before publishing the backup triple. Retention pruning targets only validated
 backup triples and is separately confirmed unless `--yes` is present.
 
 `sys-restore-dots [--archive FILE] [--dry-run] [--yes]` accepts only an
-owner-owned archive below that backup directory. Before extraction it enforces
+owner-owned archive below that backup directory; an `--archive` path with a
+`..` component is refused because canonicalization would remove it before
+resolving links. Before extraction it enforces
 size and entry limits, verifies the sidecar digest and exact manifest, rejects
 absolute paths, traversal, links, and special files, and checks that no
 destination component is an existing symbolic link. Archive identity and
@@ -869,13 +894,21 @@ listings; it rejects control or delimiter characters, symbolic links, special
 files, foreign ownership, multiply linked regular files, and any extracted
 path missing from the verified manifest. Implicit parent directories are
 derived from that manifest, so the actual extracted set must match exactly.
+An entry may not be, or lie inside, the backup directory. A directory entry
+that is an ancestor of it, such as `.config` for `~/.config/dotfiles-backups`,
+is allowed because restore only ensures that directories exist. The staging
+and font download directories are canonicalized after validation, so a
+`TMPDIR` with a trailing slash or a symbolic-link component no longer fails
+their path comparisons, and a staging tree with read-only directories is made
+removable before cleanup.
 ZDX validates every destination before creating a mandatory pre-restore
 archive. Because that safety backup can take time, it revalidates the staging
 and destination trees again afterwards. Each regular file is copied to a
 same-directory temporary, revalidated, and published with an atomic rename.
 A destination link detected before publication is rejected; one introduced
 after the final check is replaced as a directory entry rather than followed or
-truncated.
+truncated. That rename uses `mv -T` with GNU or uutils coreutils and `mv -h`
+on macOS and FreeBSD; another `mv` falls back to the plain rename.
 
 Backups can contain authentication configuration or credentials. The workflow
 warns about that sensitivity and uses restrictive permissions, but users

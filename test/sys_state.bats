@@ -1088,3 +1088,187 @@ EOF
   [ ! -s "$HOME/restore.stdout" ]
   grep -q "Dry run complete" "$HOME/restore.stderr"
 }
+
+@test "sys state dots: backup skips names tar cannot list literally and stays restorable" {
+  mkdir -p "$HOME/.config/nvim/spell" "$HOME/.config/plain"
+  printf 'spell\n' > "$HOME/.config/nvim/spell/español.add"
+  printf 'plain\n' > "$HOME/.config/plain/ok.conf"
+  printf 'shell\n' > "$HOME/.zshrc"
+
+  run run_sys_state_zsh '
+    typeset -ga SYS_DOTFILES=(
+      "$HOME/.zshrc" "$HOME/.config/nvim" "$HOME/.config/plain"
+    )
+    SYS_DOTFILES_BACKUP_DIR="$HOME/backups"
+    sys-backup-dots --yes >/dev/null 2>"$HOME/backup.stderr" || exit 11
+    archives=("$HOME"/backups/dotfiles_*.tar.gz(N))
+    sys-restore-dots --archive "${archives[1]}" --dry-run \
+      >/dev/null 2>"$HOME/restore.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  grep -q "unsafe filename: ~/.config/nvim" "$HOME/backup.stderr"
+  local archives=("$HOME"/backups/dotfiles_*.tar.gz)
+  ! grep -q "nvim" "${archives[0]}.manifest"
+  grep -qx ".config/plain/ok.conf" "${archives[0]}.manifest"
+}
+
+@test "sys state dots: a backup directory below a backed-up parent stays restorable" {
+  mkdir -p "$HOME/.config"
+  printf 'prompt\n' > "$HOME/.config/starship.toml"
+  printf 'shell\n' > "$HOME/.zshrc"
+
+  run run_sys_state_zsh '
+    typeset -ga SYS_DOTFILES=("$HOME/.zshrc" "$HOME/.config/starship.toml")
+    SYS_DOTFILES_BACKUP_DIR="$HOME/.config/dotfiles-backups"
+    sys-backup-dots --yes >/dev/null 2>&1 || exit 11
+    archives=("$HOME"/.config/dotfiles-backups/dotfiles_*.tar.gz(N))
+    print -r -- changed > "$HOME/.config/starship.toml"
+    sys-restore-dots --archive "${archives[1]}" --yes \
+      >/dev/null 2>"$HOME/restore.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.config/starship.toml")" = "prompt" ]
+  [ -d "$HOME/.config/dotfiles-backups" ]
+}
+
+@test "sys state dots: a backup directory resolving to HOME never changes its mode" {
+  chmod 755 "$HOME"
+  printf 'shell\n' > "$HOME/.zshrc"
+
+  run run_sys_state_zsh '
+    typeset -ga SYS_DOTFILES=("$HOME/.zshrc")
+    SYS_DOTFILES_BACKUP_DIR="$HOME/."
+    sys-backup-dots --yes
+  '
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"must remain below the user home directory"* ]]
+  [ "$(stat -c '%a' "$HOME")" = "755" ]
+}
+
+@test "sys state dots: restore refuses archive paths with parent components" {
+  local source_dir="$TEST_TEMP_DIR/dotdot-source"
+  mkdir -p "$source_dir" "$HOME/backups" "$HOME/outside/sub"
+  chmod 700 "$HOME/backups"
+  printf 'restored\n' > "$source_dir/.zshrc"
+  make_dot_archive "$source_dir" \
+    "$HOME/outside/dotfiles_20260101_050505.tar.gz" .zshrc
+  ln -s "$HOME/outside/sub" "$HOME/backups/lnk"
+
+  run run_sys_state_zsh '
+    SYS_DOTFILES_BACKUP_DIR="$HOME/backups"
+    sys-restore-dots \
+      --archive "$HOME/backups/lnk/../dotfiles_20260101_050505.tar.gz" \
+      --dry-run
+  '
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"'..' components"* ]]
+  [[ "$output" != *"Verified archive"* ]]
+}
+
+@test "sys state dots: retention keeps the new backup despite a later old mtime" {
+  local source_dir="$TEST_TEMP_DIR/retention-source"
+  local old_archive="$HOME/backups/dotfiles_20200101_000000.tar.gz"
+  mkdir -p "$source_dir" "$HOME/backups"
+  chmod 700 "$HOME/backups"
+  printf 'old\n' > "$source_dir/.zshrc"
+  make_dot_archive "$source_dir" "$old_archive" .zshrc
+  touch -d '2099-01-01 00:00:00' "$old_archive"
+  printf 'new\n' > "$HOME/.zshrc"
+
+  run run_sys_state_zsh '
+    typeset -ga SYS_DOTFILES=("$HOME/.zshrc")
+    SYS_DOTFILES_BACKUP_DIR="$HOME/backups"
+    SYS_DOTFILES_BACKUP_KEEP=1
+    sys-backup-dots --yes
+  '
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$old_archive" ]
+  local archives=("$HOME"/backups/dotfiles_*.tar.gz)
+  [ "${#archives[@]}" -eq 1 ]
+  [ "$(tar -xOzf "${archives[0]}" .zshrc)" = "new" ]
+}
+
+@test "sys state dots: a failed backup precondition keeps foreign sidecars" {
+  local archive="$HOME/backups/dotfiles_20260101_060606.tar.gz"
+  mkdir -p "$HOME/backups"
+  chmod 700 "$HOME/backups"
+  printf 'foreign manifest\n' > "${archive}.manifest"
+  printf 'foreign digest\n' > "${archive}.sha256"
+  printf 'shell\n' > "$HOME/.zshrc"
+
+  run run_sys_state_zsh "_sys_dotfiles_create_archive '$archive' .zshrc"
+
+  [ "$status" -ne 0 ]
+  [ ! -e "$archive" ]
+  [ "$(cat "${archive}.manifest")" = "foreign manifest" ]
+  [ "$(cat "${archive}.sha256")" = "foreign digest" ]
+}
+
+@test "sys state dots: NO_CLOBBER, a trailing-slash TMPDIR, and read-only trees clean up" {
+  mkdir -p "$HOME/tmp" "$HOME/.config/ro"
+  printf 'locked\n' > "$HOME/.config/ro/file"
+  chmod 500 "$HOME/.config/ro"
+
+  run run_sys_state_zsh '
+    setopt NO_CLOBBER
+    export TMPDIR="$HOME/tmp/"
+    typeset -ga SYS_DOTFILES=("$HOME/.config/ro")
+    SYS_DOTFILES_BACKUP_DIR="$HOME/backups"
+    sys-backup-dots --yes >/dev/null 2>"$HOME/backup.stderr" || exit 11
+    archives=("$HOME"/backups/dotfiles_*.tar.gz(N))
+    sys-restore-dots --archive "${archives[1]}" --dry-run \
+      >/dev/null 2>"$HOME/restore.stderr"
+  '
+  chmod 700 "$HOME/.config/ro"
+
+  [ "$status" -eq 0 ]
+  ! grep -q "file exists" "$HOME/backup.stderr" "$HOME/restore.stderr"
+  grep -q "Dry run complete" "$HOME/restore.stderr"
+  [ -z "$(find "$HOME/tmp" -mindepth 1 -print -quit)" ]
+}
+
+@test "sys state fonts: list emits one sorted TSV record per font file" {
+  local fonts_dir="$HOME/.local/share/fonts"
+  mkdir -p "$fonts_dir/Hack" "$fonts_dir/FiraCode"
+  : > "$fonts_dir/Hack/Hack-Regular.ttf"
+  : > "$fonts_dir/FiraCode/FiraCode-Regular.otf"
+  : > "$fonts_dir/FiraCode/FiraCode-Bold.ttf"
+
+  run run_sys_state_zsh '
+    setopt NO_CLOBBER
+    _sys_capability_value() {
+      [[ "$1" == "fonts_backend" ]] && print -r -- fontconfig
+    }
+    sys-fonts --list 2>"$HOME/fonts.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = $'FiraCode\t'"$fonts_dir/FiraCode/FiraCode-Bold.ttf" ]
+  [ "${lines[1]}" = $'FiraCode\t'"$fonts_dir/FiraCode/FiraCode-Regular.otf" ]
+  [ "${lines[2]}" = $'Hack\t'"$fonts_dir/Hack/Hack-Regular.ttf" ]
+}
+
+@test "sys state telemetry: writer records durations under a decimal-comma locale" {
+  local locale_dir="$TEST_TEMP_DIR/locales"
+  command -v localedef >/dev/null 2>&1 || skip "localedef is unavailable"
+  mkdir -p "$locale_dir"
+  localedef -i de_DE -f UTF-8 "$locale_dir/de_DE.UTF-8" >/dev/null 2>&1 \
+    || skip "a decimal-comma locale cannot be built"
+
+  run run_core_state_zsh "
+    export LOCPATH='$locale_dir' LC_ALL=de_DE.UTF-8 ZDX_TELEMETRY=1
+    printf -v probe '%.1f' 1.5
+    [[ \"\$probe\" == '1,5' ]] || exit 42
+    _timed 'sys:sys-info' true
+  "
+
+  [ "$status" -ne 42 ] || skip "the built locale does not use a decimal comma"
+  [ "$status" -eq 0 ]
+  grep -q '"command": "sys-info"' "$HOME/.config/zdx/telemetry.json"
+}

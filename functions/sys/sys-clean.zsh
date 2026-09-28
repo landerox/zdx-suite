@@ -91,7 +91,9 @@ _sys_disabled_snap_revisions() {
   output=$(LC_ALL=C _sys_run_with_timeout 20 snap list --all 2>/dev/null)
   local rc=$?
   (( rc != 0 )) && return "$rc"
-  print -r -- "$output" | command awk '/disabled/{print $1, $3}'
+  # Only the Notes column marks a revision as disabled.
+  print -r -- "$output" \
+    | command awk '$NF ~ /(^|,)disabled(,|$)/ {print $1, $3}'
 }
 
 _sys_validate_disabled_snap_revisions() {
@@ -134,7 +136,7 @@ _sys_remove_disabled_snap_revisions() {
   (( ${#privilege_prefix[@]} > 0 )) \
     && privilege_label="${(j: :)privilege_prefix} "
   local -a snap_records=("${(@f)disabled_snaps}")
-  local record name rev current_disabled
+  local record name rev current_disabled current_record
   local -i failures=0
   for record in "${snap_records[@]}"; do
     read -r name rev <<< "$record"
@@ -159,7 +161,6 @@ _sys_remove_disabled_snap_revisions() {
     local -a current_records=()
     [[ -n "$current_disabled" ]] \
       && current_records=("${(@f)current_disabled}")
-    local current_record
     local -i still_disabled=0
     for current_record in "${current_records[@]}"; do
       if [[ "$current_record" == "$record" ]]; then
@@ -178,7 +179,7 @@ _sys_remove_disabled_snap_revisions() {
     _sys_dim \
       "Privileged operation: ${privilege_label}snap remove $name --revision=$rev"
     "${privilege_prefix[@]}" \
-      snap remove "$name" --revision="$rev" 2>/dev/null || {
+      snap remove "$name" --revision="$rev" >&2 2>/dev/null || {
         _sys_error "Failed to remove $name revision $rev."
         (( failures++ ))
       }
@@ -327,7 +328,10 @@ _sys_clean_step_rust_downloads() {
   local rustup_downloads="${1:-}"
   if [[ -d "$rustup_downloads" ]]; then
     _sys_clean_validate_user_path "$rustup_downloads" || return 1
-    command rm -rf -- "$REPLY"/*(ND)
+    command rm -rf -- "$REPLY"/*(ND) || {
+      _sys_error "Some rustup download cache entries could not be removed."
+      return 1
+    }
     _sys_dim "Cleared rustup download cache"
   else
     _sys_info "No rustup download cache found."
@@ -348,7 +352,10 @@ _sys_clean_step_cargo_cache() {
     local cache_size
     cache_size=$(command du -sh -- "$cargo_cache" 2>/dev/null \
       | command awk '{print $1}')
-    command rm -rf -- "$cargo_cache"/*(ND)
+    command rm -rf -- "$cargo_cache"/*(ND) || {
+      _sys_error "Some cargo registry cache entries could not be removed."
+      return 1
+    }
     _sys_dim "Freed ${cache_size:-some} from cargo registry cache"
   else
     _sys_info "No cargo registry cache found."
@@ -419,17 +426,29 @@ _sys_clean_plan() {
   _sys_has_capability "package:apt" \
     && print -r -- "APT cache|apt-get clean"
   local cache_dir
+  # A failed cache probe omits only that tool's step, for example when the
+  # tool is a lazy shell function that the timeout helper cannot execute.
+  # Nothing is removed for a cache whose directory cannot be resolved.
   if command -v npm &>/dev/null; then
-    cache_dir=$(_sys_clean_npm_cache_dir) || return 1
-    [[ -d "$cache_dir" ]] && print -r -- "npm cache|$cache_dir"
+    if cache_dir=$(_sys_clean_npm_cache_dir); then
+      [[ -d "$cache_dir" ]] && print -r -- "npm cache|$cache_dir"
+    else
+      _sys_warn "Skipping npm cache: its directory could not be resolved."
+    fi
   fi
   if command -v uv &>/dev/null; then
-    cache_dir=$(_sys_clean_uv_cache_dir) || return 1
-    [[ -d "$cache_dir" ]] && print -r -- "uv cache|$cache_dir"
+    if cache_dir=$(_sys_clean_uv_cache_dir); then
+      [[ -d "$cache_dir" ]] && print -r -- "uv cache|$cache_dir"
+    else
+      _sys_warn "Skipping uv cache: its directory could not be resolved."
+    fi
   fi
   if command -v pip &>/dev/null; then
-    cache_dir=$(_sys_clean_pip_cache_dir) || return 1
-    [[ -d "$cache_dir" ]] && print -r -- "pip cache|$cache_dir"
+    if cache_dir=$(_sys_clean_pip_cache_dir); then
+      [[ -d "$cache_dir" ]] && print -r -- "pip cache|$cache_dir"
+    else
+      _sys_warn "Skipping pip cache: its directory could not be resolved."
+    fi
   fi
   if command -v cargo &>/dev/null \
     && [[ -d "${CARGO_HOME:-$HOME/.cargo}/registry/cache" ]]; then
@@ -458,10 +477,14 @@ _sys_clean_plan() {
       print -r -- "Rust downloads|$REPLY"
     fi
     if command -v go &>/dev/null; then
-      cache_dir=$(_sys_clean_go_cache_dir) || return 1
-      [[ -d "$cache_dir" ]] && print -r -- "Go module cache|$cache_dir"
+      if cache_dir=$(_sys_clean_go_cache_dir); then
+        [[ -d "$cache_dir" ]] && print -r -- "Go module cache|$cache_dir"
+      else
+        _sys_warn "Skipping Go module cache: its directory could not be resolved."
+      fi
     fi
   fi
+  return 0
 }
 
 _sys_clean_run() {
@@ -695,7 +718,8 @@ clean-journal() {
 
   local before_size
   before_size=$(_sys_run_with_timeout 5 journalctl --disk-usage 2>/dev/null \
-    | command grep -oE '[0-9.]+[KMGT]?i?B' | command head -1)
+    | command grep -oE '[0-9]+([.][0-9]+)?([KMGTPE](i?B)?|B)' \
+    | command head -1)
   _sys_info "Current journal size: ${before_size:-unknown}"
   _sys_info "Target: journal entries older than 3 days."
   (( dry_run )) && {
@@ -730,7 +754,8 @@ clean-journal() {
 
   local after_size
   after_size=$(_sys_run_with_timeout 5 journalctl --disk-usage 2>/dev/null \
-    | command grep -oE '[0-9.]+[KMGT]?i?B' | command head -1)
+    | command grep -oE '[0-9]+([.][0-9]+)?([KMGTPE](i?B)?|B)' \
+    | command head -1)
   _sys_success "Journal cleaned. Now: ${after_size:-unknown}"
 }
 

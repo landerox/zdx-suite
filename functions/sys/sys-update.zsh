@@ -1899,7 +1899,10 @@ _sys_update_git_logged() {
     # A remote Git transaction must fail visibly instead of stalling the
     # aggregate on a credential prompt, an askpass dialog, or a dead peer.
     export GIT_TERMINAL_PROMPT=0
-    unset GIT_ASKPASS SSH_ASKPASS
+    # An empty GIT_ASKPASS disables askpass; unsetting it would let Git fall
+    # back to core.askPass and then SSH_ASKPASS.
+    export GIT_ASKPASS=''
+    unset SSH_ASKPASS
     [[ -n "${GIT_SSH_COMMAND:-}" ]] || export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
     # Git aborts its own transfer below 1 KiB/s for 60s. This bounds a
     # stalled download without wrapping the mutating command in an external
@@ -2226,6 +2229,17 @@ _sys_update_fzf_git_dir() {
   return 1
 }
 
+# Returns 0 when the active fzf executable lives in the discovered Git
+# checkout. An installed but shadowed package must not hide that checkout.
+_sys_update_fzf_active_in_git_dir() {
+  local fzf_dir="${1:-}"
+  local active_fzf=""
+  [[ -n "$fzf_dir" ]] || return 1
+  active_fzf=$(builtin whence -p fzf 2>/dev/null) || return 1
+  [[ "$active_fzf" == /* && "$active_fzf" != *[[:cntrl:]]* ]] || return 1
+  [[ "${active_fzf:A}" == "${fzf_dir:A}"/* ]]
+}
+
 update-starship() {
   local REPLY
   _sys_update_parse_no_args update-starship "$@" || return $?
@@ -2281,25 +2295,30 @@ update-fzf() {
     return 0
   fi
 
-  # Managed by Homebrew
-  if command -v brew &>/dev/null \
-    && _sys_brew list fzf &>/dev/null 2>&1; then
-    _sys_warn "Managed by Homebrew — use update-brew instead."
-    return 0
-  fi
-
-  # Managed by APT
-  if command -v dpkg &>/dev/null && dpkg -s fzf &>/dev/null; then
-    _sys_warn "Managed by APT — use update-apt instead."
-    return 0
-  fi
-
   local fzf_dir=""
-  _sys_update_fzf_git_dir
-  local discovery_rc=$?
+  local -i discovery_rc=0 active_git_owned=0
+  _sys_update_fzf_git_dir || discovery_rc=$?
   if (( discovery_rc == 0 )); then
     fzf_dir="$REPLY"
-  elif (( discovery_rc == 2 )); then
+    _sys_update_fzf_active_in_git_dir "$fzf_dir" && active_git_owned=1
+  fi
+
+  if (( ! active_git_owned )); then
+    # Managed by Homebrew
+    if command -v brew &>/dev/null \
+      && _sys_brew list fzf &>/dev/null 2>&1; then
+      _sys_warn "Managed by Homebrew — use update-brew instead."
+      return 0
+    fi
+
+    # Managed by APT
+    if command -v dpkg &>/dev/null && dpkg -s fzf &>/dev/null; then
+      _sys_warn "Managed by APT — use update-apt instead."
+      return 0
+    fi
+  fi
+
+  if (( discovery_rc == 2 )); then
     _sys_error "Refusing an unsafe Git-owned fzf checkout."
     return 1
   fi
@@ -2341,7 +2360,7 @@ update-fzf() {
       "$HOME" "$fzf_dir" "$expected_fingerprint" || return 1
 
     if _sys_update_git_logged \
-      fzf-pull -C "$fzf_dir" pull --ff-only; then
+      fzf-pull -C "$fzf_dir" pull --ff-only origin; then
       _sys_update_git_revalidate_stable \
         "$HOME" "$fzf_dir" "$fzf_dir" "$origin" \
         "$expected_repo_device" "$expected_repo_inode" \
@@ -2442,7 +2461,7 @@ update-omz() {
     "$HOME" "$omz_dir" "$expected_fingerprint" || return 1
 
   if _sys_update_git_logged \
-    omz-pull -C "$omz_dir" pull --ff-only; then
+    omz-pull -C "$omz_dir" pull --ff-only origin; then
     _sys_update_git_revalidate_stable \
       "$HOME" "$omz_dir" "$omz_dir" "$origin" \
       "$expected_repo_device" "$expected_repo_inode" \
@@ -2619,7 +2638,7 @@ update-zsh-plugins() {
       continue
     fi
     if ! _sys_update_git_logged "zsh-${repository:t}" \
-      -C "$repository" pull --ff-only --quiet; then
+      -C "$repository" pull --ff-only --quiet origin; then
       (( failed++ ))
       _sys_warn "${repository:t} was left unchanged or requires manual review."
       continue
@@ -3065,7 +3084,9 @@ _sys_update_ai_tools() {
   else
     _sys_error "The AI updater returned an invalid result report."
     failure_details=("result report is invalid")
-    ai_rc=1
+    # An interrupted owner cannot publish its report; keep the interruption
+    # status so the aggregate stops instead of treating it as a failure.
+    (( ai_rc == 130 || ai_rc == 143 )) || ai_rc=1
   fi
   if (( ai_rc == 0 && ${#failure_details[@]} > 0 )); then
     _sys_error "The AI updater result report contradicts its success status."
@@ -3138,12 +3159,13 @@ _sys_step_applies() {
         && command cargo install --list 2>/dev/null \
           | command grep -q '^starship ' ;;
     update-fzf)
-      command -v fzf &>/dev/null \
-        && ! { command -v brew &>/dev/null \
+      local REPLY
+      command -v fzf &>/dev/null && _sys_update_fzf_git_dir || return 1
+      _sys_update_fzf_active_in_git_dir "$REPLY" && return 0
+      ! { command -v brew &>/dev/null \
           && _sys_brew list fzf &>/dev/null 2>&1; } \
         && ! { command -v dpkg &>/dev/null \
-          && dpkg -s fzf &>/dev/null; } \
-        && _sys_update_fzf_git_dir ;;
+          && dpkg -s fzf &>/dev/null; } ;;
     update-omz)
       command -v git &>/dev/null \
         && [[ -n "${ZSH:-}" \

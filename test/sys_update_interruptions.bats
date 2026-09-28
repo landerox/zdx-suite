@@ -55,3 +55,24 @@ run_interrupted_system_update() {
   [[ "$output" == *"Optional tool steps: 0/4 succeeded; 1 failed; 3 not run"* ]]
   [[ "$output" != *"Aborting after first failure (--fail-fast)"* ]]
 }
+
+@test "sys update interruptions: an interrupted AI owner without a report still stops the aggregate" {
+  run run_zsh '
+    source "$ZSH_CUSTOM/functions/sys-menu.zsh"
+    _sys_update_step_requires_privilege() { return 1; }
+    _sys_update_ai_load_owner() { return 0; }
+    # The owner is terminated before it can publish its versioned records.
+    ai-menu() { print -r -- ai >>"$HOME/update.calls"; return 143; }
+    update-repomix() { print -r -- repomix >>"$HOME/update.calls"; }
+    update-omz() { print -r -- omz >>"$HOME/update.calls"; }
+    _sys_update_run 0 1 0 0 \
+      "AI assistants;_sys_update_ai_tools" \
+      "Repomix CLI;update-repomix" "Oh My Zsh;update-omz"
+  '
+
+  [ "$status" -eq 143 ]
+  [ "$(cat "$HOME/update.calls")" = "ai" ]
+  [[ "$output" == *"invalid result report"* ]]
+  [[ "$output" == *"System update interrupted (status 143): AI assistants"* ]]
+  [[ "$output" != *"completed with partial failures"* ]]
+}

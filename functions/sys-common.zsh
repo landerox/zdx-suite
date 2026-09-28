@@ -214,7 +214,7 @@ _sys_run_with_timeout() {
       else
         command sleep "$seconds"
       fi
-      print -r -- "expired" > "$timeout_marker" 2>/dev/null || exit 1
+      print -r -- "expired" >| "$timeout_marker" 2>/dev/null || exit 1
       _sys_timeout_signal_tree "$command_pid" TERM
       if zmodload zsh/zselect 2>/dev/null; then
         zselect -t 100 2>/dev/null || true
@@ -262,7 +262,7 @@ _sys_run_bounded_probe() {
   local probe_rc=0
   {
     _sys_run_with_timeout "$seconds" "$@" \
-      | command head -c "$(( max_bytes + 1 ))" > "$capture_file"
+      | command head -c "$(( max_bytes + 1 ))" >| "$capture_file"
     local -a probe_status=("${pipestatus[@]}")
     (( probe_status[2] == 0 )) || return "${probe_status[2]}"
 
@@ -359,10 +359,13 @@ _sys_require_sha256_tool() {
 _sys_sha256_file() {
   local artifact="$1"
   local digest=""
+  # Hash stdin: GNU sha256sum prefixes the digest with "\" when the file name
+  # contains a backslash or newline, which would fail the format check below.
+  [[ -f "$artifact" && -r "$artifact" ]] || return 1
   if command -v sha256sum &>/dev/null; then
-    digest=$(command sha256sum "$artifact" 2>/dev/null)
+    digest=$(command sha256sum < "$artifact" 2>/dev/null)
   elif command -v shasum &>/dev/null; then
-    digest=$(command shasum -a 256 "$artifact" 2>/dev/null)
+    digest=$(command shasum -a 256 < "$artifact" 2>/dev/null)
   else
     _sys_error "A SHA-256 tool (sha256sum or shasum) is required."
     return 1
@@ -496,7 +499,9 @@ _sys_run_logged() {
     # this command runs with its output captured privately.
     _sys_dim \
       "Running $(_sys_display_escape "$label"); output is captured and shown only on failure."
-    "$@" </dev/null 2>&1 \
+    # The private umask protects only the capture; the command keeps the
+    # caller's umask so tool-owned files receive their usual modes.
+    { umask "$previous_umask"; "$@" } </dev/null 2>&1 \
       | command tail -c "$max_capture_bytes" >"$capture_log"
     local -a pipeline_status=("${pipestatus[@]}")
     command_rc="${pipeline_status[1]:-1}"
@@ -885,7 +890,12 @@ _sys_fzf_capture() {
           selection=$(<&$(( read_fd )))
           exec {read_fd}>&-
           read_fd=-1
-          if (( fzf_rc != 0 )) && [[ -n "$selection" ]]; then
+          if (( fzf_rc == 1 )); then
+            # No match: fzf still prints an --expect key line, which carries
+            # no selection. Treat it as the cancellation it represents.
+            selection=""
+            operation_rc=$fzf_rc
+          elif (( fzf_rc != 0 )) && [[ -n "$selection" ]]; then
             _sys_error "A failed System picker returned unexpected data."
             selection=""
           else

@@ -51,11 +51,13 @@ _sys_linux_process_backend() {
   fi
 }
 
+# Prefer ss: it lists sockets whose owner is not visible to this user, which
+# lets port targets fail closed. A non-root lsof omits those sockets.
 _sys_linux_ports_backend() {
-  if command -v lsof &>/dev/null; then
-    print -r -- "lsof"
-  elif command -v ss &>/dev/null; then
+  if command -v ss &>/dev/null; then
     print -r -- "ss"
+  elif command -v lsof &>/dev/null; then
+    print -r -- "lsof"
   else
     print -r -- "unavailable"
   fi
@@ -213,12 +215,14 @@ _sys_linux_diag_package_records() {
       local -a formula_lines=() cask_lines=()
       formula_output=$(
         _sys_run_bounded_probe 5 1048576 \
-          _sys_brew list --formula 2>/dev/null
+          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          brew list --formula 2>/dev/null
       ) \
         || return 1
       cask_output=$(
         _sys_run_bounded_probe 5 1048576 \
-          _sys_brew list --cask 2>/dev/null
+          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          brew list --cask 2>/dev/null
       ) \
         || cask_output=""
       [[ -n "$formula_output" ]] && formula_lines=("${(@f)formula_output}")
@@ -295,7 +299,7 @@ _sys_linux_diag_journal_size() {
     journalctl --disk-usage 2>/dev/null | command awk '
     {
       for (i = 1; i <= NF; i++) {
-        if ($i ~ /^[0-9.]+[KMGT]?i?B\.?$/) {
+        if ($i ~ /^[0-9]+([.][0-9]+)?([KMGTPE](i?B)?|B)\.?$/) {
           gsub(/\.$/, "", $i)
           print $i
           exit
