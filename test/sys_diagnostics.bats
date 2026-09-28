@@ -577,3 +577,45 @@ EOF
   run run_zsh 'sys-telemetry --unknown'
   [ "$status" -eq 2 ]
 }
+
+@test "sys diagnostics: Homebrew package counts work through GNU timeout" {
+  command -v timeout >/dev/null 2>&1 || skip "GNU timeout is unavailable"
+  cat <<'MOCK' > "$TEST_MOCK_BIN/brew"
+#!/usr/bin/env bash
+[[ "${HOMEBREW_NO_ANALYTICS:-}" == 1 && "${HOMEBREW_CURL_RETRIES:-}" == 0 ]] \
+  || exit 97
+case "$*" in
+  "list --formula") printf '%s\n' git jq zsh ;;
+  "list --cask") printf '%s\n' iterm2 ;;
+  *) exit 98 ;;
+esac
+MOCK
+  chmod +x "$TEST_MOCK_BIN/brew"
+
+  run run_zsh '
+    _sys_linux_diag_package_records brew || exit 11
+    _sys_macos_diag_package_records brew
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'Brew formulae\t3'* ]]
+  [[ "$output" == *$'Brew casks\t1'* ]]
+}
+
+@test "sys diagnostics: startup hints count single-line and multi-line plugin arrays" {
+  printf '%s\n' '# plugins=(a b c d e f g h i j k l m n o p)' 'plugins=(git)' \
+    '' 'foo() {' '}' > "$HOME/.zshrc"
+
+  run run_zsh '_sys_diag_render_startup_hints'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 Oh My Zsh plugins detected"* ]]
+  [[ "$output" != *"consider reducing"* ]]
+
+  printf '%s\n' 'plugins=(' '  git # vcs' '  docker' '  fzf' ')' ')' \
+    > "$HOME/.zshrc"
+  run run_zsh '_sys_diag_render_startup_hints'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 Oh My Zsh plugins detected"* ]]
+}

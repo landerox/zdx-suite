@@ -530,3 +530,79 @@ run_resources_zsh() {
     grep -q -- 'Esc cancel' "$FZF_LOG"
   done
 }
+
+@test "sys-ports: a second owner appearing after confirmation fails closed" {
+  cat <<'MOCK' > "$TEST_MOCK_BIN/lsof"
+#!/usr/bin/env bash
+set -u
+[[ " $* " == *" -iTCP "* ]] || exit 1
+count=0
+[[ -f "$LSOF_COUNT_FILE" ]] && count=$(<"$LSOF_COUNT_FILE")
+count=$((count + 1))
+printf '%s\n' "$count" > "$LSOF_COUNT_FILE"
+printf 'p4242\ncnode\nPTCP\nn127.0.0.1:3000\n'
+(( count > 1 )) && printf 'p4343\ncworker\nPTCP\nn[::1]:3000\n'
+exit 0
+MOCK
+  chmod +x "$TEST_MOCK_BIN/lsof"
+
+  run run_resources_zsh "sys-ports --kill-port 3000 --protocol tcp --yes"
+
+  [ "$status" -eq 1 ]
+  [ ! -s "$RESOURCE_LOG" ]
+  [[ "$output" == *"multiple PIDs"* ]]
+  [[ "$output" == *"no signal was sent"* ]]
+}
+
+@test "sys-ports: a hidden ss owner appearing after confirmation fails closed" {
+  cat <<'MOCK' > "$TEST_MOCK_BIN/ss"
+#!/usr/bin/env bash
+count=0
+[[ -f "$LSOF_COUNT_FILE" ]] && count=$(<"$LSOF_COUNT_FILE")
+count=$((count + 1))
+printf '%s\n' "$count" > "$LSOF_COUNT_FILE"
+printf '%s\n' \
+  'tcp LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=4242,fd=3))'
+(( count > 1 )) && printf '%s\n' 'tcp LISTEN 0 511 [::]:3000 [::]:*'
+exit 0
+MOCK
+  chmod +x "$TEST_MOCK_BIN/ss"
+
+  run run_resources_zsh \
+    "sys-ports --kill-port 3000 --protocol tcp --yes" ss
+
+  [ "$status" -eq 1 ]
+  [ ! -s "$RESOURCE_LOG" ]
+  [[ "$output" == *"PID is not visible"* ]]
+}
+
+@test "sys-services: systemd identifiers accept systemd escape sequences" {
+  run run_resources_zsh '
+    _sys_services_validate_id systemd \
+      "systemd-fsck@dev-disk-by\\x2duuid-1234.service" || exit 11
+    _sys_services_validate_id systemd "getty@tty1.service" || exit 12
+    local rejected=""
+    for rejected in "bad id.service" "-x.service" "a/b.service" \
+      "evil;rm.service" "demo.socket"; do
+      _sys_services_validate_id systemd "$rejected" && exit 13
+    done
+    exit 0
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "sys resources: Linux prefers ss so hidden port owners stay visible" {
+  run run_zsh '_sys_linux_ports_backend'
+  [ "$status" -eq 0 ]
+  [ "$output" = "ss" ]
+
+  run run_zsh '
+    command() {
+      [[ "$1" == -v && "$2" == ss ]] && return 1
+      builtin command "$@"
+    }
+    _sys_linux_ports_backend
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "lsof" ]
+}

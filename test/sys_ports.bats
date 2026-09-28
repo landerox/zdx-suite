@@ -102,15 +102,26 @@ teardown() {
   cleanup_sandbox
 }
 
+# These regressions exercise the lsof -F contract. Linux now prefers ss when
+# it exists, so pin lsof explicitly instead of inheriting the host's ss.
+run_ports_zsh() {
+  run_zsh "
+    source \"\$ZSH_CUSTOM/functions/sys-menu.zsh\" || exit 98
+    _sys_linux_ports_backend() { print -r -- lsof; }
+    _sys_wsl_ports_backend() { print -r -- lsof; }
+    $1
+  "
+}
+
 @test "sys-ports: --help works" {
-  run run_zsh "sys-ports --help"
+  run run_ports_zsh "sys-ports --help"
   [ "$status" -eq 0 ]
   [[ "$output" == *"sys-ports --list"* ]]
   [[ "$output" == *"sys-ports --kill"* ]]
 }
 
 @test "sys-ports: --list emits canonical listening-port TSV" {
-  run run_zsh "sys-ports --list"
+  run run_ports_zsh "sys-ports --list"
   [ "$status" -eq 0 ]
   [[ "$output" == *$'port\tudp\t53\t127.0.0.1\t12347\tdnsmasq'* ]]
   [[ "$output" == *$'port\ttcp\t3000\t127.0.0.1\t12345\tnode'* ]]
@@ -120,25 +131,25 @@ teardown() {
 
 @test "sys-ports: --list handles empty ports list gracefully" {
   export MOCK_LSOF_EMPTY=1
-  run run_zsh "sys-ports --list"
+  run run_ports_zsh "sys-ports --list"
   [ "$status" -eq 0 ]
   [[ "$output" == *"No active listening ports were found."* ]]
 }
 
 @test "sys-ports: --kill with invalid target fails" {
-  run run_zsh "sys-ports --kill abc"
+  run run_ports_zsh "sys-ports --kill abc"
   [ "$status" -eq 2 ]
   [[ "$output" == *"use pid:PID or port:PORT"* ]]
 }
 
 @test "sys-ports: --kill-port with non-existent listener fails safely" {
-  run run_zsh "sys-ports --kill-port 9999 --yes"
+  run run_ports_zsh "sys-ports --kill-port 9999 --yes"
   [ "$status" -eq 1 ]
   [[ "$output" == *"No visible process is listening on port 9999"* ]]
 }
 
 @test "sys-ports: --kill-port sends one SIGTERM with explicit consent" {
-  run run_zsh "sys-ports --kill-port 3000 --protocol tcp --yes"
+  run run_ports_zsh "sys-ports --kill-port 3000 --protocol tcp --yes"
   [ "$status" -eq 0 ]
   [[ "$output" == *"send SIGTERM to PID 12345"* ]]
   [[ "$output" == *"SIGTERM sent to PID 12345"* ]]
@@ -148,7 +159,7 @@ teardown() {
 }
 
 @test "sys-ports: --kill-pid --force sends SIGKILL without automatic escalation" {
-  run run_zsh "sys-ports --kill-pid 12345 --force --yes"
+  run run_ports_zsh "sys-ports --kill-pid 12345 --force --yes"
   [ "$status" -eq 0 ]
   [[ "$output" == *"send SIGKILL to PID 12345"* ]]
   [[ "$output" == *"SIGKILL sent to PID 12345"* ]]

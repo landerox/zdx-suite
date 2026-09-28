@@ -316,10 +316,14 @@ _sys_ports_resolve_port() {
   print -r -- "$matched_record"
 }
 
+# A port target (optional fourth and fifth arguments) is resolved again after
+# confirmation so its exactly-one-visible-owner rule holds at signal time.
 _sys_ports_terminate_record() {
   local listener_record="${1:-}"
   local force_signal="${2:-0}"
   local assume_yes="${3:-0}"
+  local port_target="${4:-}"
+  local port_protocol="${5:-}"
   _sys_ports_validate_record "$listener_record" || {
     _sys_error "Invalid listener record."
     return 2
@@ -363,6 +367,21 @@ _sys_ports_terminate_record() {
     fi
   fi
 
+  if [[ -n "$port_target" ]]; then
+    local current_record=""
+    local -a current_fields=()
+    current_record=$(
+      _sys_ports_resolve_port "$port_target" "$port_protocol"
+    ) || {
+      _sys_error "Port $port_number no longer resolves to one visible owner; no signal was sent."
+      return 1
+    }
+    current_fields=("${(@ps:\t:)current_record}")
+    [[ "${current_fields[5]:-}" == "$process_pid" ]] || {
+      _sys_error "The ${protocol}:${port_number} listener changed owner; no signal was sent."
+      return 1
+    }
+  fi
   _sys_ports_record_is_current "$listener_record" || {
     _sys_error "The selected ${protocol}:${port_number} listener changed; no signal was sent."
     return 1
@@ -506,7 +525,8 @@ _sys_ports_parse_mutation() {
         _sys_ports_resolve_port "$target_value" "$requested_protocol"
       ) || return $?
       _sys_ports_terminate_record \
-        "$listener_record" "$force_signal" "$assume_yes"
+        "$listener_record" "$force_signal" "$assume_yes" \
+        "$target_value" "$requested_protocol"
       ;;
     *)
       return 2

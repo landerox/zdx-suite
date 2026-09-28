@@ -568,13 +568,13 @@ _log_telemetry() {
       final_newline_count="${final_newline_count//[[:space:]]/}"
       if [[ "$final_newline_count" == "1" ]]; then
         command tail -n $(( max_records - 1 )) "$log_file" \
-          > "$telemetry_tmp" 2>/dev/null || return 1
+          >| "$telemetry_tmp" 2>/dev/null || return 1
       else
         # A crash may leave one partial JSON line. Never join a new record to
         # that fragment; retain only preceding complete records.
         command sed '$d' "$log_file" 2>/dev/null \
           | command tail -n $(( max_records - 1 )) \
-            > "$telemetry_tmp" 2>/dev/null || return 1
+            >| "$telemetry_tmp" 2>/dev/null || return 1
       fi
     fi
     printf '{"suite": "%s", "command": "%s", "duration_ms": %d, "exit_code": %d, "timestamp": "%s"}\n' \
@@ -589,7 +589,7 @@ _log_telemetry() {
       telemetry_trim=$(mktemp "$log_dir/.telemetry-trim.XXXXXX") || return 1
       command chmod 600 "$telemetry_trim" 2>/dev/null || return 1
       command tail -c "$(( max_bytes + 1 ))" "$telemetry_tmp" 2>/dev/null \
-        | command sed '1d' > "$telemetry_trim" || return 1
+        | command sed '1d' >| "$telemetry_trim" || return 1
       [[ -s "$telemetry_trim" ]] || return 1
       pending_bytes=$(command wc -c < "$telemetry_trim" 2>/dev/null) \
         || return 1
@@ -664,7 +664,8 @@ _timed() {
   # Log to telemetry if user has opted in
   if [[ "${ZDX_TELEMETRY:-}" == "1" || "${ZDX_TELEMETRY:-}" == "true" ]]; then
     local telemetry_elapsed
-    printf -v telemetry_elapsed '%.9f' "$elapsed"
+    # The record grammar requires a dot; LC_NUMERIC could produce a comma.
+    LC_ALL=C printf -v telemetry_elapsed '%.9f' "$elapsed"
     _log_telemetry "$label" "$telemetry_elapsed" "$exit_code"
   fi
 

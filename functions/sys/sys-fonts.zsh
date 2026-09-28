@@ -159,7 +159,7 @@ _sys_fonts_records() {
     command find "$fonts_dir" -type f \
       \( -name '*.ttf' -o -name '*.otf' \) -print0 2>/dev/null \
       | command head -c "$(( SYS_NERD_FONTS_MAX_INVENTORY_BYTES + 1 ))" \
-        > "$inventory_file"
+        >| "$inventory_file"
     local inventory_rc=$?
     local inventory_bytes
     inventory_bytes=$(command wc -c < "$inventory_file" 2>/dev/null) \
@@ -196,7 +196,7 @@ _sys_fonts_records() {
     done < "$inventory_file"
 
     local font_record
-    font_records=("${(o)font_records}")
+    font_records=("${(@o)font_records}")
     for font_record in "${font_records[@]}"; do
       print -r -- "$font_record"
     done
@@ -248,7 +248,7 @@ _sys_fonts_validate_archive() {
           print
         }
         END { if (entries == 0) exit 43 }
-      ' > "$listing_file" || {
+      ' >| "$listing_file" || {
         _sys_error "The font archive listing is invalid or exceeds its limits."
         return 1
       }
@@ -323,7 +323,7 @@ _sys_fonts_inspect_extraction() {
 
   local inspect_rc=0
   {
-    command find "$extraction_dir" -mindepth 1 -print0 > "$inventory_file" \
+    command find "$extraction_dir" -mindepth 1 -print0 >| "$inventory_file" \
       2>/dev/null || {
         _sys_error "Unable to inspect the extracted font tree."
         return 1
@@ -508,6 +508,9 @@ _sys_fonts_install() {
         && command rm -rf "$download_dir" 2>/dev/null
       return 1
     }
+  # Inspectors compare find output with canonical paths, so a TMPDIR with a
+  # trailing slash or a symbolic-link component must not reach them unchanged.
+  download_dir="${download_dir:A}"
   local download_archive="$download_dir/$asset"
   local checksum_file="$download_dir/SHA-256.txt"
   local extraction_dir="$download_dir/extracted"
@@ -554,7 +557,8 @@ _sys_fonts_install() {
       {
         name = $2
         sub(/^\*/, "", name)
-        if (name == asset && $1 ~ /^[[:xdigit:]]{64}$/) {
+        # Older mawk releases lack interval expressions such as {64}.
+        if (name == asset && length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/) {
           print tolower($1)
           exit
         }

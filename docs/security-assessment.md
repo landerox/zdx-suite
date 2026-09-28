@@ -1711,8 +1711,12 @@ memory or CPU during inspection.
   package (APT, native, Snap, and Homebrew) and optional-tool summaries.
   Failures and entries not run after `--fail-fast` are explicit, rather than
   being hidden by an aggregate success count.
-- System Git-owned update transport disables terminal and askpass credential
-  prompts, applies batch-mode SSH with connect and keepalive deadlines unless
+- System Git-owned update transport disables terminal credential prompts and
+  exports an empty `GIT_ASKPASS`, which also suppresses a configured
+  `core.askPass` and `SSH_ASKPASS`. It pulls with an explicit `origin`, so a
+  branch whose upstream is another remote or a bare URL cannot fetch code from
+  a source the plan never displayed. It applies batch-mode SSH with connect and
+  keepalive deadlines unless
   the caller supplies `GIT_SSH_COMMAND`, and instructs Git to abort a transfer
   below 1 KiB/s for 60 seconds, so a credential request or remote stall fails
   that step visibly instead of blocking the aggregate. The Homebrew metadata

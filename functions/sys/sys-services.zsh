@@ -76,7 +76,9 @@ _sys_services_validate_id() {
 
   case "$service_backend" in
     systemd)
-      [[ "$service_id" =~ '^[A-Za-z0-9_.@:+-]+[.]service$' ]]
+      # systemd escapes unit-name bytes as \xNN, for example in the
+      # instance of systemd-fsck@dev-disk-by\x2duuid-....service.
+      [[ "$service_id" =~ '^[\A-Za-z0-9_.@:+-]+[.]service$' ]]
       ;;
     launchd)
       [[ "$service_id" =~ '^[A-Za-z0-9][A-Za-z0-9_.:@+-]*$' ]]

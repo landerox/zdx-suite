@@ -13,6 +13,31 @@ behavior, verification, and remaining limitations.
   them in ANSI black and the match counter in white. The shared theme now pins
   `border:-1:dim,info:yellow`, the values that fzf 0.66 and newer already use,
   so newer releases render unchanged.
+- System suite review:
+  - Shared helpers work under `setopt NO_CLOBBER`, keep the caller's umask for
+    captured commands, hash paths that contain a backslash, and treat an
+    action key on an empty filter as a cancellation.
+  - Cleanup plans succeed when the Go module cache is absent, skip a tool whose
+    cache directory cannot be resolved, report cache entries that cannot be
+    removed, keep `clean-snaps` stdout empty, read disabled Snap revisions only
+    from the `Notes` column, and show systemd journal sizes.
+  - Port targets are resolved again after confirmation and must still have one
+    visible owner; Linux prefers `ss` so sockets with hidden owners are listed.
+    Escaped systemd unit names are accepted.
+  - Git-owned updates pull only from the displayed `origin` and disable a
+    configured `core.askPass`; an interrupted AI step stops the aggregate even
+    without a result report; `update-fzf` follows the active executable when a
+    Git checkout and an APT or Homebrew package coexist.
+  - Dotfile backups skip names that tar cannot list literally, no longer become
+    unrestorable when the backup directory sits below a backed-up parent, never
+    change the mode of `HOME`, always retain the new archive, and keep sidecars
+    they did not publish. Restore refuses `..` archive paths, accepts a
+    trailing-slash `TMPDIR`, cleans read-only staging trees, and is linear in
+    the number of files. `sys-fonts --list` emits one sorted record per font
+    file.
+  - `sys-info` shows Homebrew package counts, `sys-startup` counts single-line
+    plugin arrays correctly, and telemetry is recorded under decimal-comma
+    locales.
 
 ## [0.1.0] — 2026-09-06
 

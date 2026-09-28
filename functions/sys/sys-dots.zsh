@@ -80,6 +80,12 @@ _sys_dotfiles_backup_dir() {
     _sys_error "Dotfile backups must remain below the user home directory."
     return 1
   }
+  # Resolve "." and ".." before mkdir or chmod: "$HOME/." must never change
+  # the mode of HOME itself before the final check rejects it.
+  [[ "${backup_dir:A}" == "$home_abs"/* ]] || {
+    _sys_error "Dotfile backups must remain below the user home directory."
+    return 1
+  }
 
   if [[ -e "$backup_dir" ]]; then
     [[ -d "$backup_dir" && ! -L "$backup_dir" && -O "$backup_dir" ]] || {
@@ -123,6 +129,13 @@ _sys_dotfiles_backup_dir() {
     return 1
   }
   REPLY="$backup_abs"
+}
+
+# The manifest is tar's C-locale listing, which escapes bytes outside
+# printable ASCII and backslashes. Restore compares it with the literal names
+# it extracts, so only names that the listing reproduces exactly are archived.
+_sys_dotfiles_name_listable() {
+  [[ "$1" != *[^\ -~]* && "$1" != *\\* ]]
 }
 
 # Sets reply to safe, existing paths and reply_rel to paths relative to HOME.
@@ -172,7 +185,8 @@ _sys_dotfiles_collect() {
       if [[ -z "$unsafe_path" ]]; then
         while IFS= read -r -d $'\0' nested_path; do
           if [[ "$nested_path" == *[[:cntrl:]]* \
-            || "$nested_path" == *'|'* ]]; then
+            || "$nested_path" == *'|'* ]] \
+            || ! _sys_dotfiles_name_listable "${nested_path#$home_abs/}"; then
             unsafe_path="$nested_path"
             break
           fi
@@ -188,7 +202,8 @@ _sys_dotfiles_collect() {
     fi
 
     relative_path="${absolute_path#$home_abs/}"
-    [[ -n "$relative_path" && "$relative_path" != -* ]] || {
+    [[ -n "$relative_path" && "$relative_path" != -* ]] \
+      && _sys_dotfiles_name_listable "$relative_path" || {
       _sys_warn "Skipping unsupported archive path: $(_sys_display_escape "$relative_path")"
       continue
     }
@@ -360,6 +375,7 @@ _sys_dotfiles_create_archive() {
   local temporary_manifest="${temporary_archive}.manifest"
   local temporary_checksum="${temporary_archive}.sha256"
   local create_rc=0 digest=""
+  local -i published_manifest=0 published_checksum=0
   local previous_umask
   previous_umask=$(umask)
 
@@ -369,7 +385,7 @@ _sys_dotfiles_create_archive() {
       && ! -e "${archive}.sha256" ]] || return 1
     command tar -czf - -C "$HOME" -- "${relative_paths[@]}" 2>/dev/null \
       | command head -c "$(( SYS_DOTFILES_BACKUP_MAX_BYTES + 1 ))" \
-        > "$temporary_archive"
+        >| "$temporary_archive"
     local archive_pipeline_rc=$?
     local archive_bytes
     archive_bytes=$(command wc -c < "$temporary_archive" 2>/dev/null) \
@@ -427,9 +443,11 @@ _sys_dotfiles_create_archive() {
     command mv "$temporary_manifest" "${archive}.manifest" 2>/dev/null \
       || return 1
     temporary_manifest=""
+    published_manifest=1
     command mv "$temporary_checksum" "${archive}.sha256" 2>/dev/null \
       || return 1
     temporary_checksum=""
+    published_checksum=1
     command mv "$temporary_archive" "$archive" 2>/dev/null || return 1
     temporary_archive=""
   } always {
@@ -440,8 +458,13 @@ _sys_dotfiles_create_archive() {
       && command rm -f "$temporary_manifest" 2>/dev/null
     [[ -n "$temporary_checksum" && -f "$temporary_checksum" ]] \
       && command rm -f "$temporary_checksum" 2>/dev/null
+    # Remove only sidecars this invocation published; pre-existing ones that
+    # made the precondition fail belong to someone else.
     if (( create_rc != 0 )) && [[ ! -e "$archive" ]]; then
-      command rm -f "${archive}.manifest" "${archive}.sha256" 2>/dev/null
+      (( published_manifest )) \
+        && command rm -f "${archive}.manifest" 2>/dev/null
+      (( published_checksum )) \
+        && command rm -f "${archive}.sha256" 2>/dev/null
     fi
     umask "$previous_umask"
   }
@@ -449,9 +472,12 @@ _sys_dotfiles_create_archive() {
   return $create_rc
 }
 
+# The optional third argument names the archive just created; it is always
+# retained, even when another backup has a later modification time.
 _sys_dotfiles_prune() {
   local backup_dir="$1"
   local assume_yes="$2"
+  local keep_archive="${3:-}"
   [[ "$SYS_DOTFILES_BACKUP_KEEP" =~ '^[0-9]+$' ]] \
     && (( SYS_DOTFILES_BACKUP_KEEP > 0 )) || {
       _sys_error "SYS_DOTFILES_BACKUP_KEEP must be a positive integer."
@@ -463,13 +489,19 @@ _sys_dotfiles_prune() {
   )
   local -a archives=()
   local candidate
+  local -i keep_slots=$SYS_DOTFILES_BACKUP_KEEP
   for candidate in "${candidates[@]}"; do
     [[ "${candidate:t}" =~ '^dotfiles_[0-9]{8}_[0-9]{6}(_pre-restore)?\.tar\.gz$' ]] \
-      && archives+=("$candidate")
+      || continue
+    if [[ -n "$keep_archive" && "${candidate:A}" == "${keep_archive:A}" ]]; then
+      (( keep_slots-- ))
+      continue
+    fi
+    archives+=("$candidate")
   done
-  local -i remove_count=$(( ${#archives[@]} - SYS_DOTFILES_BACKUP_KEEP ))
+  local -i remove_count=$(( ${#archives[@]} - keep_slots ))
   (( remove_count > 0 )) || return 0
-  local -a remove_archives=("${archives[@]:$SYS_DOTFILES_BACKUP_KEEP}")
+  local -a remove_archives=("${archives[@]:$keep_slots}")
 
   _sys_warn "Retention plan: remove $remove_count old backup(s)."
   local old_archive
@@ -570,7 +602,7 @@ sys-backup-dots() {
   archive_size=$(command du -h "$archive" 2>/dev/null)
   archive_size="${archive_size%%[[:space:]]*}"
   _sys_success "Backup created: $archive (${archive_size:-unknown})"
-  _sys_dotfiles_prune "$backup_dir" "$assume_yes" || return 1
+  _sys_dotfiles_prune "$backup_dir" "$assume_yes" "$archive" || return 1
 }
 
 _sys_dotfiles_archive_identity() {
@@ -601,6 +633,12 @@ _sys_dotfiles_validate_archive() {
   local manifest_file="${archive}.manifest"
   local checksum_file="${archive}.sha256"
 
+  # ":A" removes ".." before resolving links, so "link/../file" could pass the
+  # check below while the kernel opens a file outside the backup directory.
+  [[ "/$archive/" != */../* ]] || {
+    _sys_error "Archive paths may not contain '..' components."
+    return 1
+  }
   [[ "${archive:h:A}" == "$backup_abs" \
     && "${archive:t}" =~ '^dotfiles_[0-9]{8}_[0-9]{6}(_pre-restore)?\.tar\.gz$' \
     && "$archive_abs" == "$backup_abs"/* ]] \
@@ -696,7 +734,7 @@ _sys_dotfiles_validate_archive() {
           if (bytes > max_bytes) exit 42
           print
         }
-      ' > "$current_manifest" || {
+      ' >| "$current_manifest" || {
         _sys_error "Archive listing failed or exceeds its configured limit."
         return 1
       }
@@ -870,7 +908,7 @@ _sys_dotfiles_inspect_staging() {
 
   local inspect_rc=0
   {
-    command find "$staging_dir" -mindepth 1 -print0 > "$inventory_file" \
+    command find "$staging_dir" -mindepth 1 -print0 >| "$inventory_file" \
       2>/dev/null || {
         _sys_error "Unable to inspect the extracted restore tree."
         return 1
@@ -922,9 +960,12 @@ _sys_dotfiles_inspect_staging() {
       done
 
       destination_abs="$home_abs/$relative_entry"
+      # An ancestor directory of the backup directory is only ensured to
+      # exist, never replaced; any other entry there would displace it.
       if [[ "$destination_abs" == "$backup_abs" \
-        || "$destination_abs" == "$backup_abs"/* \
-        || "$backup_abs" == "$destination_abs"/* ]]; then
+        || "$destination_abs" == "$backup_abs"/* ]] \
+        || [[ "$backup_abs" == "$destination_abs"/* \
+          && ( -L "$staged_entry" || ! -d "$staged_entry" ) ]]; then
         _sys_error "Restore entries may not overlap the backup directory."
         return 1
       fi
@@ -991,6 +1032,23 @@ _sys_dotfiles_prepare_home_directory() {
   done
 }
 
+# Sets REPLY to the mv flag that renames onto a symbolic link itself instead
+# of moving into the directory it names, or to empty when none is known.
+_sys_dotfiles_mv_no_follow_flag() {
+  REPLY=""
+  case "$OSTYPE" in
+    darwin*|freebsd*) REPLY="-h" ;;
+    *)
+      local mv_version=""
+      mv_version=$(_sys_run_bounded_probe 3 65536 mv --version 2>/dev/null) \
+        || return 0
+      [[ "$mv_version" == *"GNU coreutils"* || "$mv_version" == *uutils* ]] \
+        && REPLY="-T"
+      ;;
+  esac
+  return 0
+}
+
 _sys_dotfiles_publish_staging() {
   local staging_dir="$1"
   local backup_dir="$2"
@@ -1006,6 +1064,9 @@ _sys_dotfiles_publish_staging() {
   local publish_rc=0
   local -A source_before=() source_after=() temporary_state=()
   local -A published_state=()
+  local REPLY
+  _sys_dotfiles_mv_no_follow_flag
+  local -a publish_mv=(command mv -f ${REPLY:+"$REPLY"})
 
   {
     for relative_entry in "${staged_dirs[@]}"; do
@@ -1055,7 +1116,9 @@ _sys_dotfiles_publish_staging() {
       _sys_dotfiles_validate_destination "$relative_entry" file || return 1
       [[ "${parent_dir:A}" == "${HOME:A}" \
         || "${parent_dir:A}" == "${HOME:A}"/* ]] || return 1
-      command mv -f "$temporary_file" "$destination_file" 2>/dev/null \
+      # Rename onto the destination entry; a link introduced after the final
+      # check is replaced rather than followed where mv supports it.
+      "${publish_mv[@]}" "$temporary_file" "$destination_file" 2>/dev/null \
         || return 1
       temporary_file=""
       [[ -f "$destination_file" && ! -L "$destination_file" \
@@ -1134,29 +1197,31 @@ _sys_dotfiles_select_archive() {
 # Sets reply_rel to the smallest existing destination roots covered by a
 # restore manifest. These roots form the mandatory pre-restore safety archive.
 _sys_dotfiles_current_restore_roots() {
-  local -a entries=("$@")
+  # C-locale ordering places every ancestor before its descendants, so one
+  # pass with a prefix lookup replaces the quadratic pairwise comparison.
+  local LC_ALL=C
+  local -a entries=("${(@o)@}")
   local -a roots=()
-  local entry normalized existing
+  local -A root_set=()
+  local entry normalized prefix
   local -i covered
 
   for entry in "${entries[@]}"; do
     normalized="${entry%/}"
-    [[ -e "$HOME/$normalized" ]] || continue
+    [[ -n "$normalized" && -e "$HOME/$normalized" ]] || continue
     covered=0
-    for existing in "${roots[@]}"; do
-      if [[ "$normalized" == "$existing" \
-        || "$normalized" == "$existing"/* ]]; then
+    prefix="$normalized"
+    while :; do
+      if (( ${+root_set[$prefix]} )); then
         covered=1
         break
       fi
+      [[ "$prefix" == */* ]] || break
+      prefix="${prefix%/*}"
     done
     (( covered )) && continue
-
-    local -a retained=()
-    for existing in "${roots[@]}"; do
-      [[ "$existing" == "$normalized"/* ]] || retained+=("$existing")
-    done
-    roots=("${retained[@]}" "$normalized")
+    root_set[$normalized]=1
+    roots+=("$normalized")
   done
   reply_rel=("${roots[@]}")
 }
@@ -1229,6 +1294,9 @@ sys-restore-dots() {
         && command rm -rf "$staging_dir" 2>/dev/null
       return 1
     }
+  # Inspectors compare find output with canonical paths, so a TMPDIR with a
+  # trailing slash or a symbolic-link component must not reach them unchanged.
+  staging_dir="${staging_dir:A}"
   local restore_rc=0
   local previous_umask
   previous_umask=$(umask)
@@ -1332,7 +1400,13 @@ sys-restore-dots() {
     }
   } always {
     restore_rc=$?
-    command rm -rf "$staging_dir" 2>/dev/null
+    if [[ -d "$staging_dir" && ! -L "$staging_dir" ]]; then
+      # An archived read-only directory would otherwise keep restored copies
+      # in the temporary root. Recursive chmod does not follow links.
+      command chmod -R u+rwx -- "$staging_dir" 2>/dev/null
+      command rm -rf -- "$staging_dir" 2>/dev/null \
+        || _sys_warn "Could not remove the restore staging directory: $(_sys_display_escape "$staging_dir")"
+    fi
     umask "$previous_umask"
   }
 

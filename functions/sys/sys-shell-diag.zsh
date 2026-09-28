@@ -85,8 +85,24 @@ _sys_diag_render_startup_hints() {
   fi
 
   local plugin_count
-  plugin_count=$(command sed -n '/plugins=(/,/)/p' "$zshrc_file" 2>/dev/null \
-    | command sed 's/plugins=(//; s/)//' | command wc -w)
+  # Count words in the first uncommented plugins=( ... ) assignment, which
+  # can open and close on one line or span several.
+  plugin_count=$(command awk '
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      if (!started) {
+        if (line !~ /^[[:space:]]*plugins=[(]/) next
+        sub(/^[[:space:]]*plugins=[(]/, "", line)
+        started = 1
+      }
+      closing = index(line, ")")
+      if (closing) line = substr(line, 1, closing - 1)
+      count += split(line, words)
+      if (closing) { print count; exit }
+    }
+    END { if (started && !closing) print count }
+  ' "$zshrc_file" 2>/dev/null)
   plugin_count="${plugin_count//[[:space:]]/}"
   if [[ "$plugin_count" =~ '^[0-9]+$' ]]; then
     if (( plugin_count > 15 )); then

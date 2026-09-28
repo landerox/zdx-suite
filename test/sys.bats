@@ -410,3 +410,61 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"System Information"* ]]
 }
+
+@test "sys: bounded probes and timeout markers work with NO_CLOBBER" {
+  local capture_tmp="$HOME/noclobber-tmp"
+  mkdir -p "$capture_tmp"
+
+  run run_zsh "
+    export TMPDIR='$capture_tmp'
+    setopt NO_CLOBBER
+    local probe_output=''
+    probe_output=\$(_sys_run_bounded_probe 3 64 printf probe-data) || exit 11
+    [[ \"\$probe_output\" == probe-data ]] || exit 12
+    timeout() { return 127; }
+    gtimeout() { return 127; }
+    path=(\${path:#*coreutils*})
+    command() {
+      [[ \"\$1\" == -v && ( \"\$2\" == timeout || \"\$2\" == gtimeout ) ]] \
+        && return 1
+      builtin command \"\$@\"
+    }
+    _sys_run_with_timeout 1 sleep 5
+  "
+
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"file exists"* ]]
+  [ -z "$(find "$capture_tmp" -mindepth 1 -print -quit)" ]
+}
+
+@test "sys: _sys_run_logged keeps the caller umask for the wrapped command" {
+  local capture_tmp="$HOME/run-logged-umask-tmp"
+  mkdir -p "$capture_tmp"
+
+  run run_zsh "
+    export TMPDIR='$capture_tmp'
+    umask 022
+    _sys_run_logged umask-check zsh -c 'umask >\"\$HOME/wrapped.umask\"; : >\"\$HOME/created\"' \
+      || exit 1
+    [[ \"\$(umask)\" == 022 ]]
+  "
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/wrapped.umask")" = "022" ]
+  [ "$(stat -c '%a' "$HOME/created")" = "644" ]
+  [ -z "$(find "$capture_tmp" -mindepth 1 -print -quit)" ]
+}
+
+@test "sys: _sys_sha256_file hashes paths containing a backslash" {
+  local artifact="$HOME/dot\\backups/archive.tar.gz"
+  mkdir -p "${artifact%/*}"
+  printf 'payload\n' > "$artifact"
+  local expected
+  expected=$(sha256sum < "$artifact")
+  expected="${expected%% *}"
+
+  run run_zsh "_sys_sha256_file '$artifact'"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+}
