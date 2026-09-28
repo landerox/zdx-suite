@@ -1445,7 +1445,7 @@ Set these in `~/.config/zdx/config.zsh`:
 | `DEV_BACKUP_RETENTION` | `5` | Backups to keep; integer `1`–`100` |
 | `DEV_CLEAN_DEPTH` | `12` | Cleanup discovery depth; integer `1`–`64` |
 | `DEV_CLEAN_MAX_TARGETS` | `10000` | Unique cleanup targets; integer `1`–`50000` |
-| `DEV_SCAN_DEPTH` | `3` | Stack-detection depth; integer `1`–`32` |
+| `DEV_SCAN_DEPTH` | `3` | Stack-detection depth for the menu header; integer `1`–`32`. Gates and file inventories look up to 32 levels |
 | `DEV_PYPI_TIMEOUT` | `15` | Per-request seconds; integer `1`–`300` |
 | `DEV_PYPI_RETRIES` | `2` | Retries per query; integer `0`–`10` |
 | `DEV_PYPI_JOBS` | `8` | Concurrent prefetch jobs; integer `1`–`32` |

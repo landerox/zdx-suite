@@ -1425,8 +1425,13 @@ _dev_update_python_rebuild() {
     fi
   } always {
     # An interrupt between the two directory renames must never make cleanup
-    # delete the only preserved copy of the original environment.
+    # delete the only preserved copy of the original environment. The flag is
+    # set only after mv returns, so the filesystem decides as well.
     (( original_moved && operation_rc != 0 )) && preserve_workspace=1
+    if (( operation_rc != 0 )) && [[ -n "${original_venv:-}" ]] \
+      && [[ -e "$original_venv" || -L "$original_venv" ]]; then
+      preserve_workspace=1
+    fi
 
     if (( preserve_workspace )); then
       _dev_warn \
@@ -1690,9 +1695,13 @@ dev-update-deps() {
   done
 
   # Job-control noise and a stray spinner must not survive this function, and
-  # the INT/TERM handler is scoped so it never lands in the user's shell.
+  # the INT/TERM handler is scoped so it never lands in the user's shell. A
+  # string trap would otherwise resume the function, so it records the signal
+  # and every stage below stops before its next effect.
   setopt LOCAL_OPTIONS LOCAL_TRAPS NO_MONITOR
-  trap '_dev_spinner_stop' INT TERM
+  local -i interrupted=0
+  trap '_dev_spinner_stop; interrupted=130' INT
+  trap '_dev_spinner_stop; interrupted=143' TERM
 
   local previous_debug="${DEV_SUITE_DEBUG:-0}"
   local -i previous_auto_yes=$_DEV_AUTO_YES
@@ -1768,6 +1777,10 @@ dev-update-deps() {
     _dev_spinner_start "Fetching versions from PyPI (${#all_deps[@]} packages)"
     _dev_pypi_prefetch "${all_deps[@]}"
     _dev_spinner_stop
+    (( interrupted )) && {
+      _dev_warn "Interrupted before planning; pyproject.toml was not modified."
+      return $interrupted
+    }
 
     local -i updated=0 failed=0 skipped=0 at_latest=0
     local -a summary_rows=() updated_packages=()
@@ -1775,6 +1788,10 @@ dev-update-deps() {
 
     for package in "${all_deps[@]}"; do
       [[ -n "$package" ]] || continue
+      (( interrupted )) && {
+        _dev_warn "Interrupted during planning; pyproject.toml was not modified."
+        return $interrupted
+      }
 
       # Build the proposed file in the private workspace. The live project file
       # is never touched while versions are queried or while authorization is
@@ -1859,6 +1876,10 @@ dev-update-deps() {
       return 0
     fi
 
+    (( interrupted )) && {
+      _dev_warn "Interrupted during planning; pyproject.toml was not modified."
+      return $interrupted
+    }
     local apply_outcome
     apply_outcome=$(_dev_confirm_outcome \
       "Apply $updated update(s) to pyproject.toml?")
@@ -1951,25 +1972,32 @@ dev-update-deps() {
       upgrade_args+=(--upgrade-package "$package")
     done
 
-    if ! command uv lock "${upgrade_args[@]}" >&2; then
-      _dev_error "Lock failed — attempting an exact pyproject.toml rollback."
+    # An interruption after publication takes the same exact rollback as a
+    # failed lock, then preserves the signal status.
+    if (( interrupted )) || ! command uv lock "${upgrade_args[@]}" >&2 \
+      || (( interrupted )); then
+      if (( interrupted )); then
+        _dev_error "Interrupted — attempting an exact pyproject.toml rollback."
+      else
+        _dev_error "Lock failed — attempting an exact pyproject.toml rollback."
+      fi
       if ! _dev_update_rollback_pyproject \
         "$invocation_backup" "$invocation_backup_fingerprint" \
         "$applied_fingerprint" "$initial_fingerprint"; then
         _dev_error "Lock failed and pyproject.toml rollback also failed."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       fi
 
       _DEV_UPDATE_DEPS_OUTCOME="restored"
       _dev_warn "pyproject.toml was restored from the exact invocation backup."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     _DEV_UPDATE_DEPS_OUTCOME="locked"
 
-    if ! command uv sync --all-groups >&2; then
+    if ! command uv sync --all-groups >&2 || (( interrupted )); then
       _dev_error \
         "Sync failed after the project and lockfile were updated; the environment may be partial."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     _DEV_UPDATE_DEPS_OUTCOME="applied"
 
@@ -2293,12 +2321,14 @@ try:
         planned_revision = planned_match.group(4).strip("'\"")
         original_is_frozen = FULL_OBJECT_ID.fullmatch(original_revision) is not None
         planned_is_frozen = FULL_OBJECT_ID.fullmatch(planned_revision) is not None
-        if not planned_is_frozen:
+        changed_object = planned_revision.lower() != original_revision.lower()
+        # Only a changed target must be an immutable object; a repository that
+        # autoupdate left untouched keeps its existing revision line.
+        if changed_object and not planned_is_frozen:
             raise ValueError
 
         previous_label = version_label(original_match)
         proposed_label = version_label(planned_match)
-        changed_object = planned_revision.lower() != original_revision.lower()
         if changed_object and FROZEN_COMMENT.fullmatch(planned_match.group(5)) is None:
             raise ValueError
 
@@ -2516,6 +2546,9 @@ dev-update-precommit() {
     _dev_info "Planning the pre-commit specifier update..."
     local plan_result
     if (( pypi_ready )); then
+      # Create the invocation cache in this shell so the always block removes
+      # it; a first initialization inside the planning subshell would leak.
+      _dev_pypi_cache_init 2>/dev/null || true
       plan_result=$(
         builtin cd -- "$transaction_dir" || return 1
         _dev_update_specifier "pre-commit" 0 all 1
@@ -2953,10 +2986,22 @@ _dev_update_all_step() {
   local timed_label="$2"
   shift 2
 
+  # After an interrupted step no later step starts; each is listed as not run.
+  step_labels+=("$label")
+  if (( interrupted_status )); then
+    step_outcomes+=("– not run (interrupted)")
+    return $interrupted_status
+  fi
+
   local -i step_status=0
   _dev_timed "$timed_label" "$@" || step_status=$?
 
-  step_labels+=("$label")
+  if (( step_status == 130 || step_status == 143 )); then
+    interrupted_status=$step_status
+    step_outcomes+=("✘ interrupted (status $step_status)")
+    failures=$(( failures + 1 ))
+    return $step_status
+  fi
   if (( step_status == 0 )); then
     step_outcomes+=("✔ completed")
   else
@@ -3044,7 +3089,7 @@ dev-update-all() {
   total_start=$(_dev_now)
 
   # Dynamically scoped for the step helpers above.
-  local -i failures=0
+  local -i failures=0 interrupted_status=0
   local -a step_labels=() step_outcomes=() retry_commands=()
 
   if (( dry_run )); then
@@ -3204,6 +3249,11 @@ dev-update-all() {
 
   _dev_update_all_summary
   _dev_blank
+  if (( interrupted_status )); then
+    _dev_error \
+      "Full maintenance was interrupted (status $interrupted_status); later steps did not run."
+    return $interrupted_status
+  fi
   if (( failures == 0 )); then
     _dev_success "Full maintenance completed in ${total_elapsed}s."
     return 0

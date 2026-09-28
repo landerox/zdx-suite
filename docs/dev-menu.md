@@ -159,14 +159,19 @@ atomically published Markdown report. Project metadata parsing refuses
 `pyproject.toml` above 2 MiB or a combined direct-dependency inventory above
 1,000 entries. Structured license classification requires a JSON array whose
 records contain string `Name`, `Version`, and `License` fields, classifies only
-`License`, and refuses malformed JSON. Both table and JSON streams stop at
-10 MiB plus one byte and fail before unbounded output is materialized.
+`License`, and refuses malformed JSON. Strict mode recognizes the copyleft
+acronyms (AGPL, GPL, SSPL, EUPL, OSL, CPAL) and their spelled-out names as
+Trove classifiers report them, such as "GNU Affero General Public License v3";
+a Lesser or Library General Public License is not flagged. Both table and
+JSON streams stop at 10 MiB plus one byte, counted exactly including trailing
+newlines, and fail before unbounded output is materialized.
 
 Health applies when the project has `pyproject.toml`, `.venv`, `uv.lock`,
 `.python-version`, or a discovered Python source file. Without any such marker,
 it reports that Python/uv health is not applicable and returns `0` without
 probing PyPI or treating absent Python metadata as a failure. Once a marker
-exists, the full diagnostic remains strict.
+exists, the full diagnostic remains strict. Comment lines in `.python-version`
+are ignored, as uv ignores them.
 
 ### Quality gates
 
@@ -188,10 +193,15 @@ exists, the full diagnostic remains strict.
 
 `dev-run-markdownlint` passes `.config/markdownlint.yaml` explicitly when that
 project-local file exists. Otherwise, Markdownlint retains its normal
-configuration discovery behavior.
+configuration discovery behavior. It lints the suite's bounded Markdown
+inventory in batches of at most 64 paths, never a `**/*.md` glob, so `--fix`
+cannot rewrite files in `node_modules`, vendored or generated trees, or nested
+repositories.
 
 `dev-run-all-checks` accepts `--verbose`. Without it, each gate's output is
-suppressed and only the result table is shown.
+suppressed and only the result table is shown. A gate that returns `130` or
+`143` stops the aggregate: later gates are listed as not run and that status
+is returned. `dev-check-types` preserves it the same way.
 
 `dev-run-tflint` runs `tflint --recursive` without initializing plugins.
 Plugin initialization is a separate remote-code action selected with `--init`;
@@ -201,19 +211,30 @@ reported as successful.
 
 Read-only gate parsers reject backend flags known to enable source or state
 rewrites, such as Ruff `--fix`, ESLint `--fix`/`--cache`, Prettier `--write`,
-Pyright `--createstub`, Clippy `--fix`, and TFLint `--fix`. Clippy is
-effect-classified as mutating because ordinary compilation still creates or
-updates `target/`.
+Pyright `--createstub`, Clippy `--fix`, and TFLint `--fix`, including the
+forbidden letter inside a clustered short option such as Ruff `-eo` or
+Prettier `-uw`. ESLint `--inspect-config` and `--mcp` are refused because
+ESLint runs `npx ...@latest` for them. Ruff receives only the caller's paths;
+with none it uses the current directory, so an explicit file selection is
+never widened to the whole project. Clippy is effect-classified as mutating
+because ordinary compilation still creates or updates `target/`.
 
 Quality gates, tests, configured hooks, and package builds are explicit local
 trust boundaries. They can load project-controlled configuration or code even
 when the Dev wrapper itself is classified read-only. `dev-run-hooks` can also
 initialize hook environments, and `dev-run-all-checks` inherits those effects.
 
-Bandit and ShellCheck share one NUL-safe project-file collector. It prunes
-generated trees and nested repositories before traversal, propagates discovery
-failure, caps each inventory at 512 files, and invokes each backend in batches
-of at most 64 paths.
+Bandit, ShellCheck, and Markdownlint share one NUL-safe project-file
+collector. It prunes generated trees, installed-package trees
+(`site-packages`, `dist-packages`, `.tox`, `.nox`), and nested repositories
+before traversal, propagates discovery failure, caps each inventory at 512
+files, and invokes each backend in batches of at most 64 paths. Gate
+applicability probes and these inventories look up to 32 directory levels, so
+an ordinary `src/` layout or a deep test tree is covered; `DEV_SCAN_DEPTH`
+bounds only the stack summary in the menu header. A directory that `find` can
+only report as "Permission denied" is skipped with a warning naming it, since
+nothing below it can be listed, discovered, or removed; any other discovery
+error still fails closed.
 
 ### Tests
 
@@ -332,6 +353,13 @@ starts. The frozen scope is:
 | Terraform ownership | `terraform` is installed | `dev-update-terraform` |
 | TFLint ownership | `tflint` is installed | `dev-update-tflint` |
 | Project cleanup | always | `dev-clean-all [--yes]` |
+
+A step that returns `130` or `143` stops the aggregate: every later step is
+listed as not run, and that status is returned instead of an ordinary failure.
+`dev-update-deps` records an interrupt instead of resuming after it. An
+interrupt before publication leaves `pyproject.toml` untouched; one during or
+after publication takes the same exact backup rollback as a failed lock; in
+both cases the signal status is returned.
 
 A step whose project files are absent is listed as not applicable in the plan
 and as skipped in the final summary; it is never counted as a failure. When
@@ -463,7 +491,9 @@ activation scripts valid after the staging directory is renamed and removed.
 It does not promise that arbitrary package scripts or binaries are relocatable;
 see [uv's relocatable environment contract](https://docs.astral.sh/uv/reference/cli/#uv-venv--relocatable).
 
-An interrupt between renames also retains the recovery workspace. After
+An interrupt between renames also retains the recovery workspace, decided
+from the filesystem as well as from the rename bookkeeping, so a rename that
+completed just before an interrupt still keeps the original. After
 success, the preserved original is removed only through validated quarantine.
 When `.venv` is absent, the command performs no runtime mutation itself. It
 delegates to `py-menu venv-python-install`, forwarding `--yes` when present, so
@@ -508,8 +538,13 @@ Every `dev-clean-*` command implements the destructive sequence from
 2. **Compute the exact target set without mutating.** Discovery uses bounded,
    NUL-delimited `find` records, so filenames containing spaces or newlines stay
    data. It does not follow links and prunes `.git`, `*.git`, `.venv`,
-   `node_modules`, `vendor`, `vendored`, and nested repository roots discovered
-   from `.git` file or directory markers. Each discovery stream and nested
+   `node_modules`, `vendor`, `vendored`, installed-package trees
+   (`site-packages`, `dist-packages`, `.tox`, `.nox`) of any virtual
+   environment, and nested repository roots discovered from `.git` file or
+   directory markers. A directory target that contains such a nested
+   repository is skipped with a warning, except `.terraform/`, whose module
+   cache legitimately holds Git clones. An unreadable directory is skipped
+   with a warning rather than aborting discovery. Each discovery stream and nested
    repository-marker inventory stops at one beyond the configured target limit
    instead of materializing unbounded output. Associative first-seen
    deduplication preserves deterministic plan order. Each cleanup category is
@@ -542,10 +577,13 @@ reshape the authorization UI.
 
 - `build/`, `dist/`, and Cargo `target/` are removed **only at the project
   root**. Nested directories with those names usually belong to vendored
-  sources. Cargo `target/` participates only in `dev-clean-all`.
+  sources. Cargo `target/` participates only in `dev-clean-all`, and only when
+  a root `Cargo.toml` or Cargo's `target/CACHEDIR.TAG` proves it is Cargo
+  output.
 - Python cleanup includes root `.coverage`, `.coverage.*`, and `htmlcov/`.
   `--keep-build` preserves root `build/` and `dist/` for `dev-clean-py`, and
-  additionally preserves root `target/` for `dev-clean-all`.
+  additionally preserves root `target/` for `dev-clean-all`, including their
+  contents: discovery does not descend into a preserved directory.
 - `.terraform.lock.hcl` is always preserved: it pins provider versions and
   belongs in version control.
 - Stale Terraform artifacts remain discoverable even when no `.tf` source file
@@ -685,7 +723,11 @@ resolving or updating the lockfile. Parent, destination, held inode, temporary
 path, temporary descriptor, ownership, link count, metadata, and content are
 revalidated before publication. A previously absent destination uses atomic
 no-clobber hard-link publication; an authorized existing destination uses an
-identity-checked atomic replacement.
+identity-checked atomic replacement. Immediately before publication the
+temporary receives the replaced file's permissions, or `0666` minus the
+caller's umask for a new file, and its descriptor is verified again; only its
+mode and change time may differ. The published file is therefore readable by
+builds and other accounts exactly as before.
 
 This protects the reviewed destination and prevents a failed exporter from
 truncating a working file. It does not preserve filesystem-specific ACLs or
@@ -715,7 +757,7 @@ package release; the cache controls do not change that trust boundary.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `DEV_ALLOW_EPHEMERAL` | `0` | Remote-runner opt-in; must be exactly `0` or `1` |
-| `DEV_SCAN_DEPTH` | `3` | Project detection depth; integer `1`–`32` |
+| `DEV_SCAN_DEPTH` | `3` | Stack-detection depth for the menu header; integer `1`–`32`. Gate probes and file inventories use a fixed depth of 32 |
 | `DEV_CLEAN_DEPTH` | `12` | Cleanup discovery depth; integer `1`–`64` |
 | `DEV_CLEAN_MAX_TARGETS` | `10000` | Unique combined cleanup-plan limit; integer `1`–`50000` |
 | `DEV_PYPI_TIMEOUT` | `15` | Per-request seconds; integer `1`–`300` |

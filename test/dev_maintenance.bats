@@ -101,6 +101,7 @@ teardown() {
   printf '%s\n' "parallel coverage" > "$DEV_PROJECT/.coverage.worker"
   printf '%s\n' "report" > "$DEV_PROJECT/htmlcov/index.html"
   printf '%s\n' "binary" > "$DEV_PROJECT/target/debug-output"
+  : > "$DEV_PROJECT/Cargo.toml"
 
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --yes'
 
@@ -312,7 +313,8 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"downloads remote code"* ]]
-  [[ "$output" == *"uvx invoked: ruff check --no-fix --no-cache ."* ]]
+  [[ "$output" == *"uvx invoked: ruff check --no-fix --no-cache"* ]]
+  [[ "$output" != *"--no-cache ."* ]]
 }
 
 @test "dev remote: a node tool in node_modules is used without npx" {
@@ -374,7 +376,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == \
-    *"markdownlint args: --config .config/markdownlint.yaml **/*.md"* ]]
+    *"markdownlint args: --config .config/markdownlint.yaml ./README.md"* ]]
 }
 
 # --- Persisted state --------------------------------------------------------

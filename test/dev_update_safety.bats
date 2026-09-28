@@ -2222,3 +2222,150 @@ EOF
   [ "$(cat "$PY_DELEGATE_LOG")" = "venv-python-install --yes" ]
   [ ! -s "$UV_UPDATE_LOG" ]
 }
+
+@test "dev update safety: an interruption during planning publishes nothing" {
+  write_dependency_project
+  export UV_LOG="$TEST_TEMP_DIR/uv.log"
+  cat > "$TEST_MOCK_BIN/uv" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$UV_LOG"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/uv"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    _dev_pypi_check_connectivity() { return 0; }
+    _dev_pyproject_all_deps() { reply=(demo other); }
+    _dev_pypi_prefetch() { kill -INT $$; return 0; }
+    _dev_pypi_latest() { print -r -- "2.0.0"; }
+    _dev_spinner_start() { return 0; }
+    _dev_spinner_stop() { return 0; }
+    dev-update-deps --yes
+  '
+
+  [ "$status" -eq 130 ]
+  [[ "$output" == *"Interrupted before planning"* ]]
+  grep -q 'demo>=1.0.0' "$DEV_PROJECT/pyproject.toml"
+  [ ! -s "$UV_LOG" ]
+}
+
+@test "dev update safety: an interruption during locking restores pyproject.toml" {
+  write_dependency_project
+  cat > "$TEST_MOCK_BIN/uv" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == lock ]]; then
+  kill -INT "$PPID"
+  exit 1
+fi
+printf 'UV_SHOULD_NOT_RUN:%s\n' "$*" >&2
+MOCK
+  chmod +x "$TEST_MOCK_BIN/uv"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    _dev_pypi_check_connectivity() { return 0; }
+    _dev_pyproject_all_deps() { reply=(demo); }
+    _dev_pypi_prefetch() { return 0; }
+    _dev_pypi_latest() { print -r -- "2.0.0"; }
+    _dev_spinner_start() { return 0; }
+    _dev_spinner_stop() { return 0; }
+    dev-backup-pyproject() {
+      local backup="$DEV_PROJECT/invocation.backup"
+      command cp -- pyproject.toml "$backup" || return 1
+      command chmod 600 -- "$backup" || return 1
+      _DEV_LAST_BACKUP_FILE="$backup"
+    }
+    _dev_restore_pyproject() {
+      command cp -- "$1" pyproject.toml
+    }
+    dev-update-deps --yes
+  '
+
+  [ "$status" -eq 130 ]
+  [[ "$output" == *"Interrupted — attempting an exact pyproject.toml rollback"* ]]
+  [[ "$output" != *"UV_SHOULD_NOT_RUN"* ]]
+  grep -q 'demo>=1.0.0' "$DEV_PROJECT/pyproject.toml"
+}
+
+@test "dev update safety: full maintenance stops after an interrupted step" {
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    dev-update-toolchain() { return 130; }
+    dev-clean-all() { print -u2 -r -- "CLEANUP_RAN"; return 0; }
+    dev-update-all --yes
+  '
+
+  [ "$status" -eq 130 ]
+  [[ "$output" != *"CLEANUP_RAN"* ]]
+  [[ "$output" == *"interrupted (status 130)"* ]]
+  [[ "$output" == *"not run (interrupted)"* ]]
+  [[ "$output" == *"Full maintenance was interrupted"* ]]
+}
+
+@test "dev update safety: an unchanged mutable hook revision does not block a partial plan" {
+  cat > "$DEV_PROJECT/pre-commit.original.yaml" <<'MOCK'
+repos:
+  - repo: https://example.invalid/a
+    rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # frozen: v1.0.0
+    hooks:
+      - id: a
+  - repo: https://example.invalid/b
+    rev: v2.0.0
+    hooks:
+      - id: b
+MOCK
+  cat > "$DEV_PROJECT/pre-commit.candidate.yaml" <<'MOCK'
+repos:
+  - repo: https://example.invalid/a
+    rev: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # frozen: v1.1.0
+    hooks:
+      - id: a
+  - repo: https://example.invalid/b
+    rev: v2.0.0
+    hooks:
+      - id: b
+MOCK
+
+  run run_zsh '
+    _dev_precommit_sanitize_plan \
+      "$DEV_PROJECT/pre-commit.original.yaml" \
+      "$DEV_PROJECT/pre-commit.candidate.yaml"
+  '
+
+  [ "$status" -eq 0 ]
+  grep -q 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # frozen: v1.1.0' \
+    "$DEV_PROJECT/pre-commit.candidate.yaml"
+  grep -q 'rev: v2.0.0' "$DEV_PROJECT/pre-commit.candidate.yaml"
+}
+
+@test "dev update safety: a rename interrupted after moving .venv keeps the original" {
+  write_python_venv_project
+  export UV_UPDATE_LOG="$TEST_TEMP_DIR/uv-update.log"
+  : > "$UV_UPDATE_LOG"
+  write_python_update_uv_mock
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    # The first rename completes but reports failure, which is the state an
+    # interrupt leaves between the rename and its bookkeeping.
+    command() {
+      if [[ "${1:-}" == "mv" && "${2:-}" == "--" \
+        && "${3:-}" == "$DEV_PROJECT/.venv" && "${4:-}" == */original-venv ]]; then
+        builtin command mv -- "$3" "$4" || return 90
+        return 42
+      fi
+      builtin command "$@"
+    }
+    dev-update-python --yes
+    local -i update_rc=$?
+    local -a recovery_markers=(
+      "$DEV_PROJECT"/.zdx-dev-python.*/original-venv/original-marker(N)
+    )
+    (( ${#recovery_markers[@]} == 1 )) && print -u2 -r -- "ORIGINAL_RETAINED"
+    return $update_rc
+  '
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Python recovery workspace retained"* ]]
+  [[ "$output" == *"ORIGINAL_RETAINED"* ]]
+}

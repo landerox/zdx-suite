@@ -208,3 +208,23 @@ run_hook_update() {
   [[ "$output" == *"dev-menu dev-update-deps"* ]]
   [[ "$output" == *"completed with partial failures"* ]]
 }
+
+@test "dev recovery: the pre-commit update removes its PyPI cache" {
+  write_hook_project
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    _dev_pypi_check_connectivity() { return 0; }
+    # Like the real query, create the invocation cache on first use.
+    _dev_pypi_latest() {
+      _dev_pypi_cache_init || return 1
+      print -r -- "1.0.0"
+    }
+    _dev_exact_project_python_tool_runner() {
+      reply=("$TEST_MOCK_BIN/pre-commit")
+    }
+    dev-update-precommit
+  '
+
+  [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'zdx-dev-pypi.*' -print -quit)" ]
+}

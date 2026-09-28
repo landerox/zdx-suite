@@ -248,3 +248,27 @@ EOF
   [[ "$output" != *"find-must-not-run"* ]]
   [ ! -e "$BANDIT_LOG" ]
 }
+
+@test "dev security: Bandit inventories an ordinary src layout at the default depth" {
+  write_bandit_backend
+  mkdir -p "$DEV_PROJECT/src/mypkg/api/v1" \
+    "$DEV_PROJECT/venv/lib/python3.12/site-packages/dep" \
+    "$DEV_PROJECT/.tox/py312/lib"
+  : > "$DEV_PROJECT/src/mypkg/__init__.py"
+  : > "$DEV_PROJECT/src/mypkg/api/views.py"
+  : > "$DEV_PROJECT/src/mypkg/api/v1/deep.py"
+  : > "$DEV_PROJECT/venv/lib/python3.12/site-packages/dep/excluded.py"
+  : > "$DEV_PROJECT/.tox/py312/lib/excluded.py"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    [[ "$DEV_SCAN_DEPTH" == 3 ]] || exit 91
+    dev-run-bandit >"$BANDIT_STDOUT" 2>"$BANDIT_STDERR"
+  '
+
+  [ "$status" -eq 0 ]
+  grep -q "Scanning 3 Python file(s)" "$BANDIT_STDERR"
+  grep -Fxq -- './src/mypkg/api/views.py' "$BANDIT_LOG"
+  grep -Fxq -- './src/mypkg/api/v1/deep.py' "$BANDIT_LOG"
+  ! grep -q 'excluded.py' "$BANDIT_LOG"
+}

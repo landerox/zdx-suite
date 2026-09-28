@@ -21,6 +21,9 @@ _dev_normalize_pkg_name() {
   # The `##` repetition operator below requires extended globbing, scoped to
   # this function so the caller's options are untouched.
   setopt LOCAL_OPTIONS EXTENDED_GLOB
+  # Regex ranges such as [A-Za-z] follow the locale's collation, and :l can
+  # fold non-ASCII letters; PEP 508 names are ASCII only.
+  local LC_ALL=C
 
   local raw="$1"
   [[ -n "$raw" ]] || return 1
@@ -152,7 +155,7 @@ if not isinstance(dependencies, list):
 for dep in dependencies:
     if not isinstance(dep, str):
         raise TypeError("project.dependencies entries must be strings")
-    pkg = re.split(r"[\[(\s><=!~;@]", dep, maxsplit=1)[0].strip()
+    pkg = re.split(r"[\[(\s><=!~;@]", dep.strip(), maxsplit=1)[0].strip()
     if pkg:
         print(pkg)
 '
@@ -179,7 +182,7 @@ for deps in groups.values():
             continue
         if not isinstance(dep, str):
             raise TypeError("dependency group entries are invalid")
-        pkg = re.split(r"[\[(\s><=!~;@]", dep, maxsplit=1)[0].strip()
+        pkg = re.split(r"[\[(\s><=!~;@]", dep.strip(), maxsplit=1)[0].strip()
         if pkg:
             print(pkg)
 '
@@ -205,7 +208,7 @@ for deps in groups.values():
     for dep in deps:
         if not isinstance(dep, str):
             raise TypeError("optional dependency entries must be strings")
-        pkg = re.split(r"[\[(\s><=!~;@]", dep, maxsplit=1)[0].strip()
+        pkg = re.split(r"[\[(\s><=!~;@]", dep.strip(), maxsplit=1)[0].strip()
         if pkg:
             print(pkg)
 '
@@ -621,6 +624,8 @@ _dev_pypi_check_connectivity() {
 # Follows redirects because PyPI 302s non-canonical names, and writes the JSON
 # body to a file because responses can be several megabytes.
 _dev_pypi_latest() {
+  # The version pattern below uses the `#` repetition operator.
+  setopt LOCAL_OPTIONS EXTENDED_GLOB
   local raw_name="$1"
   local pkg
   pkg=$(_dev_normalize_pkg_name "$raw_name") || return 1
@@ -745,8 +750,10 @@ if not isinstance(version, str):
 print(version)
 ' "$body_file" "$body_identity" 2>/dev/null)
 
+        # Glob classes match by code point, unlike locale-collated regex
+        # ranges, so a non-ASCII version string from the index is refused.
         if [[ -n "$version" && ${#version} -le 128 \
-          && "$version" =~ '^[A-Za-z0-9][A-Za-z0-9.!+_-]*$' ]]; then
+          && "$version" == [A-Za-z0-9][A-Za-z0-9.\!+_-]# ]]; then
           _dev_pypi_cache_validate || return 1
 
           local version_file

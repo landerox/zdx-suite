@@ -20,6 +20,10 @@ typeset -g DEV_PROFILE_DIR="${DEV_PROFILE_DIR-.dev-suite-profiles}"
 typeset -g DEV_REPORT_DIR="${DEV_REPORT_DIR-dev-suite-reports}"
 typeset -g DEV_BACKUP_RETENTION="${DEV_BACKUP_RETENTION-5}"
 typeset -g DEV_SCAN_DEPTH="${DEV_SCAN_DEPTH-3}"
+# DEV_SCAN_DEPTH bounds only the stack detection shown in the menu header.
+# Gate applicability probes and file inventories must see an ordinary src
+# layout, so they use this deeper fixed bound plus their record limits.
+typeset -gi _DEV_PROJECT_CONTENT_DEPTH=32
 typeset -g DEV_PYPI_TIMEOUT="${DEV_PYPI_TIMEOUT-15}"
 typeset -g DEV_PYPI_RETRIES="${DEV_PYPI_RETRIES-2}"
 typeset -g DEV_PYPI_JOBS="${DEV_PYPI_JOBS-8}"
@@ -408,6 +412,46 @@ _dev_require_python_toml() {
   return 1
 }
 
+# Runs one find traversal. A directory that only fails with "Permission
+# denied" is reported as skipped instead of failing the traversal: nothing
+# below it can be listed, so it can be neither discovered nor removed. Any
+# other diagnostic keeps the original failing status. The first argument is
+# `warn` (name the skipped directory) or `quiet`; the rest goes to find.
+_dev_find() {
+  emulate -L zsh
+  local mode="${1:-quiet}"
+  shift
+  local find_errors=""
+  local -i find_status=0
+  # Results keep flowing to this function's stdout through fd 3 while the
+  # C-locale diagnostics are captured, without a temporary file.
+  {
+    find_errors=$(LC_ALL=C command find "$@" 2>&1 1>&3 3>&-) \
+      || find_status=$?
+  } 3>&1
+  if (( find_status != 0 )) && [[ -n "$find_errors" ]]; then
+    local error_line="" first_unreadable=""
+    local -i other_errors=0
+    for error_line in "${(@f)find_errors}"; do
+      [[ -n "$error_line" ]] || continue
+      if [[ "$error_line" == 'find: '*': Permission denied' ]]; then
+        if [[ -z "$first_unreadable" ]]; then
+          first_unreadable="${${error_line#find: }%: Permission denied}"
+          first_unreadable="${${first_unreadable#\'}%\'}"
+        fi
+      else
+        other_errors=1
+      fi
+    done
+    if (( ! other_errors )) && [[ -n "$first_unreadable" ]]; then
+      find_status=0
+      [[ "$mode" == warn ]] && _dev_warn \
+        "Skipping unreadable directory: $(_dev_display_escape "$first_unreadable")"
+    fi
+  fi
+  return $find_status
+}
+
 # Copies a bounded NUL-delimited stream without materializing record limit+1.
 # The producer receives a closed pipe as soon as the limit is exceeded.
 _dev_project_limit_nul_stream() {
@@ -441,6 +485,7 @@ _dev_project_find_path_pattern() {
 # inventory could not be trusted.
 _dev_project_repository_roots() {
   local maximum_records="$1"
+  local depth="${2:-$_DEV_PROJECT_CONTENT_DEPTH}"
   reply=()
 
   _dev_validate_scan_depth || return 2
@@ -450,16 +495,18 @@ _dev_project_repository_roots() {
 
   local repository_markers=""
   repository_markers=$(
-    command find . \
+    _dev_find warn . \
       -mindepth 1 \
-      -maxdepth "$DEV_SCAN_DEPTH" \
+      -maxdepth "$depth" \
       \( -type d \( \
         -name '.venv' -o -name 'node_modules' \
         -o -name 'vendor' -o -name 'vendored' \
         -o -name 'build' -o -name 'dist' \
+        -o -name 'site-packages' -o -name 'dist-packages' \
+        -o -name '.tox' -o -name '.nox' \
         -o -name '?*.git' \
       \) -prune \) -o \
-      \( -name '.git' -print0 -prune \) 2>/dev/null \
+      \( -name '.git' -print0 -prune \) \
       | _dev_project_limit_nul_stream \
         "Nested repository marker inventory" "$limit"
     local -a pipeline_status=("${pipestatus[@]}")
@@ -492,6 +539,8 @@ _dev_project_exclusions() {
       -o -name '.venv' -o -name 'node_modules' \
       -o -name 'vendor' -o -name 'vendored' \
       -o -name 'build' -o -name 'dist' \
+      -o -name 'site-packages' -o -name 'dist-packages' \
+      -o -name '.tox' -o -name '.nox' \
     \) -prune \) -o
   )
 
@@ -505,6 +554,18 @@ _dev_project_exclusions() {
 # Bounded project probe. Status 0 means a match, 1 means no match, and 2 means
 # discovery failed. Callers must not turn an I/O error into a clean no-op.
 _dev_project_has_files() {
+  _dev_project_has_files_within "$_DEV_PROJECT_CONTENT_DEPTH" "$@"
+}
+
+# The same probe bounded by DEV_SCAN_DEPTH, for the advisory stack summary.
+_dev_project_has_stack_files() {
+  _dev_validate_scan_depth || return 2
+  _dev_project_has_files_within "$DEV_SCAN_DEPTH" "$@"
+}
+
+_dev_project_has_files_within() {
+  local depth="${1:-}"
+  shift
   _dev_validate_scan_depth || return 2
   (( $# > 0 )) || {
     _dev_error "At least one project filename pattern is required."
@@ -523,16 +584,16 @@ _dev_project_has_files() {
   name_expression[-1]=()
 
   local -a reply=()
-  _dev_project_repository_roots 512 || return 2
+  _dev_project_repository_roots 512 "$depth" || return 2
   local -a repository_roots=("${reply[@]}")
   _dev_project_exclusions "${repository_roots[@]}"
   local -a exclusions=("${reply[@]}")
 
   local found=""
-  found=$(command find . -maxdepth "$DEV_SCAN_DEPTH" \
+  found=$(_dev_find quiet . -maxdepth "$depth" \
     "${exclusions[@]}" \
     -type f \( "${name_expression[@]}" \) \
-    -print -quit 2>/dev/null)
+    -print -quit)
   local -i find_status=$?
   if (( find_status != 0 )); then
     _dev_error "Could not probe project files."
@@ -576,9 +637,9 @@ _dev_project_files() {
   local -i limit=$(( 10#$maximum_records ))
   local discovered=""
   discovered=$(
-    command find . -maxdepth "$DEV_SCAN_DEPTH" \
+    _dev_find quiet . -maxdepth "$_DEV_PROJECT_CONTENT_DEPTH" \
       "${exclusions[@]}" \
-      -type f \( "${name_expression[@]}" \) -print0 2>/dev/null \
+      -type f \( "${name_expression[@]}" \) -print0 \
       | _dev_project_limit_nul_stream "Project file inventory" "$limit"
     local -a pipeline_status=("${pipestatus[@]}")
     (( pipeline_status[1] == 0 && pipeline_status[2] == 0 ))

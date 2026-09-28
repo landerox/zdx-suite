@@ -1026,7 +1026,7 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-run-ruff'
 
   [ "$status" -eq 0 ]
-  grep -q '^check --no-fix --no-cache ' "$RUFF_LOG"
+  grep -qx 'check --no-fix --no-cache' "$RUFF_LOG"
 }
 
 @test "dev checks: Ruff lint neutralizes an inherited output-file setting" {
@@ -1108,6 +1108,10 @@ if [[ "$*" == *"-I -m piplicenses"* ]]; then
     printf '%s\n' \
       '[{"Name":"safe","Version":"1.0","License":"MIT","Author":"GPL Foundation"},' \
       '{"Name":"weak","Version":"1.0","License":"LGPL-3.0-only","Author":"Example"}]'
+  elif [[ "$LICENSE_MODE" == "spelled" ]]; then
+    printf '%s\n' \
+      '[{"Name":"agpl","Version":"1.0","License":"GNU Affero General Public License v3","Author":"Example"},' \
+      '{"Name":"lgpl","Version":"1.0","License":"GNU Lesser General Public License v3 (LGPLv3)","Author":"Example"}]'
   elif [[ "$LICENSE_MODE" == "controls" ]]; then
     printf '%s\n' \
       '[{"Name":"evil\u001b[31m","Version":"1.0\rspoof",' \
@@ -1141,6 +1145,12 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-check-licenses --strict'
   [ "$status" -eq 0 ]
   [[ "$output" != *"Potentially restrictive"* ]]
+
+  export LICENSE_MODE="spelled"
+  run run_zsh 'cd "$DEV_PROJECT" && dev-check-licenses --strict'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"agpl | 1.0 | GNU Affero General Public License v3"* ]]
+  [[ "$output" != *"lgpl | 1.0"* ]]
 
   export LICENSE_MODE="malformed"
   run run_zsh 'cd "$DEV_PROJECT" && dev-check-licenses --strict'
@@ -1525,4 +1535,172 @@ EOF
 
   [ "$status" -eq 1 ]
   [[ "$output" != *"9.9.9"* ]]
+}
+
+@test "dev menu: an unreadable project directory does not block the menu" {
+  [ "$(id -u)" -ne 0 ] || skip "root can read every directory"
+  : > "$DEV_PROJECT/pyproject.toml"
+  mkdir -p "$DEV_PROJECT/pgdata/base"
+  chmod 000 "$DEV_PROJECT/pgdata"
+
+  run run_zsh 'cd "$DEV_PROJECT" && _dev_menu_context'
+  chmod 700 "$DEV_PROJECT/pgdata"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipping unreadable directory: ./pgdata"* ]]
+  [[ "$output" == *"Stack: python"* ]]
+}
+
+@test "dev checks: tests below the stack-detection depth are still detected" {
+  mkdir -p "$DEV_PROJECT/tests/integration/api"
+  : > "$DEV_PROJECT/tests/integration/api/test_users.py"
+
+  run run_zsh 'cd "$DEV_PROJECT" && _dev_has_tests'
+  [ "$status" -eq 0 ]
+}
+
+@test "dev checks: markdownlint lints only the pruned project inventory" {
+  : > "$DEV_PROJECT/package.json"
+  : > "$DEV_PROJECT/README.md"
+  mkdir -p "$DEV_PROJECT/docs/deep/nested/path" "$DEV_PROJECT/node_modules/.bin" \
+    "$DEV_PROJECT/node_modules/dep" "$DEV_PROJECT/vendor/x" "$DEV_PROJECT/nested/.git"
+  : > "$DEV_PROJECT/docs/deep/nested/path/guide.md"
+  : > "$DEV_PROJECT/node_modules/dep/README.md"
+  : > "$DEV_PROJECT/vendor/x/NOTES.md"
+  : > "$DEV_PROJECT/nested/other.md"
+  cat > "$DEV_PROJECT/node_modules/.bin/markdownlint" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$TEST_TEMP_DIR/markdownlint.args"
+MOCK
+  chmod +x "$DEV_PROJECT/node_modules/.bin/markdownlint"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-run-markdownlint --fix'
+
+  [ "$status" -eq 0 ]
+  grep -Fxq -- './README.md' "$TEST_TEMP_DIR/markdownlint.args"
+  grep -Fxq -- './docs/deep/nested/path/guide.md' "$TEST_TEMP_DIR/markdownlint.args"
+  grep -Fxq -- '--fix' "$TEST_TEMP_DIR/markdownlint.args"
+  ! grep -q 'node_modules/dep\|vendor/\|nested/other\|\*\*' \
+    "$TEST_TEMP_DIR/markdownlint.args"
+}
+
+@test "dev checks: Ruff never widens an explicit path selection" {
+  mkdir -p "$DEV_PROJECT/src"
+  : > "$DEV_PROJECT/src/a.py"
+  export RUFF_LOG="$TEST_TEMP_DIR/ruff.log"
+  cat > "$TEST_MOCK_BIN/ruff" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RUFF_LOG"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/ruff"
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-run-ruff-format src/a.py && dev-run-ruff src/a.py'
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RUFF_LOG")" = $'format src/a.py\ncheck --no-fix --no-cache src/a.py' ]
+}
+
+@test "dev checks: clustered short flags and ESLint remote-code flags are refused" {
+  run run_zsh 'cd "$DEV_PROJECT" && dev-run-ruff -eo "$TEST_TEMP_DIR/out.txt"'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"read-only"* ]]
+
+  run run_zsh 'cd "$DEV_PROJECT" && dev-run-prettier -uw'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"read-only"* ]]
+
+  local flag
+  for flag in --inspect-config --mcp; do
+    run run_zsh "cd \"\$DEV_PROJECT\" && dev-run-eslint $flag"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"downloads and runs remote code"* ]]
+  done
+}
+
+@test "dev health: a .python-version comment line is accepted like uv does" {
+  printf '# Managed by uv\n3.12\n' > "$DEV_PROJECT/.python-version"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    _dev_health_read_python_pin 2>"$TEST_TEMP_DIR/pin.stderr"
+    print -r -- "pin_status=$? pin=$REPLY"
+  '
+
+  [[ "$output" == *"pin_status=0 pin=3.12"* ]] || {
+    cat "$TEST_TEMP_DIR/pin.stderr"
+    false
+  }
+  ! grep -q "whitespace-delimited" "$TEST_TEMP_DIR/pin.stderr"
+}
+
+@test "dev checks: the license capture limit counts trailing newlines" {
+  run run_zsh '
+    _DEV_LICENSE_OUTPUT_LIMIT=10
+    _dev_license_capture_output probe printf "0123456789\nTAIL\n" && exit 91
+    _dev_license_capture_output probe printf "0123\n\n" || exit 92
+    [[ "$REPLY" == 0123 ]]
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exceeds the 10 MiB safety limit"* ]]
+}
+
+@test "dev export: published requirements keep normal file permissions" {
+  printf '[project]\nname = "demo"\nversion = "1.0.0"\n' \
+    > "$DEV_PROJECT/pyproject.toml"
+  printf 'lock\n' > "$DEV_PROJECT/uv.lock"
+  cat > "$TEST_MOCK_BIN/uv" <<'MOCK'
+#!/usr/bin/env bash
+printf 'demo==1.0.0\n'
+MOCK
+  chmod +x "$TEST_MOCK_BIN/uv"
+  printf 'old\n' > "$DEV_PROJECT/requirements.txt"
+  chmod 644 "$DEV_PROJECT/requirements.txt"
+
+  run run_zsh 'cd "$DEV_PROJECT" && umask 022 && dev-export-deps --yes && dev-export-deps -o new.txt --yes'
+
+  [ "$status" -eq 0 ]
+  [ "$(stat -c '%a' "$DEV_PROJECT/requirements.txt")" = "644" ]
+  [ "$(stat -c '%a' "$DEV_PROJECT/new.txt")" = "644" ]
+  grep -qx 'demo==1.0.0' "$DEV_PROJECT/requirements.txt"
+}
+
+@test "dev checks: an interrupted gate stops the aggregate" {
+  : > "$DEV_PROJECT/example.py"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    dev-run-ruff() { return 130; }
+    dev-check-types() { print -u2 -r -- "LATER_GATE_RAN"; return 0; }
+    dev-run-audit() { print -u2 -r -- "LATER_GATE_RAN"; return 0; }
+    dev-run-bandit() { print -u2 -r -- "LATER_GATE_RAN"; return 0; }
+    dev-run-tests() { print -u2 -r -- "LATER_GATE_RAN"; return 0; }
+    dev-run-all-checks
+  '
+
+  [ "$status" -eq 130 ]
+  [[ "$output" != *"LATER_GATE_RAN"* ]]
+  [[ "$output" == *"Checks were interrupted (status 130)"* ]]
+}
+
+@test "dev PyPI: leading whitespace keeps a dependency and names stay ASCII" {
+  printf '%s\n' '[project]' 'name = "demo"' \
+    'dependencies = [" requests>=2.0", "httpx >=0.1"]' \
+    > "$DEV_PROJECT/pyproject.toml"
+
+  run run_zsh '
+    cd "$DEV_PROJECT"
+    _dev_pyproject_all_deps || exit 91
+    print -rl -- "${(@o)reply}"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'httpx\nrequests' ]
+
+  run run_zsh '
+    export LC_ALL=C.UTF-8
+    _dev_normalize_pkg_name "café" && exit 92
+    _dev_normalize_pkg_name "İ" && exit 93
+    _dev_normalize_pkg_name "Foo_Bar.baz"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "foo-bar-baz" ]
 }
