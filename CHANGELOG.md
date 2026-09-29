@@ -61,6 +61,47 @@ behavior, verification, and remaining limitations.
     locale-independent name and version checks, a partial hook plan with an
     unchanged mutable revision, the PyPI cache of `dev-update-precommit`, and
     an interrupted `.venv` rename now behave correctly.
+- Git suite review:
+  - `git-push --tags` and `--all` no longer print the raw push URL, including
+    any embedded credentials, to stdout when a plan holds several refs.
+  - Pushes ignore `push.followTags` and `push.recurseSubmodules`, so only the
+    reviewed refs are published; the `git-pr-create` push is bound to the
+    reviewed remote head and refuses a non-fast-forward.
+  - `git-stage`, `git-unstage`, `git-discard`, `git-undo-commit`,
+    `git-staged`, `git-diff`, and `git-file-history` run from the repository
+    root, so a selection made in a subdirectory always names the right file.
+    `git-discard` refuses untracked or ignored paths that a restore would
+    overwrite, and staged renames offer both paths.
+  - `git-undo-commit` and `git-amend` show the current branch and refuse to
+    continue if another branch was checked out at the same commit.
+  - `git-switch` binds an existing local branch to its own commit and reports
+    an unknown branch name; upstreams use full remote-tracking refs.
+  - `clean-branches` removes the deleted branch's configuration and
+    `clean-remote-merged` removes the matching remote-tracking ref.
+  - Untracked stashes skip nested repositories, which `git stash -u` leaves in
+    place; stash diffs are written to stdout.
+  - A local `git-identity-switcher` profile overrides signing and
+    `core.sshCommand` inherited from another scope; `git-pr-create` accepts
+    SSH host aliases such as `github-<identity>`; remote refs outside the
+    requested namespace no longer break tag or fetch-prune plans; an
+    interrupted multi-ref push or tag deletion stops with its status.
+- Workspace suite review:
+  - `ws-remove` no longer deletes neighbouring `~/.ssh/config` blocks written
+    as lowercase `host`, `Host=name`, `Match`, or marked workspace blocks after
+    a legacy entry. It reports a missing entry instead of success, and leaves
+    `~/.gitconfig` untouched when there is no `includeIf` to remove.
+  - Identity, alias, hostname, and repository names are validated by code
+    point, so a UTF-8 locale cannot accept `josé` and block later workspaces.
+  - Workspace creation, removal, and migration work when `HOME` traverses a
+    symbolic link, as with `/home -> var/home`.
+  - `ws-autoclean` ignores `chpwd` hooks and removes the deleted branch's
+    configuration; `ws-sync` keeps Git output off stdout and skips checkout
+    candidates in detached repositories.
+  - `ws-clone-multi` picks the platform from the URL host and trims pasted
+    whitespace; `ws-menu <command> --help` works without fzf; nested
+    completion offers the command's own options; `ws-list` renders its status
+    glyphs under a matching header; loop variables no longer leak into the
+    caller's shell.
 
 ## [0.1.0] — 2026-09-06
 

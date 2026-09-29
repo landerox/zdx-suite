@@ -98,3 +98,28 @@ teardown() {
   [[ "$output" == *"Global Jane"* ]]
   [[ "$output" == *"global-jane@doe.dev"* ]]
 }
+
+@test "git-identity: a local profile overrides inherited signing and SSH selection" {
+  run run_zsh "
+    cd '$REPO_DIR'
+    typeset -gA ZDX_GIT_IDENTITIES
+    ZDX_GIT_IDENTITIES=(
+      work 'Name|Work Jane;Email|jane@work.example;GpgKey|WORKKEYID;SshKey|~/.ssh/id_work'
+      personal 'Name|Jane;Email|jane@personal.example'
+    )
+    git-identity-switcher --switch work global 2>/dev/null || exit 10
+    git-identity-switcher --switch personal local 2>'$HOME/local.stderr' || exit 11
+    print -r -- \"email=\$(git config --get user.email)\"
+    print -r -- \"commit=\$(git config --get commit.gpgSign)\"
+    print -r -- \"tag=\$(git config --get tag.gpgSign)\"
+    print -r -- \"ssh=\$(git config --get core.sshCommand)\"
+    print -r -- \"global=\$(git config --global --get commit.gpgSign)\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"email=jane@personal.example"* ]]
+  [[ "$output" == *"commit=false"* ]]
+  [[ "$output" == *"tag=false"* ]]
+  [[ "$output" == *"ssh=ssh"* ]]
+  [[ "$output" == *"global=true"* ]]
+  grep -Fq "overrides inherited core.sshCommand" "$HOME/local.stderr"
+}

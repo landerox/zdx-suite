@@ -16,7 +16,8 @@ _ws_menu_complete_workspaces() {
     for identity_dir in "$platform_dir"/*(/N); do
       [[ ! -L "$identity_dir" \
         && "${identity_dir:a}" == "${identity_dir:A}" \
-        && "${identity_dir:t}" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] \
+        && "${identity_dir:t}" == [A-Za-z0-9]* \
+        && "${identity_dir:t}" != *[^A-Za-z0-9._-]* ]] \
         || continue
       workspace_name="${platform_dir:t}/${identity_dir:t}"
       workspace_names+=("$workspace_name")
@@ -59,7 +60,7 @@ if [[ "$service" == "ws-menu" ]]; then
       return
       ;;
     arguments)
-      command_name="${words[2]:-}"
+      command_name="${words[1]:-}"
       ;;
     *)
       return

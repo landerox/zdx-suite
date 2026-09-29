@@ -115,13 +115,15 @@ ws-list() {
   fi
 
   # Table header
-  printf "%-24s %-20s %-30s %-8s %-12s\n" \
-    "WORKSPACE" "HOST" "EMAIL" "REPOS" "KEY" >&2
-  printf "%-24s %-20s %-30s %-8s %-12s\n" \
+  printf "%-24s %-20s %-30s %-8s %-12s %-14s\n" \
+    "WORKSPACE" "HOST" "EMAIL" "REPOS" "KEY" "GH" >&2
+  printf "%-24s %-20s %-30s %-8s %-12s %-14s\n" \
     "────────────────────────" "────────────────────" \
-    "──────────────────────────────" "────────" "────────────" >&2
+    "──────────────────────────────" "────────" "────────────" \
+    "──────────────" >&2
 
   local ws=""
+  local r=""
   for ws in ${(f)workspaces}; do
     local platform="${ws%%/*}"
     local identity="${ws#*/}"
@@ -155,7 +157,7 @@ ws-list() {
     fi
 
     # GH CLI status for this host
-    local gh_col="\u2014"
+    local gh_col="—"
     if _tk_check_cmd gh; then
       if gh auth status --hostname "$hostname" &>/dev/null; then
         local gh_acct=""
@@ -164,9 +166,9 @@ ws-list() {
         if [[ "$gh_out" =~ 'as ([^ ]+)' ]]; then
           gh_acct="${match[1]}"
         fi
-        gh_col="\u2714 ${gh_acct:-ok}"
+        gh_col="✔ ${gh_acct:-ok}"
       else
-        gh_col="\u2718 none"
+        gh_col="✘ none"
       fi
     fi
 
@@ -273,6 +275,7 @@ ws-info() {
   # Repos
   print -u2 -r -- "  📦 Repositories:"
   local repo_count=0
+  local r=""
   for r in "$ws_dir"/*(DN/); do
     [[ "${r:t}" == ".ssh" ]] && continue
     if _ws_validate_repo_dir "$ws_dir" "$r"; then
@@ -394,6 +397,7 @@ ws-doctor() {
     fi
 
     # Check repos have correct remote alias
+    local r=""
     for r in "$ws_dir"/*(DN/); do
       [[ "${r:t}" == ".ssh" ]] && continue
       if _ws_validate_repo_dir "$ws_dir" "$r"; then

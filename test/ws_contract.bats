@@ -114,8 +114,6 @@ assert_contract_matches() {
   command_list=$(contract_commands | tr '\n' ' ')
 
   run run_zsh "
-    _ws_verify_deps() { return 0; }
-
     local command_name result
     for command_name in $command_list; do
       functions[\$command_name]='print -r -- "\$0"'
@@ -200,4 +198,38 @@ assert_contract_matches() {
   [ "$(cat "$HOME/ws-timing")" = "ws:ws-clone" ]
   [ "$(cat "$HOME/ws-dispatch")" = \
     $'ws-clone\nowner/repo with spaces' ]
+}
+
+@test "ws contract: nested completion reads the routed command word" {
+  command mkdir -p "$HOME/workspaces/github/alice"
+  run env COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_ws-menu" \
+    WS_BASE_DIR="$HOME/workspaces" \
+    zsh -f -c '
+      capture_specs() {
+        local -a words=("$@")
+        local -i CURRENT=${#words[@]}
+        local service="${words[1]}"
+
+        _arguments() {
+          if [[ "${1:-}" == "-C" ]]; then
+            words=("${words[@]:1}")
+            (( CURRENT-- ))
+            state="arguments"
+            return 0
+          fi
+          print -rl -- "$@"
+        }
+        _describe() { print -rl -- "describe:$2" "${(@P)3}"; }
+
+        source "$COMPLETION_FILE"
+      }
+
+      local command_name=""
+      for command_name in ws-remove ws-clone ws-sync; do
+        [[ "$(capture_specs "$command_name" "")" \
+          == "$(capture_specs ws-menu "$command_name" "")" ]] || return 1
+      done
+      [[ "$(capture_specs ws-menu ws-remove "")" == *"--dry-run"* ]] || return 2
+    '
+  [ "$status" -eq 0 ]
 }

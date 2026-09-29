@@ -132,13 +132,13 @@ core-package and optional-tool success/failure/not-run totals.
 | --- | --- |
 | `git_contract.bats` | Frozen 39-command fixture; module, function, menu, help, dispatcher, nested-completion, and direct-completion parity |
 | `git_interface.bats` | Exact routing and timing, parser-before-probe behavior, stream separation, standalone and repeat sourcing, exact-root loader failure and retry, `NO_COLOR`, row validation, and fzf behavior |
-| `git_safety.bats` | Credential redaction, non-TTY refusal, post-review configuration revalidation, literal pathspec isolation, identity-data non-execution, renamed-file history, and exact pull-request OID comparison |
+| `git_safety.bats` | Credential redaction, non-TTY refusal, post-review configuration revalidation, literal pathspec isolation, identity-data non-execution, renamed-file history, exact pull-request OID comparison, SSH host-alias PR remotes, subdirectory path selections, untracked discard obstacles, branch-bound undo plans, local-branch switching, nested-repository stashes with stdout diffs, and staged-rename unstaging |
 | `git_github_safety.bats` | Deny-by-default GitHub writes, push-remote precedence, local pull-request head identity, and rejection of multiple push URLs |
 | `git_pr_merge_recovery.bats` | Complete versus pending GitHub merge requests, final identity/head/state verification, failed post-queries, preserved backend errors, and cancellation without a write |
-| `git_remote.bats` | Real disposable repositories and remotes for exact pushes, isolated pull/fetch, tag publication and deletion, and leased branch cleanup |
+| `git_remote.bats` | Real disposable repositories and remotes for exact pushes, isolated pull/fetch, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, and full-ref upstreams |
 | `git_sync_recovery.bats`, `git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, frozen tag OIDs and leases, and rejection of multiple push URLs before and after review |
 | `git_local_recovery.bats` | Ordered multi-commit cherry-picks, conflict continuation and full-sequence abort, cancellation, preserved interruptions, and independent ordinary failures |
-| `git_identity.bats` | Local and global identity status, validation, and profile application |
+| `git_identity.bats` | Local and global identity status, validation, profile application, and local overrides of inherited signing and SSH selection |
 | `git_ws.bats` | Legacy Git/workspace compatibility without expanding the documented cross-suite dependency |
 
 GitHub writes use a deny-by-default `gh` recorder, while transport workflows
@@ -150,9 +150,9 @@ and manual-smoke-test boundary.
 
 | File | Covered boundary |
 | --- | --- |
-| `ws_contract.bats` | The frozen 15-command fixture; function, menu, help, dispatcher, completion, cancellation, timing, and argument-forwarding parity |
+| `ws_contract.bats` | The frozen 15-command fixture; function, menu, help, dispatcher, completion, direct and nested completion grammar parity, cancellation, timing, and argument-forwarding parity |
 | `ws_interface.bats` | Stderr-only entrypoint UI, invalid statuses, per-command help and unknown-option parsers before probes, validated three-field records, canonical fzf behavior, private capture permissions, multi-select output, exact statuses and cleanup, standalone exact-root loading, and lazy/eager parity |
-| `ws_safety.bats` | Arbitrary-command and Git-first loader regressions; unsafe workspace roots and creation-picker failures; exact removal, configuration parse failure, and replacement races; clone failures and destination collisions; migration remote/link boundaries; invocation-owned stash preservation; frozen-upstream and synchronization inspection races; stale-branch expected-OID races; credential-redacted remotes; keypair rollback; bounded SSH; constant previews; and top-level plus nested foreground process-group ownership |
+| `ws_safety.bats` | Arbitrary-command and Git-first loader regressions; unsafe workspace roots and creation-picker failures; exact removal, configuration parse failure, and replacement races; clone failures and destination collisions; migration remote/link boundaries; invocation-owned stash preservation; frozen-upstream and synchronization inspection races; stale-branch expected-OID races; credential-redacted remotes; keypair rollback; bounded SSH; constant previews; top-level plus nested foreground process-group ownership; bounded legacy SSH removal with unchanged no-op files; locale-independent validation; symlinked homes; `chpwd`-hook isolation and clean `ws-sync` stdout; host-based batch platforms; routed help before probes; `ws-list` rendering; and deleted-branch configuration removal |
 | `ws_migration_recovery.bats` | Confirmed absent versus unreadable origins, remote rewrite verification, partial results, preserved interruption statuses, and independent later moves |
 | `ws_clone_recovery.bats` | Independent cloning after partial failure, stable workspace identity and permissions, changes between attempts, preserved interruptions, and destination collisions |
 | `ws_create_recovery.bats` | Passive SSH alias preflight, exact host/user/key/identity policy, Host pattern and value parsing, quoted paths, and configuration revalidation before publication |

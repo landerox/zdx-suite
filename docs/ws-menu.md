@@ -272,12 +272,14 @@ the suite; those records are not a public interface.
 
 ## Workspace identity and path boundary
 
-`WS_BASE_DIR` defaults to `$HOME/workspaces`. `_ws_validate_base_dir` requires
-it to be:
+`WS_BASE_DIR` defaults to `${HOME:A}/workspaces`, the canonical home, so the
+default stays valid when `HOME` itself traverses a symbolic link such as
+`/home -> var/home`. `~/.ssh` and `~/.gitconfig` are addressed through the same
+canonical home. `_ws_validate_base_dir` requires it to be:
 
 - non-empty and absolute;
 - free of control characters, `.` components, and `..` traversal;
-- neither `/` nor the home directory itself;
+- neither `/` nor the home directory itself, literally or after resolution;
 - a canonical path with no symbolic-link component; and
 - a real non-symlink directory when it already exists.
 
@@ -293,7 +295,10 @@ gitlab/identity
 
 The platform is allowlisted. The identity is at most 64 characters, begins
 with an alphanumeric, and then contains only letters, numbers, dots,
-underscores, or dashes. Empty values, extra path components, leading options,
+underscores, or dashes. These character classes, like the SSH alias, hostname,
+and repository-name grammars, are matched by code point with Zsh bracket
+patterns rather than `=~`, whose ranges follow the locale collation and accept
+characters such as `é` under a UTF-8 locale. Empty values, extra path components, leading options,
 `.` and `..` are refused. `_ws_resolve_workspace` proves the resulting
 canonical path remains a non-symlink descendant of the validated base.
 
@@ -465,7 +470,16 @@ frozen by that metadata plus a bounded content checksum and are revalidated
 during each staged rewrite. SSH and Git configuration updates use private
 same-directory mode-`600` temporaries and atomic rename; Git removal addresses
 the exact `includeIf` key and refuses parser failure instead of publishing an
-uncertain result or deleting the workspace.
+uncertain result or deleting the workspace. A file is republished only when an
+entry was actually removed, and a missing entry is reported instead of a
+success.
+
+A legacy SSH block, one without `BEGIN`/`END` markers such as a reused
+hand-written alias, starts at the exact single-name `Host <alias>` line (any
+keyword case, whitespace or `=` separator) and its directly preceding
+`# Workspace:` comment. It ends at the next `Host` or `Match` keyword in any
+case and with either separator, or at the next `# Workspace:` comment or
+`# BEGIN ws:` marker, so neighbouring blocks are never removed.
 
 Immediately before deletion, the directory fingerprints are checked again.
 The workspace is first renamed to an unpredictable quarantine sibling, its
@@ -510,6 +524,10 @@ git update-ref -d refs/heads/<branch> <expected-object-id>
 ```
 
 That compare-and-delete is atomic with respect to a concurrent branch repoint.
+A successful deletion also removes the `branch.<name>` configuration section,
+as `git branch -D` does, so a recreated branch cannot inherit a gone upstream.
+Repository probes enter directories with `builtin cd -q`, so user `chpwd` hooks
+cannot alter captured values.
 The command checks linked worktrees again afterwards. If a branch became active
 during the deletion window, it attempts to restore the exact prior object only
 while the ref remains absent and reports failure either way. Every scan,
@@ -525,16 +543,16 @@ Set these values in `~/.config/zdx/config.zsh`:
 
 | Variable | Default | Contract |
 | --- | --- | --- |
-| `WS_BASE_DIR` | `$HOME/workspaces` | Absolute, canonical, non-symlink managed workspace root; cannot be `/` or the home directory |
+| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Absolute, canonical, non-symlink managed workspace root; cannot be `/` or the home directory |
 | `WS_SSH_CONNECT_TIMEOUT` | `10` | SSH connection deadline for `ws-test`; integer `1`–`60` |
 
 ## Test coverage
 
 | File | Covered boundary |
 | --- | --- |
-| `ws_contract.bats` | Frozen 15-command fixture; function, menu, help, dispatcher, completion, cancellation, timing, and argument-forwarding parity |
+| `ws_contract.bats` | Frozen 15-command fixture; function, menu, help, dispatcher, completion, direct and nested completion grammar parity, cancellation, timing, and argument-forwarding parity |
 | `ws_interface.bats` | Stderr-only entrypoint UI, invalid statuses, per-command help and unknown-option parsers before probes, validated three-field rows, fzf options, private result capture, exact statuses and cleanup, standalone exact-root source, and lazy/eager parity |
-| `ws_safety.bats` | Arbitrary-command execution regression, Git-before-Workspace loading, unsafe roots, creation-picker failure, exact and quarantined removal, configuration parse and replacement failure, clone status propagation and collisions, exact stash preservation, frozen-upstream ref races, synchronization inspection failure, migration and repository-link boundaries, compare-and-delete OID races, remote redaction, key rollback, bounded SSH, and top-level plus nested foreground terminal ownership |
+| `ws_safety.bats` | Arbitrary-command execution regression, Git-before-Workspace loading, unsafe roots, creation-picker failure, exact and quarantined removal, configuration parse and replacement failure, clone status propagation and collisions, exact stash preservation, frozen-upstream ref races, synchronization inspection failure, migration and repository-link boundaries, compare-and-delete OID races, remote redaction, key rollback, bounded SSH, top-level plus nested foreground terminal ownership, bounded legacy SSH removal with unchanged no-op files, locale-independent validation, symlinked homes, `chpwd`-hook isolation, clean `ws-sync` stdout, host-based batch platforms, routed help before probes, `ws-list` rendering, and deleted-branch configuration removal |
 | `ws_migration_recovery.bats` | Absent versus unreadable origins, verified remote rewrites, retained moved repositories after partial failure, preserved interruptions, and independent later moves |
 | `ws_clone_recovery.bats` | Retained partial clones, independent continuation, stable workspace identity, replacement and mode races, preserved interruptions, and destination collisions |
 | `ws_create_recovery.bats` | Passive alias conflicts and compatibility, exact identity fields, wildcard defaults, literal SSH values and quoted paths, unsupported dynamic routing, and configuration changes before publication |

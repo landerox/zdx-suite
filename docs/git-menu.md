@@ -510,6 +510,26 @@ snapshot, execution, and postcondition checks.
 Tag publication and deletion, including no-op detection, use that same single
 push destination. Publication uses the frozen local OID and an absence lease;
 remote branch cleanup also rejects multiple push URLs before mutation.
+Every push passes `--no-follow-tags --recurse-submodules=no`, so
+`push.followTags` and `push.recurseSubmodules` cannot add refs that the plan
+never listed. The `git-pr-create` publication is an exact lease on the
+reviewed remote head (or its absence) after proving a fast-forward. Because a
+push to the frozen URL bypasses the remote's fetch refspec,
+`clean-remote-merged` deletes the matching remote-tracking ref with an exact
+OID lease, and `clean-branches` removes the deleted branch's configuration
+section as `git branch -d` does. Upstreams are configured from full
+`refs/remotes/<remote>/<branch>` names. `git ls-remote` matches patterns
+against the tail of each ref, so remote snapshots keep only refs that match
+the requested exact ref or literal prefix.
+
+Path-based local commands (`git-stage`, `git-unstage`, `git-discard`,
+`git-undo-commit`, `git-staged`, `git-diff`, and `git-file-history`) run from
+the repository root, because Git lists root-relative paths but resolves
+pathspecs from the current directory. Their path lists disable rename
+detection so both sides of a staged rename are offered. The plan HEAD identity
+is the commit plus its symbolic ref: `git-undo-commit` and `git-amend` show the
+current branch and refuse to continue when another branch was checked out,
+even at the same commit.
 
 Pull and fetch operations download reviewed refs into an invocation-owned
 temporary namespace with implicit ref mappings, tags, pruning, submodules,
@@ -523,10 +543,11 @@ is independent of publication configuration.
 
 Multiple cherry-picks run as one native Git sequence in oldest-first order.
 After a conflict, continue and skip retain the remaining reviewed commits;
-abort restores the start of the sequence. Stash deletion, discard, and restore
-stop before later targets on interruption (`130` or `143`), preserve that
-status, and report completed, failed, and unattempted targets. Ordinary target
-failures still allow independent selected targets to run.
+abort restores the start of the sequence. Stash deletion, discard, restore,
+multi-ref pushes, tag publication, tag deletion, and remote branch cleanup stop
+before later targets on interruption (`130` or `143`), preserve that status,
+and report completed work. Ordinary target failures still allow independent
+selected targets to run.
 
 GitHub writes re-fetch the issue, pull request, repository, or branch state
 after confirmation. Multi-target writes run sequentially unless concurrency is
@@ -575,13 +596,13 @@ behavior and the shared documentation are aligned at this snapshot.
 | `test/fixtures/git-public-commands.tsv` | Required frozen 39-command inventory, module ownership, risk, and capability metadata |
 | `test/git_contract.bats` | Exact fixture, module, menu, help, dispatcher, nested-completion, and direct-completion parity |
 | `test/git_interface.bats` | Exact routing and timing, all direct help streams, outside-repository annotations, standalone and double sourcing, exact-root loader failure and retry, `NO_COLOR`, row validation, and fzf behavior |
-| `test/git_safety.bats` | Credential redaction, non-TTY refusal, post-review configuration revalidation, literal pathspec isolation, identity-data non-execution, renamed-file history, and exact PR OID comparison |
+| `test/git_safety.bats` | Credential redaction, non-TTY refusal, post-review configuration revalidation, literal pathspec isolation, identity-data non-execution, renamed-file history, exact PR OID comparison, SSH host-alias PR remotes, subdirectory path selections, untracked discard obstacles, branch-bound undo plans, local-branch switching, nested-repository stashes with stdout diffs, and staged-rename unstaging |
 | `test/git_github_safety.bats` | Push-remote precedence, local PR head naming, exact single push-URL enforcement, and deny-by-default GitHub write calls |
 | `test/git_pr_merge_recovery.bats` | Verified merge completion, accepted pending requests, changed or unreadable final states, backend failure, and declined authorization |
-| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, and leased branch cleanup |
+| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, and full-ref upstreams |
 | `test/git_sync_recovery.bats`, `test/git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, absence leases, moved local tags, and rejection of multiple push URLs before and after review |
 | `test/git_local_recovery.bats` | Multi-commit sequence ordering, conflict continuation and complete abort, cancellation, and interruption versus ordinary failure in local batches |
-| `test/git_identity.bats` | Identity status and local/global profile behavior |
+| `test/git_identity.bats` | Identity status, local/global profile behavior, and local overrides of inherited signing and SSH selection |
 | `test/git_ws.bats` | Existing legacy Git/workspace compatibility checks; must not become permission to expand cross-suite coupling |
 | `test/lazy_loading.bats` | Lazy and eager loading plus caller-owned `ZSH_CUSTOM` preservation |
 

@@ -128,6 +128,7 @@ _git_sync_remote_snapshot() {
     }
     oid="${line%%$'\t'*}"
     ref="${line#*$'\t'}"
+    _git_ls_remote_ref_matches "$pattern" "$ref" || continue
     _git_validate_oid "$oid" && _git_validate_full_ref "$ref" || {
       _git_error "The remote returned an invalid ref or object ID."
       return 1
@@ -515,7 +516,9 @@ _git_sync_revalidate_context() {
   _git_sync_validate_remote "$remote" || return 1
   local current_url
   if [[ "$url_kind" == "push" ]]; then
-    local push_urls_output
+    # Initialize: a bare re-declaration in a loop would print the raw push
+    # URL, credentials included, to stdout on every later record.
+    local push_urls_output=""
     push_urls_output=$(command git remote get-url --push --all \
       "$remote" 2>/dev/null) || push_urls_output=""
     local -a push_urls=()
@@ -909,7 +912,9 @@ _git_push_apply_plan() {
         ;;
     esac
 
-    local push_urls_output
+    # Initialize: a bare re-declaration in a loop would print the raw push
+    # URL, credentials included, to stdout on every later record.
+    local push_urls_output=""
     push_urls_output=$(command git remote get-url --push --all \
       "$remote" 2>/dev/null) || push_urls_output=""
     local -a push_urls=()
@@ -994,7 +999,10 @@ _git_push_apply_plan() {
       lease_arg="--force-with-lease=${remote_ref}:${expected_remote_oid}"
     fi
 
-    local -a push_cmd=(command git push "$lease_arg")
+    # push.followTags and push.recurseSubmodules must not add refs that the
+    # reviewed plan never listed.
+    local -a push_cmd=(command git push --no-follow-tags
+      --recurse-submodules=no "$lease_arg")
     [[ "$mode" == "force" ]] && push_cmd+=(--force-if-includes)
     push_cmd+=(-- "$push_url" "${local_oid}:${remote_ref}")
 
@@ -1050,7 +1058,7 @@ _git_push_apply_plan() {
           return 1
         }
         command git branch \
-          "--set-upstream-to=${remote}/${remote_ref#refs/heads/}" \
+          "--set-upstream-to=refs/remotes/${remote}/${remote_ref#refs/heads/}" \
           "${local_ref#refs/heads/}" >&2 || {
           _git_error \
             "Remote push succeeded, but upstream configuration failed."
@@ -1060,6 +1068,9 @@ _git_push_apply_plan() {
       local displayed_local="$(_git_display_escape "$local_ref")"
       local displayed_remote="$(_git_display_escape "$remote_ref")"
       _git_success "Pushed $displayed_local to $remote/$displayed_remote."
+    elif (( push_rc == 130 || push_rc == 143 )); then
+      _git_warn "Push interrupted: $pushed ref update(s) completed before the interruption."
+      return "$push_rc"
     else
       _git_error \
         "Push failed for $(_git_display_escape "$remote_ref") (exit $push_rc)."

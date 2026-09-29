@@ -455,6 +455,8 @@ init_seeded_remote_worktree() {
   init_seeded_remote_worktree
 
   git -C "$WORK_REPO" branch merged-local main
+  git -C "$WORK_REPO" config branch.merged-local.remote origin
+  git -C "$WORK_REPO" config branch.merged-local.merge refs/heads/merged-local
   git -C "$WORK_REPO" switch -q -c unmerged-local main
   printf '%s\n' "unmerged" > "$WORK_REPO/unmerged.txt"
   git -C "$WORK_REPO" add -- unmerged.txt
@@ -510,6 +512,8 @@ init_seeded_remote_worktree() {
   git -C "$WORK_REPO" show-ref --verify --quiet refs/heads/main
   [ "$(git -C "$WORK_REPO" rev-parse refs/heads/unmerged-local)" = \
     "$UNMERGED_LOCAL_OID" ]
+  # Like git branch -d, a recreated branch must not inherit the old upstream.
+  [ -z "$(git -C "$WORK_REPO" config --get-regexp '^branch\.merged-local\.' || true)" ]
 }
 
 @test "clean-remote-merged: dry run is inert and leased cleanup deletes only merged remote target" {
@@ -593,4 +597,101 @@ init_seeded_remote_worktree() {
   [ "$(git --git-dir="$REMOTE_REPO" for-each-ref \
     --format='%(refname)' refs/heads)" = \
     $'refs/heads/main\nrefs/heads/unmerged-remote' ]
+  # The URL push bypasses the fetch refspec; the stale tracking ref must go.
+  ! git -C "$WORK_REPO" show-ref --verify --quiet \
+    refs/remotes/origin/merged-remote || false
+  git -C "$WORK_REPO" show-ref --verify --quiet \
+    refs/remotes/origin/unmerged-remote
+}
+
+@test "git-push: exact plans ignore push.followTags and keep stdout empty across refs" {
+  init_empty_remote_worktree
+  git -C "$WORK_REPO" config push.followTags true
+  git -C "$WORK_REPO" config push.recurseSubmodules check
+  git -C "$WORK_REPO" tag -a -m unreleased unreleased-v9
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --ref refs/heads/main --yes \
+      >"$HOME/branch.stdout" 2>"$HOME/branch.stderr" || return 10
+    command git tag -d unreleased-v9 >/dev/null || return 11
+    command git tag v1 && command git tag v2 && command git tag v3 || return 12
+    git-push --remote origin --tags --yes \
+      >"$HOME/tags.stdout" 2>"$HOME/tags.stderr" || return 13
+  '
+
+  if [ "$status" -ne 0 ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    cat "$HOME/branch.stderr" "$HOME/tags.stderr" >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/branch.stdout" ]
+  [ ! -s "$HOME/tags.stdout" ]
+  [ "$(git --git-dir="$REMOTE_REPO" for-each-ref --format='%(refname)')" = \
+    $'refs/heads/main\nrefs/tags/v1\nrefs/tags/v2\nrefs/tags/v3' ]
+}
+
+@test "git-tag-push: an exact tag push ignores push.followTags" {
+  init_empty_remote_worktree
+  git -C "$WORK_REPO" push -q origin refs/heads/main:refs/heads/main
+  git -C "$WORK_REPO" config push.followTags true
+  git -C "$WORK_REPO" tag -a -m internal internal-rc
+  git -C "$WORK_REPO" tag v1
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-tag-push --remote origin --yes v1 \
+      >"$HOME/tag.stdout" 2>"$HOME/tag.stderr"
+  '
+
+  [ "$status" -eq 0 ] || { cat "$HOME/tag.stderr" >&2; false; }
+  [ ! -s "$HOME/tag.stdout" ]
+  [ "$(git --git-dir="$REMOTE_REPO" for-each-ref --format='%(refname)')" = \
+    $'refs/heads/main\nrefs/tags/v1' ]
+}
+
+@test "git remote snapshots ignore ls-remote tail matches outside the namespace" {
+  init_empty_remote_worktree
+  git -C "$WORK_REPO" push -q origin \
+    refs/heads/main:refs/heads/main \
+    refs/heads/main:refs/heads/ci/refs/tags/nightly \
+    refs/heads/main:refs/tags/rel/refs/heads/x
+  git -C "$WORK_REPO" fetch -q origin
+  git -C "$WORK_REPO" tag v1
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-tag-push --remote origin --dry-run v1 \
+      >"$HOME/tag.stdout" 2>"$HOME/tag.stderr" || return 10
+    git-pull --fetch-prune --yes \
+      >"$HOME/prune.stdout" 2>"$HOME/prune.stderr" || return 11
+  '
+
+  if [ "$status" -ne 0 ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    cat "$HOME/tag.stderr" "$HOME/prune.stderr" >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  grep -Fq "refs/tags/v1 @" "$HOME/tag.stderr"
+  ! grep -Fq "refs/heads/ci/refs/tags/nightly" "$HOME/tag.stderr" || false
+  ! grep -Fq "refs/remotes/origin/refs/" "$HOME/prune.stderr" || false
+  git -C "$WORK_REPO" show-ref --verify --quiet \
+    refs/remotes/origin/ci/refs/tags/nightly
+}
+
+@test "git-push: upstream configuration uses the full tracking ref" {
+  init_empty_remote_worktree
+  # A local branch named origin/main makes the short upstream name ambiguous.
+  git -C "$WORK_REPO" branch origin/main
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --set-upstream --yes \
+      >"$HOME/push.stdout" 2>"$HOME/push.stderr"
+  '
+
+  [ "$status" -eq 0 ] || { cat "$HOME/push.stderr" >&2; false; }
+  [ ! -s "$HOME/push.stdout" ]
+  [ "$(git -C "$WORK_REPO" config branch.main.remote)" = origin ]
+  [ "$(git -C "$WORK_REPO" config branch.main.merge)" = refs/heads/main ]
 }

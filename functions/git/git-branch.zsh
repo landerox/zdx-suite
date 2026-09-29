@@ -170,6 +170,7 @@ git-switch() {
           --format='%(refname)' "refs/remotes/*/$branch_name" 2>/dev/null)}"
       )
       matches=("${(@)matches:#refs/remotes/*/HEAD}")
+      matches=("${(@)matches:#}")
       (( ${#matches[@]} == 1 )) || {
         _git_error \
           "Branch '$branch_name' is neither local nor uniquely available on a remote."
@@ -242,14 +243,21 @@ git-switch() {
     _git_error "The remote branch cannot become a safe local branch name."
     return 1
   }
-  if command git show-ref --verify --quiet "refs/heads/$remote_branch"; then
+  local local_oid=""
+  if local_oid=$(command git rev-parse --verify --quiet \
+    "refs/heads/${remote_branch}^{commit}" 2>/dev/null); then
+    # The existing local branch wins; bind the switch to its own commit rather
+    # than to the remote-tracking commit that was selected.
+    [[ "$local_oid" == "$expected_oid" ]] ||
+      _git_warn \
+        "Local $remote_branch exists at ${local_oid[1,12]}; $remote/$remote_branch is at ${expected_oid[1,12]}."
     command git switch "$remote_branch" >&2
     local -i switch_rc=$?
     if (( switch_rc != 0 )); then
       _git_error "Unable to switch to $remote_branch (exit $switch_rc)."
       return $switch_rc
     fi
-    _git_branch_verify_head "$remote_branch" "$expected_oid" || {
+    _git_branch_verify_head "$remote_branch" "$local_oid" || {
       _git_error \
         "Branch state changed while switching; inspect HEAD before retrying."
       return 1
@@ -274,7 +282,7 @@ git-switch() {
         "$remote_branch was created, but the remote branch changed; upstream was not configured."
       return 1
     fi
-    command git branch --set-upstream-to="$remote/$remote_branch" \
+    command git branch --set-upstream-to="refs/remotes/$remote/$remote_branch" \
       "$remote_branch" >&2 || {
       _git_warn \
         "$remote_branch was created, but its upstream could not be configured."
