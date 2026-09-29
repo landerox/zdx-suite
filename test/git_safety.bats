@@ -304,7 +304,7 @@ teardown() {
       REPLY="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
     _git_gh_remote_head_oid() {
-      REPLY="absent"
+      REPLY=""
     }
 
     git-pr-create --base main --fill --dry-run \
@@ -319,4 +319,216 @@ teardown() {
   [ ! -s "$HOME/pr.stdout" ]
   grep -Fq "Publish required:" "$HOME/pr.stderr"
   grep -Eq "Publish required:[[:space:]]+1$" "$HOME/pr.stderr"
+}
+
+git_safety_init_repo() {
+  cat <<'ZSH'
+    local repo_dir="$HOME/repository"
+    command git init -q -b main "$repo_dir" || return 81
+    cd "$repo_dir" || return 82
+    command git config user.name "Safety Test"
+    command git config user.email "safety@example.invalid"
+    command git config core.hooksPath /dev/null
+ZSH
+}
+
+@test "git safety: path commands resolve selections from a subdirectory" {
+  run run_zsh "$(git_safety_init_repo)"'
+    mkdir sub
+    print -r -- root-base > a.txt
+    print -r -- sub-base > sub/a.txt
+    print -r -- data > data.txt
+    command git add -A && command git commit -q -m base || return 1
+    print -r -- root-edit > a.txt
+    print -r -- sub-precious > sub/a.txt
+
+    cd sub || return 2
+    export MOCK_FZF_MODE=match MOCK_FZF_MATCH=$'"'"'\ta.txt'"'"'
+    git-discard --yes >"$HOME/discard.stdout" 2>"$HOME/discard.stderr" || return 10
+    [[ "$(<"$repo_dir/a.txt")" == root-base ]] || return 11
+    [[ "$(<"$repo_dir/sub/a.txt")" == sub-precious ]] || return 12
+
+    export MOCK_FZF_MATCH=$'"'"'\tsub/a.txt'"'"'
+    git-stage >"$HOME/stage.stdout" 2>"$HOME/stage.stderr" || return 13
+    [[ "$(command git diff --cached --name-only)" == sub/a.txt ]] || return 14
+    git-unstage >"$HOME/unstage.stdout" 2>"$HOME/unstage.stderr" || return 15
+    [[ -z "$(command git diff --cached --name-only)" ]] || return 16
+
+    command git -C "$repo_dir" checkout -q -- sub/a.txt || return 17
+    command git -C "$repo_dir" rm -q -- data.txt || return 18
+    command git -C "$repo_dir" commit -q -m "remove data" || return 19
+    print -r -- precious-untracked > "$repo_dir/data.txt"
+    git-undo-commit --hard --yes \
+      >"$HOME/undo.stdout" 2>"$HOME/undo.stderr" && return 20
+    [[ "$(<"$repo_dir/data.txt")" == precious-untracked ]] || return 21
+  '
+
+  if [ "$status" -ne 0 ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    cat "$HOME"/*.stderr >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/discard.stdout" ]
+  grep -Fq "Protected untracked hard-reset obstacles" "$HOME/undo.stderr"
+}
+
+@test "git safety: discard refuses to replace an untracked directory obstacle" {
+  run run_zsh "$(git_safety_init_repo)"'
+    print -r -- old > build
+    print -r -- keep > keep.txt
+    command git add -A && command git commit -q -m base || return 1
+    command rm -- build && mkdir build || return 2
+    print -r -- precious > build/notes.txt
+
+    export MOCK_FZF_MODE=match MOCK_FZF_MATCH=$'"'"'\tbuild'"'"'
+    git-discard --yes >"$HOME/discard.stdout" 2>"$HOME/discard.stderr" && return 10
+    [[ "$(<build/notes.txt)" == precious ]] || return 11
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/discard.stderr" >&2; false; }
+  [ ! -s "$HOME/discard.stdout" ]
+  grep -Fq "Refusing to overwrite or remove untracked or ignored paths." \
+    "$HOME/discard.stderr"
+}
+
+@test "git safety: undo-commit binds its plan to the current branch" {
+  run run_zsh "$(git_safety_init_repo)"'
+    print -r -- one > a.txt
+    command git add a.txt && command git commit -q -m one || return 1
+    print -r -- two > a.txt
+    command git commit -q -am two || return 2
+    command git switch -q -c feature || return 3
+
+    # A concurrent switch to another branch at the same commit.
+    _git_changes_authorize() { command git switch -q main; REPLY=authorized; }
+    git-undo-commit --soft >"$HOME/undo.stdout" 2>"$HOME/undo.stderr" && return 10
+    [[ "$(command git log -1 --format=%s main)" == two ]] || return 11
+    [[ "$(command git log -1 --format=%s feature)" == two ]] || return 12
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/undo.stderr" >&2; false; }
+  grep -Fq "Branch: feature" "$HOME/undo.stderr"
+  grep -Fq "refusing to reset" "$HOME/undo.stderr"
+}
+
+@test "git safety: git-switch binds an existing local branch and reports unknown names" {
+  run run_zsh "$(git_safety_init_repo)"'
+    local remote_dir="$HOME/remote.git"
+    command git init -q --bare -b main "$remote_dir" || return 1
+    print -r -- base > a.txt
+    command git add a.txt && command git commit -q -m base || return 2
+    command git remote add origin "$remote_dir"
+    command git push -q origin main 2>/dev/null || return 3
+    command git switch -q -c feat || return 4
+    command git push -q -u origin feat 2>/dev/null || return 5
+    print -r -- local > b.txt
+    command git add b.txt && command git commit -q -m "local only" || return 6
+    local feat_oid="$(command git rev-parse feat)"
+    command git switch -q main || return 7
+
+    _git_require_interactive() { return 0; }
+    export MOCK_FZF_MODE=match MOCK_FZF_MATCH="origin/feat|"
+    git-switch >"$HOME/switch.stdout" 2>"$HOME/switch.stderr" || return 10
+    [[ "$(command git symbolic-ref --short HEAD)" == feat ]] || return 11
+    [[ "$(command git rev-parse HEAD)" == "$feat_oid" ]] || return 12
+
+    git-switch nosuch >"$HOME/missing.stdout" 2>"$HOME/missing.stderr" && return 13
+    return 0
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+  [ ! -s "$HOME/switch.stdout" ]
+  grep -Fq "Local feat exists at" "$HOME/switch.stderr"
+  grep -Fq "is neither local nor uniquely available on a remote" "$HOME/missing.stderr"
+}
+
+@test "git safety: untracked stashes skip nested repositories and diffs use stdout" {
+  run run_zsh "$(git_safety_init_repo)"'
+    print -r -- base > a.txt
+    command git add a.txt && command git commit -q -m base || return 1
+    command git init -q vendor/lib || return 2
+    print -r -- nested > vendor/lib/x.txt
+    print -r -- new-file > untracked.txt
+    print -r -- edited > a.txt
+
+    git-stash create --include-untracked --dry-run \
+      >"$HOME/dry.stdout" 2>"$HOME/dry.stderr" || return 10
+    git-stash create --include-untracked --yes \
+      >"$HOME/create.stdout" 2>"$HOME/create.stderr" || return 11
+    [[ -f vendor/lib/x.txt && ! -e untracked.txt ]] || return 12
+
+    local stash_oid="$(command git rev-parse "stash@{0}")"
+    _git_stash_page_full "$stash_oid" \
+      >"$HOME/diff.stdout" 2>"$HOME/diff.stderr" || return 13
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+  grep -Fq "untracked.txt" "$HOME/dry.stderr"
+  ! grep -Fq "vendor/lib" "$HOME/dry.stderr" || false
+  grep -Fq "+edited" "$HOME/diff.stdout"
+  grep -Fq "+new-file" "$HOME/diff.stdout"
+  ! grep -Fq "diff --git" "$HOME/diff.stderr" || false
+  ! grep -q $'\033' "$HOME/diff.stdout" || false
+}
+
+@test "git safety: unstage offers both sides of a staged rename" {
+  run run_zsh "$(git_safety_init_repo)"'
+    print -r -- content > old.txt
+    command git add old.txt && command git commit -q -m base || return 1
+    command git mv old.txt new.txt || return 2
+
+    export MOCK_FZF_MODE=match MOCK_FZF_MATCH=$'"'"'\told.txt'"'"'
+    git-unstage >"$HOME/old.stdout" 2>"$HOME/old.stderr" || return 10
+    export MOCK_FZF_MATCH=$'"'"'\tnew.txt'"'"'
+    git-unstage >"$HOME/new.stdout" 2>"$HOME/new.stderr" || return 11
+    [[ -z "$(command git diff --cached --name-only)" ]] || return 12
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+  grep -Fq "Unstaged: old.txt" "$HOME/old.stderr"
+}
+
+@test "git safety: PR creation resolves SSH host aliases to their HostName" {
+  command cp \
+    "$TEST_SUITE_ROOT/test/fixtures/git-gh-default-branch" \
+    "$TEST_MOCK_BIN/gh"
+  command chmod +x "$TEST_MOCK_BIN/gh"
+  # OpenSSH reads the account home, not HOME, so the alias map is mocked.
+  cat > "$TEST_MOCK_BIN/ssh" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "-G" ]] || exit 97
+[[ "${2:-}" == "--" ]] && shift
+case "${2:-}" in
+  github-personal) printf 'user git\nhostname github.com\nport 22\n' ;;
+  *) printf 'user git\nhostname %s\nport 22\n' "${2:-}" ;;
+esac
+MOCK
+  command chmod +x "$TEST_MOCK_BIN/ssh"
+
+  run run_zsh "$(git_safety_init_repo)"'
+    print -r -- base > tracked.txt
+    command git add tracked.txt && command git commit -q -m base || return 1
+    command git remote add origin "git@github-personal:example/repository.git"
+    command git config branch.main.remote origin
+    command git config branch.main.merge refs/heads/main
+
+    _git_gh_repo_context() {
+      typeset -gA _GIT_GH_REPO=(
+        target "github.com/example/repository"
+        id "R_test"
+        host "github.com"
+        name "example/repository"
+        url "https://github.com/example/repository"
+      )
+    }
+    _git_gh_base_oid() { REPLY="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; }
+    _git_gh_remote_head_oid() { REPLY=""; }
+
+    git-pr-create --base main --fill --dry-run \
+      >"$HOME/pr.stdout" 2>"$HOME/pr.stderr"
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/pr.stderr" >&2; false; }
+  [ ! -s "$HOME/pr.stdout" ]
+  ! grep -Fq "targets github-personal" "$HOME/pr.stderr" || false
 }

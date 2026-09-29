@@ -330,13 +330,38 @@ _git_changes_path_fingerprint() {
   REPLY="$fingerprint"
 }
 
+# HEAD identity is the commit plus its symbolic ref, so a branch switch to an
+# identical commit still invalidates a plan that rewrites the current branch.
+_git_changes_head_identity() {
+  emulate -L zsh
+
+  local head_oid=""
+  local head_ref=""
+  head_oid=$(command git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) ||
+    head_oid="UNBORN"
+  head_ref=$(command git symbolic-ref -q HEAD 2>/dev/null) ||
+    head_ref="DETACHED"
+  REPLY="$head_oid $head_ref"
+}
+
+_git_changes_head_label() {
+  emulate -L zsh
+
+  local head_ref="${1#* }"
+  if [[ "$head_ref" == refs/heads/* ]]; then
+    REPLY="${head_ref#refs/heads/}"
+  else
+    REPLY="detached HEAD"
+  fi
+}
+
 _git_changes_snapshot() {
   emulate -L zsh
 
   local repo_root=""
   local common_dir=""
   local worktree_git_dir=""
-  local head_oid=""
+  local head_identity=""
   local diff_fingerprint=""
 
   repo_root=$(command git rev-parse --path-format=absolute --show-toplevel 2>/dev/null) ||
@@ -350,8 +375,8 @@ _git_changes_snapshot() {
   common_dir="${common_dir:A}"
   worktree_git_dir="${worktree_git_dir:A}"
 
-  head_oid=$(command git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) ||
-    head_oid="UNBORN"
+  _git_changes_head_identity
+  head_identity="$REPLY"
 
   _git_changes_diff_fingerprint || return 1
   diff_fingerprint="$REPLY"
@@ -360,7 +385,7 @@ _git_changes_snapshot() {
     "$repo_root"
     "$common_dir"
     "$worktree_git_dir"
-    "$head_oid"
+    "$head_identity"
     "$diff_fingerprint"
   )
 }
@@ -383,8 +408,8 @@ _git_changes_context_matches() {
     return 1
   current_git_dir=$(command git rev-parse --path-format=absolute --git-dir 2>/dev/null) ||
     return 1
-  current_head=$(command git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) ||
-    current_head="UNBORN"
+  _git_changes_head_identity
+  current_head="$REPLY"
 
   [[ "${current_root:A}" == "$expected_root" \
     && "${current_common:A}" == "$expected_common" \
@@ -531,6 +556,13 @@ _git_stage_usage() {
 
 git-stage() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-stage "$@" )
+    return $?
+  fi
 
   if (( $# > 0 )); then
     if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -554,7 +586,7 @@ git-stage() {
   local -a reply=()
   local file_name=""
 
-  _git_changes_capture_nul diff --name-only -z -- || {
+  _git_changes_capture_nul diff --name-only --no-renames -z -- || {
     _git_error "Unable to discover tracked worktree changes."
     return 1
   }
@@ -620,6 +652,13 @@ _git_unstage_usage() {
 
 git-unstage() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-unstage "$@" )
+    return $?
+  fi
 
   if (( $# > 0 )); then
     if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -639,7 +678,7 @@ git-unstage() {
   local -a selected_files=()
   local -a reply=()
 
-  _git_changes_capture_nul diff --cached --name-only -z -- || {
+  _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || {
     _git_error "Unable to discover staged files."
     return 1
   }
@@ -702,6 +741,13 @@ _git_discard_usage() {
 
 git-discard() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-discard "$@" )
+    return $?
+  fi
 
   local dry_run="no"
   local assume_yes="no"
@@ -741,9 +787,10 @@ git-discard() {
   local -a snapshot=()
   local -a file_fingerprints=()
   local -a untracked_obstacles=()
+  local -a discard_target=()
   local -a reply=()
 
-  _git_changes_capture_nul diff --name-only -z --diff-filter=ACDMRTUXB -- || {
+  _git_changes_capture_nul diff --name-only --no-renames -z --diff-filter=ACDMRTUXB -- || {
     _git_error "Unable to build the discard inventory."
     return 1
   }
@@ -780,6 +827,21 @@ git-discard() {
     }
     file_fingerprints+=("$REPLY")
   done
+
+  # Restoring a deleted tracked path force-removes a directory in its place,
+  # together with untracked or ignored files inside it.
+  _git_changes_untracked_obstacles selected_files || {
+    _git_error "Unable to inspect untracked discard obstacles."
+    return 1
+  }
+  untracked_obstacles=("${reply[@]}")
+  if (( ${#untracked_obstacles[@]} > 0 )); then
+    _git_changes_show_paths \
+      "Protected untracked discard obstacles" "${untracked_obstacles[@]}" ||
+      return 1
+    _git_error "Refusing to overwrite or remove untracked or ignored paths."
+    return 1
+  fi
 
   _git_changes_show_paths "Discard plan" "${selected_files[@]}" || return 1
   _git_warn "The listed worktree changes will be permanently replaced by index content."
@@ -821,6 +883,18 @@ git-discard() {
     if [[ "$REPLY" != "${file_fingerprints[item_index]}" ]]; then
       (( failed_count++ ))
       _git_error "Target changed after confirmation; skipped: $escaped_name"
+      continue
+    fi
+
+    discard_target=("$file_name")
+    _git_changes_untracked_obstacles discard_target || {
+      (( failed_count++ ))
+      _git_error "Unable to revalidate untracked obstacles: $escaped_name"
+      continue
+    }
+    if (( ${#reply[@]} > 0 )); then
+      (( failed_count++ ))
+      _git_error "An untracked or ignored obstacle appeared; skipped: $escaped_name"
       continue
     fi
 
@@ -1106,10 +1180,16 @@ git-amend() {
   local REPLY=""
 
   local head_oid=""
-  head_oid=$(command git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || {
+  local head_identity=""
+  _git_changes_head_identity
+  head_identity="$REPLY"
+  head_oid="${head_identity%% *}"
+  [[ "$head_oid" != "UNBORN" ]] || {
     _git_error "No commit is available to amend."
     return 1
   }
+  _git_changes_head_label "$head_identity"
+  local head_label="$REPLY"
 
   local subject_text=""
   local author_name=""
@@ -1122,6 +1202,7 @@ git-amend() {
     return 1
 
   _git_header "Amend last commit"
+  _git_label "Branch:" "$head_label"
   _git_label "Commit:" "$head_oid"
   _git_label "Subject:" "$subject_text"
   _git_label "Author:" "$author_name <$author_email>"
@@ -1156,10 +1237,14 @@ git-amend() {
     return 1
   }
   snapshot=("${reply[@]}")
+  [[ "${snapshot[4]}" == "$head_identity" ]] || {
+    _git_error "HEAD changed while choosing an amend action; refusing to amend."
+    return 1
+  }
 
   local staged_count=0
   local -a staged_files=()
-  _git_changes_capture_nul diff --cached --name-only -z -- || return 1
+  _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || return 1
   staged_files=("${reply[@]}")
   staged_count=${#staged_files[@]}
 
@@ -1192,7 +1277,7 @@ git-amend() {
       ;;
   esac
 
-  _git_changes_authorize "no" "Amend commit ${head_oid[1,12]}?" || return 1
+  _git_changes_authorize "no" "Amend commit ${head_oid[1,12]} on ${head_label}?" || return 1
   [[ "$REPLY" == "cancelled" ]] && return 0
   _git_changes_snapshot_matches "${snapshot[@]}" || {
     _git_error "Repository HEAD or diff changed after planning; refusing to amend."
@@ -1230,11 +1315,17 @@ _git_undo_commit_usage() {
 
 git-undo-commit() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-undo-commit "$@" )
+    return $?
+  fi
 
   local reset_mode=""
   local dry_run="no"
   local assume_yes="no"
-  local REPLY=""
 
   while (( $# > 0 )); do
     case "$1" in
@@ -1322,6 +1413,12 @@ git-undo-commit() {
     return 1
   }
   snapshot=("${reply[@]}")
+  [[ "${snapshot[4]%% *}" == "$head_oid" ]] || {
+    _git_error "HEAD changed while planning; refusing to reset."
+    return 1
+  }
+  _git_changes_head_label "${snapshot[4]}"
+  local head_label="$REPLY"
 
   if [[ "$reset_mode" == "hard" ]]; then
     local -a commit_files=()
@@ -1329,12 +1426,12 @@ git-undo-commit() {
     local -a index_files=()
     local file_name=""
 
-    _git_changes_capture_nul diff --name-only -z "$parent_oid" "$head_oid" -- ||
+    _git_changes_capture_nul diff --name-only --no-renames -z "$parent_oid" "$head_oid" -- ||
       return 1
     commit_files=("${reply[@]}")
-    _git_changes_capture_nul diff --name-only -z -- || return 1
+    _git_changes_capture_nul diff --name-only --no-renames -z -- || return 1
     worktree_files=("${reply[@]}")
-    _git_changes_capture_nul diff --cached --name-only -z -- || return 1
+    _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || return 1
     index_files=("${reply[@]}")
     _git_changes_capture_nul ls-tree -r -z --name-only "$parent_oid" ||
       return 1
@@ -1350,12 +1447,13 @@ git-undo-commit() {
       (( ${affected_files[(Ie)$file_name]} == 0 )) && affected_files+=("$file_name")
     done
   elif [[ "$reset_mode" == "mixed" ]]; then
-    _git_changes_capture_nul diff --cached --name-only -z "$parent_oid" -- ||
+    _git_changes_capture_nul diff --cached --name-only --no-renames -z "$parent_oid" -- ||
       return 1
     affected_files=("${reply[@]}")
   fi
 
   _git_header "Undo commit plan"
+  _git_info "Branch: $head_label"
   _git_info "Current HEAD: $head_oid"
   _git_info "Reset target: $parent_oid"
   _git_info "Mode: $reset_mode"
@@ -1381,7 +1479,7 @@ git-undo-commit() {
 
   _git_changes_authorize \
     "$assume_yes" \
-    "Reset ${head_oid[1,12]} to ${parent_oid[1,12]} using --${reset_mode}?" ||
+    "Reset ${head_label} from ${head_oid[1,12]} to ${parent_oid[1,12]} using --${reset_mode}?" ||
     return 1
   [[ "$REPLY" == "cancelled" ]] && return 0
 
@@ -1420,6 +1518,13 @@ _git_staged_usage() {
 
 git-staged() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-staged "$@" )
+    return $?
+  fi
 
   if (( $# > 0 )); then
     if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -1439,7 +1544,7 @@ git-staged() {
   local -a selected_files=()
   local -a reply=()
 
-  _git_changes_capture_nul diff --cached --name-only -z -- || {
+  _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || {
     _git_error "Unable to discover staged files."
     return 1
   }
@@ -1744,14 +1849,14 @@ git-commit() {
 
   local -a staged_files=()
   local -a reply=()
-  _git_changes_capture_nul diff --cached --name-only -z -- || return 1
+  _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || return 1
   staged_files=("${reply[@]}")
 
   if (( ${#staged_files[@]} == 0 )); then
     _git_warn "Nothing is staged."
     if _git_confirm "Open git-stage now?"; then
       git-stage || return $?
-      _git_changes_capture_nul diff --cached --name-only -z -- || return 1
+      _git_changes_capture_nul diff --cached --name-only --no-renames -z -- || return 1
       staged_files=("${reply[@]}")
     else
       _git_info "Cancelled."

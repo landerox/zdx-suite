@@ -11,7 +11,8 @@ if [[ -n "${_GIT_COMMON_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
-typeset -g WS_BASE_DIR="${WS_BASE_DIR-$HOME/workspaces}"
+# The canonical HOME keeps the default valid when HOME traverses a symlink.
+typeset -g WS_BASE_DIR="${WS_BASE_DIR-${HOME:A}/workspaces}"
 typeset -gA _GIT_CONTEXT=()
 typeset -gA _GIT_AUTH=()
 
@@ -297,6 +298,33 @@ _git_fzf_capture() {
 
   REPLY="$selection"
   return $operation_rc
+}
+
+# Sets REPLY to the repository root and returns 0 when the current directory
+# is inside the work tree but is not its root. Path-oriented commands then run
+# themselves again from the root in a subshell, so the caller's directory is
+# unchanged. Returns 1 at the root or outside a repository.
+# git ls-remote matches patterns against the tail of each ref, so refs such as
+# refs/heads/ci/refs/tags/v1 also match refs/tags/*. Accept only refs that match
+# from the start: an exact ref, or a literal prefix followed by a trailing *.
+_git_ls_remote_ref_matches() {
+  local pattern="$1"
+  local ref="$2"
+  if [[ "$pattern" == *'*' ]]; then
+    [[ "$ref" == "${pattern%'*'}"* ]]
+  else
+    [[ "$ref" == "$pattern" ]]
+  fi
+}
+
+_git_path_command_needs_root() {
+  REPLY=""
+  local repo_root=""
+  repo_root=$(command git rev-parse --path-format=absolute --show-toplevel \
+    2>/dev/null) || return 1
+  [[ -n "$repo_root" && -d "$repo_root" \
+    && "${PWD:A}" != "${repo_root:A}" ]] || return 1
+  REPLY="$repo_root"
 }
 
 _git_fzf_rc_is_cancel() {

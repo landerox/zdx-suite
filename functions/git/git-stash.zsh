@@ -319,7 +319,9 @@ _git_stash_state_fingerprint() {
         ignored_obstacles=("${reply[@]}")
       fi
     elif [[ "$state_scope" == "untracked" ]]; then
-      untracked_obstacles=("${untracked_paths[@]}")
+      # Git lists an untracked nested repository as "dir/" and git stash -u
+      # leaves it in place, so it is not part of the stashed state.
+      untracked_obstacles=("${(@)untracked_paths:#*/}")
     fi
 
     if (( command_code == 0 )) && [[ "$state_scope" == "obstacles" ]]; then
@@ -488,7 +490,8 @@ _git_stash_collect_create_paths() {
   if [[ "$create_mode" == "untracked" ]]; then
     _git_stash_capture_nul \
       ls-files --others --exclude-standard -z -- || return 1
-    untracked_files=("${reply[@]}")
+    # Nested repositories ("dir/") are left in place by git stash -u.
+    untracked_files=("${(@)reply:#*/}")
   fi
 
   for file_name in \
@@ -860,7 +863,7 @@ _git_stash_page_git() {
   local repo_root=""
   repo_root=$(command git rev-parse \
     --path-format=absolute --show-toplevel 2>/dev/null) || return 1
-  command git --literal-pathspecs -C "${repo_root:A}" "$@" | _git_page >&2
+  command git --literal-pathspecs -C "${repo_root:A}" "$@" | _git_page
   local -a pipeline_codes=("${pipestatus[@]}")
   if (( pipeline_codes[1] != 0 )); then
     _git_error "Git failed while producing stash output (exit ${pipeline_codes[1]})."
@@ -884,6 +887,8 @@ _git_stash_page_full() {
   local diff_file=""
   local -i command_code=0
   local -i pager_code=0
+  local color_mode="never"
+  [[ -t 1 ]] && color_mode="always"
 
   repo_root=$(command git rev-parse \
     --path-format=absolute --show-toplevel 2>/dev/null) || return 1
@@ -902,7 +907,7 @@ _git_stash_page_full() {
 
   {
     command git --literal-pathspecs -C "$repo_root" diff \
-      --binary --color=always --no-ext-diff --no-textconv \
+      --binary "--color=$color_mode" --no-ext-diff --no-textconv \
       "${stash_oid}^1" "$stash_oid" -- >| "$diff_file"
     command_code=$?
 
@@ -910,13 +915,13 @@ _git_stash_page_full() {
       command git -C "$repo_root" \
         cat-file -e "${stash_oid}^3^{commit}" 2>/dev/null; then
       command git --literal-pathspecs -C "$repo_root" diff \
-        --binary --color=always --no-ext-diff --no-textconv \
+        --binary "--color=$color_mode" --no-ext-diff --no-textconv \
         "$empty_tree_oid" "${stash_oid}^3" -- >> "$diff_file"
       command_code=$?
     fi
 
     if (( command_code == 0 )); then
-      _git_page < "$diff_file" >&2
+      _git_page < "$diff_file"
       pager_code=$?
     fi
   } always {
@@ -1547,6 +1552,8 @@ _git_stash_browse_files() {
   local -a selected_ids=()
   local -a reply=()
   local file_name=""
+  local color_mode="never"
+  [[ -t 1 ]] && color_mode="always"
 
   _git_stash_object_paths "$stash_oid" || return 1
   object_fields=("${reply[@]}")
@@ -1595,11 +1602,11 @@ _git_stash_browse_files() {
       command git -C "$repo_root" hash-object -t tree --stdin 2>/dev/null) ||
       return 1
     _git_stash_page_git \
-      diff --color=always --no-ext-diff --no-textconv \
+      diff "--color=$color_mode" --no-ext-diff --no-textconv \
       "$empty_tree_oid" "${stash_oid}^3" -- "$file_name"
   else
     _git_stash_page_git \
-      diff --color=always --no-ext-diff --no-textconv \
+      diff "--color=$color_mode" --no-ext-diff --no-textconv \
       "${stash_oid}^1" "$stash_oid" -- "$file_name"
   fi
 }

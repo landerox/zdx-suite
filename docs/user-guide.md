@@ -323,6 +323,11 @@ The Git suite helps you manage your repositories, pull requests, and workspace i
 ZDX allows you to define multiple git profiles (e.g., Personal vs. Work) with different email addresses, GPG signing keys, and SSH keys.
 
 - **Context-aware Switcher**: When you switch into a directory configured for a specific workspace, ZDX routes your SSH agent and commits using the correct identities.
+- **Local profiles stay isolated**: `git-identity-switcher --switch NAME local`
+  writes `commit.gpgSign false` and `tag.gpgSign false` when the profile has no
+  signing key, and `core.sshCommand ssh` when another scope sets an SSH
+  command and the profile has no SSH key, so a global profile cannot sign or
+  authenticate commits in that repository.
 - **Contribution checks**: The commit-message hook validates Conventional Commits, while the CI DCO check verifies the required `Signed-off-by:` trailer.
 
 ### 📝 Commit & Push Conventions
@@ -1677,7 +1682,8 @@ Every workspace has the exact form `github/<identity>` or
 `gitlab/<identity>`. An identity begins with a letter or number and then uses
 letters, numbers, dots, underscores, or dashes.
 
-The default root is `$HOME/workspaces`:
+The default root is `$HOME/workspaces`, resolved through any symbolic link in
+`HOME` (`${HOME:A}/workspaces`):
 
 ```text
 $WS_BASE_DIR/<platform>/<identity>/
@@ -1857,7 +1863,7 @@ Set these in `~/.config/zdx/config.zsh`:
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `WS_BASE_DIR` | `$HOME/workspaces` | Validated root for managed workspace profiles and repositories |
+| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Validated root for managed workspace profiles and repositories |
 | `WS_SSH_CONNECT_TIMEOUT` | `10` | `ws-test` SSH connection deadline; integer `1`–`60` |
 
 ## ── AI Suite (`ai-menu`) ──

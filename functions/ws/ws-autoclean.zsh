@@ -23,7 +23,7 @@ _ws_autoclean_branch_still_stale() {
   current_branch=$(command git -C "$repo_dir" branch --show-current \
     2>/dev/null) || return 1
   local default_branch=""
-  default_branch=$(cd "$repo_dir" && _tk_get_default_branch) || return 1
+  default_branch=$(builtin cd -q -- "$repo_dir" && _tk_get_default_branch) || return 1
   [[ "$branch_name" != "$current_branch" \
     && "$branch_name" != "$default_branch" \
     && "$branch_name" != "main" \
@@ -141,7 +141,7 @@ ws-autoclean() {
     fi
 
     local default_branch=""
-    default_branch=$(cd "$repo_dir" && _tk_get_default_branch) || {
+    default_branch=$(builtin cd -q -- "$repo_dir" && _tk_get_default_branch) || {
       _tk_error "[$repo] Could not determine the default branch."
       ((scan_failures++))
       continue
@@ -374,6 +374,10 @@ ws-autoclean() {
       continue
     fi
 
+    # Match git branch -D: a recreated branch must not inherit the old
+    # upstream or merge configuration. A missing section is not an error.
+    command git -C "$repo_dir" config --local --remove-section \
+      "branch.$branch_name" >/dev/null 2>&1
     _tk_success "[$repo_name] Deleted $branch_name"
   done
 

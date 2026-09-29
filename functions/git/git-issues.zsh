@@ -702,18 +702,42 @@ _git_gh_remote_push_url() {
   REPLY="${urls[1]}"
 }
 
+# SSH host aliases such as the Workspace suite's github-<identity> resolve to
+# their configured HostName locally; ssh -G never opens a connection.
+_git_gh_ssh_hostname() {
+  emulate -L zsh
+
+  local host="$1"
+  local output=""
+  local line=""
+  REPLY="$host"
+  _git_check_cmd ssh || return 0
+  output=$(command ssh -G -- "$host" 2>/dev/null) || return 0
+  for line in "${(@f)output}"; do
+    if [[ "$line" == "hostname "* ]]; then
+      line="${line#hostname }"
+      [[ "$line" =~ '^[A-Za-z0-9][A-Za-z0-9.-]*$' ]] && REPLY="$line"
+      return 0
+    fi
+  done
+}
+
 _git_gh_remote_identity() {
   local remote="$1"
   local remote_url remainder host repo_path owner repo
+  local transport="https"
   _git_gh_remote_push_url "$remote" || return 1
   remote_url="$REPLY"
 
   if [[ "$remote_url" == (http|https|ssh)://* ]]; then
+    [[ "$remote_url" == ssh://* ]] && transport="ssh"
     remainder="${remote_url#*://}"
-    remainder="${remainder##*@}"
     host="${remainder%%/*}"
     repo_path="${remainder#*/}"
+    host="${host##*@}"
+    [[ "$host" == *:<-> ]] && host="${host%:*}"
   elif [[ "$remote_url" == *@*:* ]]; then
+    transport="ssh"
     remainder="${remote_url#*@}"
     host="${remainder%%:*}"
     repo_path="${remainder#*:}"
@@ -724,10 +748,14 @@ _git_gh_remote_identity() {
   repo_path="${repo_path%.git}"
   owner="${repo_path%%/*}"
   repo="${repo_path#*/}"
-  [[ "$host" =~ '^[A-Za-z0-9.-]+$' \
+  [[ "$host" =~ '^[A-Za-z0-9][A-Za-z0-9.-]*$' \
     && "$owner" =~ '^[A-Za-z0-9_.-]+$' \
     && "$repo" =~ '^[A-Za-z0-9_.-]+$' \
     && "$repo" != */* ]] || return 1
+  if [[ "$transport" == "ssh" ]]; then
+    _git_gh_ssh_hostname "$host"
+    host="$REPLY"
+  fi
   reply=("$host/$owner/$repo" "$remote_url" "$owner")
 }
 
@@ -744,11 +772,17 @@ _git_gh_remote_head_oid() {
   fi
   (( ls_rc == 0 )) || return 1
 
-  local oid="${output%%$'\t'*}"
-  local ref="${output#*$'\t'}"
-  [[ "$ref" == "refs/heads/$branch" ]] || return 1
-  _git_validate_oid "$oid" || return 1
-  REPLY="$oid"
+  # ls-remote also returns tail matches such as refs/heads/x/refs/heads/<b>.
+  local line="" oid="" ref="" found_oid=""
+  for line in "${(@f)output}"; do
+    oid="${line%%$'\t'*}"
+    ref="${line#*$'\t'}"
+    [[ "$ref" == "refs/heads/$branch" ]] || continue
+    [[ -z "$found_oid" ]] || return 1
+    _git_validate_oid "$oid" || return 1
+    found_oid="$oid"
+  done
+  REPLY="$found_oid"
 }
 
 _git_gh_created_pr_current() {
@@ -967,6 +1001,13 @@ git-pr-create() {
   local remote_head_oid="$REPLY"
   local -i needs_push=0
   [[ "$remote_head_oid" != "$expected_head" ]] && needs_push=1
+  if (( needs_push )) && [[ -n "$remote_head_oid" ]] \
+    && ! command git merge-base --is-ancestor \
+      "$remote_head_oid" "$expected_head" 2>/dev/null; then
+    _git_error \
+      "Remote branch '$remote_branch' is not an ancestor of HEAD; fetch and integrate it first."
+    return 1
+  fi
 
   _git_header "Pull Request Creation Plan"
   _git_label "Repository:" \
@@ -1026,8 +1067,12 @@ git-pr-create() {
 
   local -i published_now=0
   if (( needs_push )); then
-    command git push "$remote_url" \
-      "${expected_head}:refs/heads/${remote_branch}" >&2
+    # The reviewed fast-forward is bound to the exact remote head (or its
+    # absence); follow-tags and submodule recursion stay off so only the
+    # reviewed head is published.
+    command git push --no-follow-tags --recurse-submodules=no \
+      "--force-with-lease=refs/heads/${remote_branch}:${remote_head_oid}" \
+      -- "$remote_url" "${expected_head}:refs/heads/${remote_branch}" >&2
     local -i push_rc=$?
     (( push_rc == 0 )) || {
       _git_error "Unable to publish the exact head (exit $push_rc)."

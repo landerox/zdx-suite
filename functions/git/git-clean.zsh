@@ -756,6 +756,10 @@ clean-branches() {
     fi
 
     if command git update-ref -d "$ref" "$oid" 2>/dev/null; then
+      # Match git branch -d: a recreated branch must not inherit stale upstream
+      # or merge configuration. A missing section is not an error.
+      command git config --local --remove-section "branch.${ref#refs/heads/}" \
+        >/dev/null 2>&1
       _git_success "Deleted $(_git_display_escape "$ref") at $oid."
       deleted=$(( deleted + 1 ))
     else
@@ -960,6 +964,8 @@ clean-remote-merged() {
 
     local -a push_cmd=(
       command git push
+      --no-follow-tags
+      --recurse-submodules=no
       "--force-with-lease=${branch_ref}:${oid}"
       --
       "$push_url"
@@ -968,9 +974,17 @@ clean-remote-merged() {
     "${push_cmd[@]}" >&2
     local -i push_rc=$?
     if (( push_rc == 0 )); then
+      # Pushing to the reviewed URL bypasses the remote's fetch refspec, so drop
+      # the matching remote-tracking ref only while it still names this commit.
+      command git update-ref -d "$tracking_ref" "$oid" 2>/dev/null ||
+        _git_warn \
+          "Remote-tracking ref $(_git_display_escape "$tracking_ref") was kept; fetch --prune to refresh it."
       _git_success \
         "Deleted $remote/$(_git_display_escape "${branch_ref#refs/heads/}") at $oid."
       deleted=$(( deleted + 1 ))
+    elif (( push_rc == 130 || push_rc == 143 )); then
+      _git_warn "Remote cleanup interrupted: $deleted deleted before the interruption."
+      return "$push_rc"
     else
       _git_error \
         "Failed to delete $(_git_display_escape "$branch_ref") from '$remote' (exit $push_rc)."

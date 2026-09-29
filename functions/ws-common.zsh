@@ -275,7 +275,10 @@ _ws_ssh_probe() {
     _ws_error "An SSH alias and two timeout bounds are required."
     return 2
   }
-  [[ "$host_alias" =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' ]] || {
+  # Bracket globs compare code points; =~ ranges follow locale collation.
+  (( ${#host_alias} <= 128 )) \
+    && [[ "$host_alias" == [A-Za-z0-9]* \
+      && "$host_alias" != *[^A-Za-z0-9._-]* ]] || {
     _ws_error "Refusing an invalid SSH host alias."
     return 2
   }
@@ -583,8 +586,8 @@ _ws_validate_base_dir() {
 
   local literal="${candidate:a}"
   local resolved="${candidate:A}"
-  local home_path="${HOME:a}"
-  [[ "$literal" != "/" && "$literal" != "$home_path" ]] || {
+  [[ "$literal" != "/" && "$literal" != "${HOME:a}" \
+    && "$resolved" != "${HOME:A}" ]] || {
     _ws_error "WS_BASE_DIR cannot be the filesystem root or home directory."
     return 1
   }
@@ -634,7 +637,7 @@ _ws_resolve_workspace() {
       ;;
   esac
   (( ${#identity} <= 64 )) \
-    && [[ "$identity" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' \
+    && [[ "$identity" == [A-Za-z0-9]* && "$identity" != *[^A-Za-z0-9._-]* \
       && "$identity" != "." && "$identity" != ".." ]] || {
     _ws_error "Invalid workspace identity."
     return 2
@@ -848,7 +851,7 @@ _ws_test_write() {
   local REPLY=""
   _ws_validate_base_dir || return $?
   local base_dir="$REPLY"
-  local -a paths=("$HOME/.gitconfig" "$base_dir")
+  local -a paths=("${HOME:A}/.gitconfig" "$base_dir")
   local target=""
   for target in "${paths[@]}"; do
     if [[ -L "$target" ]]; then
@@ -960,24 +963,6 @@ _ws_menu_entry() {
   printf '  %s|%s|%s\n' "$label" "$command_name" "$description"
 }
 
-_ws_verify_deps() {
-  local command_name="${1:-}"
-  local dependencies=""
-  dependencies=$(_ws_command_dependencies "$command_name") || return 2
-  local -a missing=()
-  local dependency=""
-  for dependency in ${(s:,:)dependencies}; do
-    [[ -n "$dependency" ]] || continue
-    _ws_check_cmd "$dependency" || missing+=("$dependency")
-  done
-  if (( ${#missing[@]} > 0 )); then
-    _ws_error \
-      "Missing ${(j:, :)missing} required by '$command_name'."
-    return 1
-  fi
-  return 0
-}
-
 _ws_dispatch() {
   local command_name="${1:-}"
   shift 2>/dev/null || true
@@ -985,11 +970,9 @@ _ws_dispatch() {
   case "$command_name" in
     ws-auth|ws-create|ws-list|ws-info|ws-doctor|ws-clone|ws-clone-multi|\
     ws-sync|ws-repos|ws-migrate|ws-show-key|ws-rotate-key|ws-test|\
-    ws-autoclean)
-      _ws_verify_deps "$command_name" || return $?
-      ;;
-    ws-remove)
-      # ws-remove owns a complete parser and must parse before dependencies.
+    ws-autoclean|ws-remove)
+      # Every command parses help and options before probing its own
+      # dependencies; a router probe here would run before that parser.
       ;;
     :)
       return 0

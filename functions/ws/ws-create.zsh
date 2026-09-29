@@ -148,7 +148,7 @@ _ws_create_ssh_alias_plan() {
             value="${value//\%\%/$percent_marker}"
             [[ "$value" != *'%'* ]] || return 1
             value="${value//$percent_marker/%}"
-            [[ "$value" == '~/'* ]] && value="$HOME/${value#\~/}"
+            [[ "$value" == '~/'* ]] && value="${HOME:A}/${value#\~/}"
             [[ "$value" == "$key_path" ]] || return 1
             (( ++identities == 1 )) || return 1
             ;;
@@ -230,7 +230,8 @@ ws-create() {
     local custom_host=""
     read -r custom_host
     hostname="${custom_host:-gitlab.com}"
-    [[ "$hostname" =~ '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
+    [[ "$hostname" == [A-Za-z0-9]* && "$hostname" == *[A-Za-z0-9] \
+      && "$hostname" != *[^A-Za-z0-9.-]* \
       && "$hostname" != *..* ]] || {
       _tk_error "Invalid GitLab hostname."
       return 2
@@ -251,7 +252,7 @@ ws-create() {
   identity="${identity:l}"
   identity="${identity// /-}"
   [[ "$identity" != "." && "$identity" != ".." && "$identity" != -* \
-    && "$identity" =~ '^[a-z0-9][a-z0-9._-]*$' ]] || {
+    && "$identity" == [a-z0-9]* && "$identity" != *[^a-z0-9._-]* ]] || {
     _tk_error "Identity must use lowercase letters, numbers, dots, underscores, or dashes."
     return 2
   }
@@ -265,7 +266,9 @@ ws-create() {
 
   local host_alias="${platform}-${identity}"
   local key_path="$ws_dir/.ssh/id_ed25519"
-  local home_ssh_dir="$HOME/.ssh" ssh_config="$HOME/.ssh/config"
+  # Build home paths from the canonical HOME: ownership checks refuse symlink
+  # components, and HOME itself may traverse one (for example /home -> var/home).
+  local home_ssh_dir="${HOME:A}/.ssh" ssh_config="${HOME:A}/.ssh/config"
   [[ "$key_path" != *'${'* ]] || {
     _tk_error "The workspace key path contains unsupported SSH environment syntax."
     return 1
@@ -602,7 +605,7 @@ ws-create() {
   fi
 
   # --- Update ~/.gitconfig with includeIf ---
-  local global_gitconfig="$HOME/.gitconfig"
+  local global_gitconfig="${HOME:A}/.gitconfig"
   local include_path="$ws_dir/.gitconfig"
   local gitdir_pattern="$ws_dir/"
   local include_key="includeIf.gitdir:${gitdir_pattern}.path"

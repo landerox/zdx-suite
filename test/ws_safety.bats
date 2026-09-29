@@ -1188,3 +1188,223 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" != *"suspended (tty output)"* ]]
 }
+
+@test "ws safety: legacy SSH removal stops at any Host, Match, or workspace marker" {
+  run run_zsh '
+    local workspace_dir=""
+    for workspace_dir in github/foo github/bar; do
+      command mkdir -p -- "$WS_BASE_DIR/$workspace_dir/.ssh" || return 1
+      : > "$WS_BASE_DIR/$workspace_dir/.gitconfig"
+    done
+    command mkdir -p -- "$HOME/.ssh" && command chmod 700 "$HOME/.ssh"
+    print -rl -- \
+      "# Workspace: github/foo" \
+      "Host github-foo" \
+      "    HostName github.com" \
+      "" \
+      "host personal" \
+      "    HostName personal.invalid" \
+      "Host=equals" \
+      "    User equals-user" \
+      "# BEGIN ws:github/bar" \
+      "Host github-bar" \
+      "    HostName github.com" \
+      "# END ws:github/bar" > "$HOME/.ssh/config"
+    command chmod 600 "$HOME/.ssh/config"
+    print -rl -- "[user]" "	name = kept" > "$HOME/.gitconfig"
+    command chmod 644 "$HOME/.gitconfig"
+    zmodload -F zsh/stat b:zstat || return 2
+    local -A before=() after=()
+    zstat -H before -- "$HOME/.gitconfig" || return 3
+
+    ws-remove --yes github/foo >/dev/null 2>"$HOME/foo.stderr" || return 10
+    command grep -Fqx -- "host personal" "$HOME/.ssh/config" || return 11
+    command grep -Fqx -- "    HostName personal.invalid" "$HOME/.ssh/config" || return 12
+    command grep -Fqx -- "Host=equals" "$HOME/.ssh/config" || return 13
+    command grep -Fqx -- "# BEGIN ws:github/bar" "$HOME/.ssh/config" || return 14
+    ! command grep -Fq -- "github-foo" "$HOME/.ssh/config" || return 15
+    zstat -H after -- "$HOME/.gitconfig" || return 16
+    [[ "${after[inode]}:${after[mode]}" == "${before[inode]}:${before[mode]}" ]] || return 17
+
+    ws-remove --yes github/bar >/dev/null 2>"$HOME/bar.stderr" || return 20
+    command grep -Fqx -- "host personal" "$HOME/.ssh/config" || return 21
+    ! command grep -Fq -- "github-bar" "$HOME/.ssh/config" || return 22
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+}
+
+@test "ws safety: remove reports a missing legacy Host instead of success" {
+  run run_zsh '
+    command mkdir -p -- "$WS_BASE_DIR/github/foo/.ssh" "$HOME/.ssh" || return 1
+    : > "$WS_BASE_DIR/github/foo/.gitconfig"
+    command chmod 700 "$HOME/.ssh"
+    print -rl -- "# Workspace: github/foo" "Host keep-me" "    User me" \
+      > "$HOME/.ssh/config"
+    command chmod 600 "$HOME/.ssh/config"
+    ws-remove --yes github/foo >/dev/null 2>"$HOME/remove.stderr" || return 10
+    command grep -Fqx -- "Host keep-me" "$HOME/.ssh/config" || return 11
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/remove.stderr" >&2; false; }
+  grep -Fq "No exact 'Host github-foo' block was present" "$HOME/remove.stderr"
+  ! grep -Fq "Removed Host" "$HOME/remove.stderr" || false
+}
+
+@test "ws safety: identity and repository validation ignore UTF-8 collation" {
+  locale -a 2>/dev/null | grep -Eqi '^en_US\.utf-?8$' \
+    || skip "en_US.UTF-8 locale is not installed"
+  run run_zsh '
+    export LC_ALL=en_US.UTF-8
+    _ws_resolve_workspace github/josé 2>/dev/null && return 10
+    _ws_clone_normalize_repo owner/café 2>/dev/null && return 11
+    _ws_migrate_repo_name_valid café && return 12
+    _ws_ssh_probe github-josé 3 5 2>/dev/null
+    (( $? == 2 )) || return 13
+    export MOCK_FZF_MODE=first
+    printf "%s\n" josé Jose jose@example.invalid n n \
+      | ws-create >/dev/null 2>"$HOME/create.stderr"
+    (( ${pipestatus[2]} == 2 )) || return 14
+    [[ ! -e "$HOME/.ssh/config" ]] \
+      || ! command grep -q "josé" "$HOME/.ssh/config" || return 15
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/create.stderr" >&2; false; }
+  grep -Fq "Identity must use lowercase letters" "$HOME/create.stderr"
+}
+
+@test "ws safety: create works when HOME traverses a symbolic link" {
+  command mkdir -p "$TEST_TEMP_DIR/var/home/user"
+  command ln -s var/home "$TEST_TEMP_DIR/home-link"
+  run run_zsh '
+    export HOME="$TEST_TEMP_DIR/home-link/user"
+    export WS_BASE_DIR="${HOME:A}/workspaces"
+    export MOCK_FZF_MODE=first
+    printf "%s\n" alice Alice alice@example.invalid n n \
+      | ws-create >/dev/null 2>"${HOME:A}/create.stderr"
+    (( ${pipestatus[2]} == 0 )) || return 10
+    command grep -Fqx -- "Host github-alice" "${HOME:A}/.ssh/config" || return 11
+    command git config --file "${HOME:A}/.gitconfig" \
+      --get "includeIf.gitdir:${WS_BASE_DIR}/github/alice/.path" >/dev/null || return 12
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$TEST_TEMP_DIR/var/home/user/create.stderr" >&2
+    false
+  }
+}
+
+@test "ws safety: autoclean and sync ignore chpwd hooks and keep stdout empty" {
+  run run_zsh '
+    local workspace_dir="$WS_BASE_DIR/github/alice"
+    command mkdir -p -- "$workspace_dir/.ssh" || return 1
+    : > "$workspace_dir/.gitconfig"
+    command git init -q --bare -b main "$HOME/remote.git" || return 2
+    command git clone -q "$HOME/remote.git" "$HOME/seed" 2>/dev/null || return 3
+    command git -C "$HOME/seed" -c user.name=a -c user.email=a@b.invalid \
+      commit -q --allow-empty -m one || return 4
+    command git -C "$HOME/seed" push -q origin HEAD:main 2>/dev/null || return 5
+    command git clone -q "$HOME/remote.git" "$workspace_dir/proj" 2>/dev/null || return 6
+    command git -C "$HOME/seed" -c user.name=a -c user.email=a@b.invalid \
+      commit -q --allow-empty -m two || return 7
+    command git -C "$HOME/seed" push -q origin HEAD:main 2>/dev/null || return 8
+    command git -C "$workspace_dir/proj" branch done-feature || return 9
+
+    chpwd() { print -r -- "hook: ${PWD:t}"; }
+    local r="caller-value"
+    cd "$workspace_dir/proj" || return 10
+    ws-sync >"$HOME/sync.stdout" 2>"$HOME/sync.stderr" || return 11
+    [[ "$(command git rev-parse HEAD)" \
+      == "$(command git -C "$HOME/seed" rev-parse HEAD)" ]] || return 12
+    ws-autoclean >"$HOME/clean.stdout" 2>"$HOME/clean.stderr"
+    [[ "$r" == caller-value ]] || return 13
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+  [ ! -s "$HOME/sync.stdout" ]
+  ! grep -Fq "Could not inspect merged branches" "$HOME/clean.stderr" || false
+  ! grep -Fq "Branch scan failed" "$HOME/clean.stderr" || false
+  # The merged branch reached the (cancelled) picker as a candidate.
+  grep -Fq "done-feature" "$MOCK_FZF_INPUT_FILE"
+}
+
+@test "ws safety: batch clone selects the platform from the URL host" {
+  run run_zsh '
+    local workspace_name=""
+    for workspace_name in github/alice gitlab/bob; do
+      command mkdir -p -- "$WS_BASE_DIR/$workspace_name/.ssh" || return 1
+      : > "$WS_BASE_DIR/$workspace_name/.gitconfig"
+    done
+    _ws_clone_url_platform https://github.com/gitlabhq/gitlabhq
+    [[ "$REPLY" == github ]] || return 10
+    _ws_clone_url_platform git@gitlab.example.invalid:group/repo.git
+    [[ "$REPLY" == gitlab ]] || return 11
+    ws-clone-multi https://github.com/gitlabhq/gitlabhq \
+      >/dev/null 2>"$HOME/multi.stderr"
+    return 0
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  ! grep -Fq "gitlab/bob" "$HOME/multi.stderr" || false
+}
+
+@test "ws safety: routed help and option errors parse before dependency probes" {
+  command mkdir -p "$TEST_TEMP_DIR/nofzf-bin"
+  local tool
+  for tool in git ssh ssh-keygen mktemp chmod rm rmdir cat mkdir; do
+    command ln -s "$(command -v "$tool")" "$TEST_TEMP_DIR/nofzf-bin/$tool"
+  done
+  run run_zsh '
+    PATH="$TEST_TEMP_DIR/nofzf-bin"
+    ws-menu ws-sync --help 2>"$HOME/help.stderr" || return 10
+    ws-menu ws-sync --bogus 2>"$HOME/bogus.stderr"
+    (( $? == 2 )) || return 11
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME"/*.stderr >&2; false; }
+  ! grep -Fq "Missing fzf" "$HOME/help.stderr" || false
+}
+
+@test "ws safety: workspace list renders status glyphs and matching columns" {
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'echo "  - Logged in to github.com as alice" >&2' \
+    'exit 0' > "$TEST_MOCK_BIN/gh"
+  chmod +x "$TEST_MOCK_BIN/gh"
+  run run_zsh '
+    command mkdir -p -- "$WS_BASE_DIR/github/alice/.ssh" || return 1
+    : > "$WS_BASE_DIR/github/alice/.gitconfig"
+    ws-list >"$HOME/list.stdout" 2>"$HOME/list.stderr" || return 10
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/list.stderr" >&2; false; }
+  grep -Fq "✔ alice" "$HOME/list.stderr"
+  ! grep -Fq '\u' "$HOME/list.stderr" || false
+  grep -Eq 'KEY[[:space:]]+GH' "$HOME/list.stderr"
+}
+
+@test "ws safety: autoclean removes the deleted branch configuration" {
+  run run_zsh '
+    local workspace_dir="$WS_BASE_DIR/github/alice"
+    command mkdir -p -- "$workspace_dir/.ssh" || return 1
+    : > "$workspace_dir/.gitconfig"
+    command git init -q --bare -b main "$HOME/remote.git" || return 2
+    command git clone -q "$HOME/remote.git" "$workspace_dir/proj" 2>/dev/null || return 3
+    cd "$workspace_dir/proj" || return 4
+    command git -c user.name=a -c user.email=a@b.invalid \
+      commit -q --allow-empty -m one || return 5
+    command git push -q origin HEAD:main 2>/dev/null || return 6
+    command git branch done-feature || return 7
+    command git config branch.done-feature.remote origin
+    command git config branch.done-feature.merge refs/heads/done-feature
+    export MOCK_FZF_MODE=match MOCK_FZF_MATCH=done-feature
+    _ws_autoclean_confirmation_available() { return 0; }
+    _tk_confirm_count() { return 0; }
+    ws-autoclean >/dev/null 2>"$HOME/clean.stderr" || return 9
+    ! command git show-ref --verify --quiet refs/heads/done-feature || return 10
+    [[ -z "$(command git config --get-regexp "^branch\\.done-feature\\." || true)" ]] \
+      || return 11
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/clean.stderr" >&2; false; }
+}

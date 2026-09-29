@@ -353,8 +353,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   promote reviewed object IDs with compare-and-swap updates. GitHub writes
   re-fetch selected state after confirmation and report partial failure.
   Tag publication and deletion inspect and mutate the same single frozen push
-  URL; remote branch cleanup also rejects multiple push destinations. Stash
-  drop, discard, and restore-from stop before later targets on interruption.
+  URL; remote branch cleanup also rejects multiple push destinations. Every
+  push disables `push.followTags` and submodule recursion so configuration
+  cannot publish unplanned refs, and multi-ref plans never print raw push URLs.
+  Path commands run from the repository root so a subdirectory cannot redirect
+  a root-relative selection to another file; discard refuses untracked or
+  ignored obstacles; history-rewriting plans bind the symbolic branch as well
+  as the commit. Stash drop, discard, restore-from, multi-ref pushes, and tag
+  deletion stop before later targets on interruption. A local identity profile
+  writes explicit signing and SSH overrides instead of silently inheriting
+  another profile's key.
   After an accepted GitHub merge request, one final PR read verifies identity,
   head, and state, distinguishing a completed merge from a still-open pending
   request without polling or submitting another write.
@@ -520,7 +528,11 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   `--yes`. It freezes directory identities and bounded content-and-metadata
   fingerprints for owned configuration files, refuses malformed SSH markers
   and Git-config parse failure, and publishes each configuration rewrite
-  through a private same-directory atomic rename. It then renames the exact
+  through a private same-directory atomic rename. A legacy SSH block ends at
+  any `Host`/`Match` keyword or workspace marker, so neighbouring hand-written
+  or managed blocks are not removed, and unchanged files are not republished.
+  Grammar checks match code points rather than locale collation, and home
+  paths are built from the canonical `HOME`. It then renames the exact
   workspace into an unpredictable quarantine sibling, verifies its identity,
   and recursively deletes only that quarantine. On deletion failure it restores
   remaining data when safe or reports the recovery path.

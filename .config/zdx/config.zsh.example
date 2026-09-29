@@ -28,7 +28,7 @@
 
 # Root used by ws-menu. It must be an absolute, canonical path; /, HOME itself,
 # and symlink components are refused by workspace mutations.
-# WS_BASE_DIR="$HOME/workspaces"
+# WS_BASE_DIR="${HOME:A}/workspaces"
 
 # Connection deadline used by Workspace SSH tests. Accepted range: 1-60.
 # WS_SSH_CONNECT_TIMEOUT=10

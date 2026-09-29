@@ -427,6 +427,13 @@ _git_diff_usage() {
 
 git-diff() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-diff "$@" )
+    return $?
+  fi
 
   local REPLY=""
 
@@ -810,6 +817,13 @@ _git_file_history_usage() {
 
 git-file-history() {
   emulate -L zsh
+  local REPLY=""
+  # Git lists root-relative paths but resolves pathspecs from the current
+  # directory; run from the repository root so both always agree.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-file-history "$@" )
+    return $?
+  fi
 
   if (( $# > 0 )); then
     if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then

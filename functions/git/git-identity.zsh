@@ -156,6 +156,22 @@ _git_identity_restore_config() {
   (( rollback_failed == 0 ))
 }
 
+# Succeeds when core.sshCommand is set outside the local and worktree scopes.
+_git_identity_ssh_command_inherited() {
+  emulate -L zsh
+
+  local output=""
+  local line=""
+  output=$(command git config --show-scope --get-all core.sshCommand \
+    2>/dev/null) || return 1
+  for line in "${(@f)output}"; do
+    [[ -n "$line" ]] || continue
+    [[ "${line%%$'\t'*}" == (local|worktree) ]] && continue
+    return 0
+  done
+  return 1
+}
+
 _git_identity_apply() {
   local profile_name="$1"
   local scope="${2:-local}"
@@ -240,6 +256,23 @@ _git_identity_apply() {
     core.sshCommand "$ssh_command"
   )
 
+  # A local profile must not inherit signing or SSH selection from another
+  # scope: write explicit overrides so the plan matches the effective result.
+  local ssh_label="${ssh_key:-(default SSH selection)}"
+  if [[ "$scope" == "local" ]]; then
+    if (( ${#gpg_key} == 0 )); then
+      desired_present[commit.gpgSign]=1
+      desired_values[commit.gpgSign]=false
+      desired_present[tag.gpgSign]=1
+      desired_values[tag.gpgSign]=false
+    fi
+    if (( ${#ssh_command} == 0 )) && _git_identity_ssh_command_inherited; then
+      desired_present[core.sshCommand]=1
+      desired_values[core.sshCommand]=ssh
+      ssh_label="(default SSH selection; overrides inherited core.sshCommand)"
+    fi
+  fi
+
   local -A previous_present=() previous_values=()
   local -a current_values=()
   local -a reply_values=()
@@ -267,7 +300,7 @@ _git_identity_apply() {
   _git_label "Name:" "${profile[Name]}"
   _git_label "Email:" "${profile[Email]}"
   _git_label "Signing:" "${gpg_key:-(disabled)}"
-  _git_label "SSH identity:" "${ssh_key:-(default SSH selection)}"
+  _git_label "SSH identity:" "$ssh_label"
 
   local -i apply_failed=0
   for key in "${keys[@]}"; do

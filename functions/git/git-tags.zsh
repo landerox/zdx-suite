@@ -299,6 +299,7 @@ _git_tag_remote_snapshot() {
     }
     oid="${record%%$'\t'*}"
     ref="${record#*$'\t'}"
+    _git_ls_remote_ref_matches "$pattern" "$ref" || continue
     _git_validate_oid "$oid" && _git_validate_full_ref "$ref" \
       && [[ "$ref" == refs/tags/* ]] || {
       _git_error "The remote returned an invalid tag ref or object ID."
@@ -731,7 +732,7 @@ git-tag-create() {
   }
 
   local -a push_cmd=(
-    command git push
+    command git push --no-follow-tags --recurse-submodules=no
     "--force-with-lease=${tag_ref}:"
     --
     "$remote_url"
@@ -1250,7 +1251,8 @@ git-tag-push() {
     fi
 
     local -a push_cmd=(
-      command git push "--force-with-lease=${ref}:"
+      command git push --no-follow-tags --recurse-submodules=no
+      "--force-with-lease=${ref}:"
       -- "$remote_url" "${local_oid}:${ref}"
     )
     "${push_cmd[@]}" >&2
@@ -1258,6 +1260,9 @@ git-tag-push() {
     if (( push_rc == 0 )); then
       _git_success "Pushed $ref at $local_oid."
       pushed=$(( pushed + 1 ))
+    elif (( push_rc == 130 || push_rc == 143 )); then
+      _git_warn "Tag push interrupted: $pushed tag(s) pushed before the interruption."
+      return "$push_rc"
     else
       _git_error "Failed to push $ref (exit $push_rc)."
       failed=$(( failed + 1 ))
@@ -1552,6 +1557,8 @@ git-tag-delete() {
 
       local -a delete_remote_cmd=(
         command git push
+        --no-follow-tags
+        --recurse-submodules=no
         "--force-with-lease=${ref}:${remote_oid}"
         --
         "$remote_url"
@@ -1559,6 +1566,11 @@ git-tag-delete() {
       )
       "${delete_remote_cmd[@]}" >&2
       local -i remote_delete_rc=$?
+      if (( remote_delete_rc == 130 || remote_delete_rc == 143 )); then
+        _git_warn \
+          "Tag deletion interrupted: $deleted tag(s) deleted; local $ref retained."
+        return "$remote_delete_rc"
+      fi
       if (( remote_delete_rc != 0 )); then
         _git_error \
           "Remote deletion failed for $ref (exit $remote_delete_rc); local tag retained."

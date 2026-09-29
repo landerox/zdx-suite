@@ -16,7 +16,7 @@ _ws_migrate_repo_name_valid() {
   [[ -n "$repo_name" && "$repo_name" != "." && "$repo_name" != ".." \
     && "$repo_name" != -* && "$repo_name" != *$'\n'* \
     && "$repo_name" != *$'\r'* && "$repo_name" != *'|'* \
-    && "$repo_name" =~ '^[A-Za-z0-9._-]+$' ]]
+    && "$repo_name" != *[^A-Za-z0-9._-]* ]]
 }
 
 _ws_remove_ssh_marker_mode() {
@@ -151,8 +151,8 @@ ws-remove() {
   local identity="${ws#*/}"
   local host_alias=""
   host_alias=$(_tk_host_alias "$platform" "$identity")
-  local ssh_config="$HOME/.ssh/config"
-  local global_gitconfig="$HOME/.gitconfig"
+  local ssh_config="${HOME:A}/.ssh/config"
+  local global_gitconfig="${HOME:A}/.gitconfig"
   local begin_marker="# BEGIN ws:${platform}/${identity}"
   local end_marker="# END ws:${platform}/${identity}"
   local ssh_marker_mode=""
@@ -247,6 +247,7 @@ ws-remove() {
       return 1
     }
     local temp_config=""
+    local -i ssh_block_removed=1
     temp_config=$(mktemp "${ssh_config:h}/.zdx-ws-ssh.XXXXXX") || {
       _tk_error "Could not create a temporary SSH configuration."
       return 1
@@ -259,33 +260,70 @@ ws-remove() {
           !skip { print }
         ' "$ssh_config" > "$temp_config" || return 1
       else
-        awk -v alias="Host ${host_alias}" \
+        # Legacy blocks end at the next Host or Match keyword in any case and
+        # with either separator, or at the next workspace comment or marker, so
+        # neighbouring hand-written and marked blocks are never swallowed.
+        local -i legacy_rc=0
+        awk -v alias_name="$host_alias" \
             -v comment="# Workspace: ${platform}/${identity}" '
-          BEGIN { skip=0; pending=0; saved="" }
-          $0 == comment {
+          function normalized(line) {
+            sub(/\r$/, "", line)
+            sub(/^[[:space:]]+/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            return line
+          }
+          function keyword(line,   word) {
+            word = normalized(line)
+            sub(/[[:space:]=].*$/, "", word)
+            return tolower(word)
+          }
+          function starts_block(line,   text, word) {
+            text = normalized(line)
+            if (text ~ /^# (Workspace: |BEGIN ws:)/) return 1
+            word = keyword(line)
+            return (word == "host" || word == "match")
+          }
+          function is_alias(line,   text, word, value) {
+            text = normalized(line)
+            word = text
+            sub(/[[:space:]=].*$/, "", word)
+            if (tolower(word) != "host") return 0
+            value = substr(text, length(word) + 1)
+            sub(/^[[:space:]]*=?[[:space:]]*/, "", value)
+            return (value == alias_name)
+          }
+          BEGIN { skip=0; pending=0; saved=""; removed=0 }
+          skip && starts_block($0) { skip=0 }
+          skip { next }
+          normalized($0) == comment {
             if (pending) print saved
             pending=1
             saved=$0
             next
           }
+          is_alias($0) {
+            pending=0
+            saved=""
+            skip=1
+            removed=1
+            next
+          }
           pending {
-            if ($0 == alias) {
-              pending=0
-              saved=""
-              skip=1
-              next
-            }
             print saved
             pending=0
             saved=""
           }
-          !skip && $0 == alias { skip=1; next }
-          skip && /^[[:space:]]*(Host|Match)[[:space:]]+/ { skip=0 }
-          !skip { print }
+          { print }
           END {
             if (pending) print saved
+            exit (removed ? 0 : 3)
           }
-        ' "$ssh_config" > "$temp_config" || return 1
+        ' "$ssh_config" > "$temp_config" || legacy_rc=$?
+        if (( legacy_rc == 3 )); then
+          ssh_block_removed=0
+        elif (( legacy_rc != 0 )); then
+          return 1
+        fi
       fi
       command chmod 600 "$temp_config" || return 1
       _ws_owned_file_fingerprint "$ssh_config" \
@@ -298,13 +336,19 @@ ws-remove() {
         _tk_error "Workspace target changed while preparing the SSH update."
         return 1
       }
-      command mv -- "$temp_config" "$ssh_config" || return 1
-      temp_config=""
+      if (( ssh_block_removed )); then
+        command mv -- "$temp_config" "$ssh_config" || return 1
+        temp_config=""
+      fi
     } always {
       [[ -n "$temp_config" && -f "$temp_config" ]] \
         && command rm -f -- "$temp_config"
     }
-    _tk_success "Removed Host '$host_alias' from ~/.ssh/config"
+    if (( ssh_block_removed )); then
+      _tk_success "Removed Host '$host_alias' from ~/.ssh/config"
+    else
+      _tk_dim "No exact 'Host $host_alias' block was present in ~/.ssh/config"
+    fi
   fi
 
   if [[ "$gitconfig_fingerprint" != "absent" ]]; then
@@ -358,8 +402,11 @@ ws-remove() {
         _tk_error "Workspace target changed while preparing the Git update."
         return 1
       }
-      command mv -- "$temp_gitconfig" "$global_gitconfig" || return 1
-      temp_gitconfig=""
+      # Republish only a changed file so its mode and inode stay untouched.
+      if (( include_removed )); then
+        command mv -- "$temp_gitconfig" "$global_gitconfig" || return 1
+        temp_gitconfig=""
+      fi
     } always {
       [[ -n "$temp_gitconfig" && -f "$temp_gitconfig" ]] \
         && command rm -f -- "$temp_gitconfig"
@@ -451,7 +498,7 @@ ws-migrate() {
     "➜ Source directory (e.g. ~/github): "
   local source_dir=""
   read -r source_dir
-  source_dir="${source_dir/#\~/$HOME}"
+  source_dir="${source_dir/#\~/${HOME:A}}"
 
   [[ -n "$source_dir" && "$source_dir" == /* \
     && "$source_dir" != *$'\n'* && "$source_dir" != *$'\r'* \
@@ -461,6 +508,7 @@ ws-migrate() {
   }
   source_dir="${source_dir:a}"
   [[ "$source_dir" != "/" && "$source_dir" != "${HOME:a}" \
+    && "$source_dir" != "${HOME:A}" \
     && -d "$source_dir" && ! -L "$source_dir" \
     && "$source_dir" == "${source_dir:A}" ]] || {
     _tk_error "Refusing unsafe source directory: ${(V)source_dir}"

@@ -211,7 +211,8 @@ ws-sync() {
     [[ -z "$branch" ]] && branch="(detached)"
 
     # Fetch
-    if ! git -C "$repo_dir" fetch --all --prune 2>/dev/null; then
+    # stdout stays data-only; fetch diagnostics remain visible on stderr.
+    if ! git -C "$repo_dir" fetch --all --prune --quiet >&2; then
       printf "  ✘ %-30s [%s] fetch failed\n" \
         "${(V)repo}" "${(V)branch}" >&2
       ((issues++))
@@ -235,7 +236,9 @@ ws-sync() {
             print -r -- "${rb}	${local_name}"
           fi
         done)
-    if [[ -n "$remote_only" ]]; then
+    # Checkout candidates return to the previous branch, which a detached
+    # HEAD does not have; the head snapshot would refuse them anyway.
+    if [[ -n "$remote_only" && "$branch" != "(detached)" ]]; then
       local rb_line=""
       for rb_line in ${(f)remote_only}; do
         local -a rb_parts=("${(ps:\t:)rb_line}")
@@ -332,8 +335,8 @@ ws-sync() {
           || ! _ws_sync_worktree_clean "$repo_dir"; then
           _tk_error "[$repo] Repository or branch state changed before pull."
           ((issues++))
-        elif git -C "$repo_dir" merge --ff-only -- "$planned_upstream_oid" \
-          2>/dev/null; then
+        elif git -C "$repo_dir" merge --ff-only --quiet -- \
+          "$planned_upstream_oid" >&2 2>/dev/null; then
           local post_merge_snapshot=""
           if _ws_sync_branch_snapshot "$repo_dir" \
             && post_merge_snapshot="$REPLY" \
@@ -608,6 +611,7 @@ ws-repos() {
   _tk_header "Repos in $ws"
 
   local repo_count=0
+  local r=""
   for r in "$ws_dir"/*(DN/); do
     [[ "${r:t}" == ".ssh" ]] && continue
     if _ws_validate_repo_dir "$ws_dir" "$r"; then

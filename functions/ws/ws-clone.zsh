@@ -11,6 +11,29 @@ if [[ -n "${_WS_CLONE_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# Sets REPLY to github, gitlab, or empty from the URL host only, so a path
+# such as github.com/gitlabhq/gitlabhq cannot select the wrong platform.
+_ws_clone_url_platform() {
+  emulate -L zsh
+
+  local url="${1:-}"
+  local host=""
+  REPLY=""
+  if [[ "$url" == http(|s)://* ]]; then
+    host="${${url#*://}%%/*}"
+    host="${host##*@}"
+    host="${host%%:*}"
+  elif [[ "$url" == git@*:* ]]; then
+    host="${${url#git@}%%:*}"
+  fi
+  host="${host:l}"
+  if [[ "$host" == github.com ]]; then
+    REPLY="github"
+  elif [[ "$host" == gitlab.com || "$host" == *gitlab* ]]; then
+    REPLY="gitlab"
+  fi
+}
+
 _ws_clone_normalize_repo() {
   local input_repo="${1:-}"
   local repo_path="$input_repo"
@@ -30,7 +53,7 @@ _ws_clone_normalize_repo() {
 
   for component in ${(s:/:)repo_path}; do
     [[ -n "$component" && "$component" != "." && "$component" != ".." \
-      && "$component" =~ '^[A-Za-z0-9._-]+$' ]] || return 1
+      && "$component" != *[^A-Za-z0-9._-]* ]] || return 1
   done
 
   REPLY="$repo_path"
@@ -72,12 +95,9 @@ ws-clone() {
   if [[ -n "$input_repo" ]]; then
     # Extract owner/repo from any format
     if [[ "$input_repo" == http* || "$input_repo" == git@* ]]; then
-      # Detect platform from URL/SSH
-      if [[ "$input_repo" == *"github.com"* ]]; then
-        detected_platform="github"
-      elif [[ "$input_repo" == *"gitlab.com"* || "$input_repo" == *"gitlab"* ]]; then
-        detected_platform="gitlab"
-      fi
+      # Detect platform from the URL/SSH host
+      _ws_clone_url_platform "$input_repo"
+      detected_platform="$REPLY"
       _ws_clone_normalize_repo "$input_repo" || {
         _tk_error "Invalid repository operand."
         return 2
@@ -325,9 +345,9 @@ ws-clone-multi() {
       local line=""
           while IFS= read -r line; do
         [[ -z "$line" ]] && break
-        # Strip whitespace
-        line="${line## }"
-        line="${line%% }"
+        # Strip surrounding whitespace runs
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#?}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%?}"; done
         [[ -n "$line" ]] && repo_urls+=("$line")
       done
 
@@ -338,7 +358,7 @@ ws-clone-multi() {
       local gh_owner=""
           read -r gh_owner
       [[ -z "$gh_owner" ]] && { _tk_info "Cancelled."; return 0; }
-      [[ "$gh_owner" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || {
+      [[ "$gh_owner" == [A-Za-z0-9]* && "$gh_owner" != *[^A-Za-z0-9._-]* ]] || {
         _tk_error "Invalid GitHub organization or username."
         return 2
       }
@@ -400,8 +420,8 @@ ws-clone-multi() {
       if [[ "$url" == http* || "$url" == git@* ]]; then
       # Detect platform from first URL
       if [[ -z "$detected_platform" ]]; then
-        [[ "$url" == *"github.com"* ]] && detected_platform="github"
-        [[ "$url" == *"gitlab.com"* || "$url" == *"gitlab"* ]] && detected_platform="gitlab"
+        _ws_clone_url_platform "$url"
+        detected_platform="$REPLY"
       fi
     fi
 
