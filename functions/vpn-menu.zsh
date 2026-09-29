@@ -555,7 +555,7 @@ _vpn_interactive() {
       printf "%s\n" "${options[@]}" | _vpn_fzf \
         --prompt='vpn > ' \
         --header="$header" \
-        "${preview_options[@]}" > "$selection_file" || fzf_status=$?
+        "${preview_options[@]}" >| "$selection_file" || fzf_status=$?
       (( _vpn_interrupted_status == 0 )) || return $_vpn_interrupted_status
 
       _vpn_state_validate_file \

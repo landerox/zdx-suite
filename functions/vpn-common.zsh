@@ -176,10 +176,12 @@ _vpn_confirm_outcome() {
 }
 
 # Reads one line of input. Data goes to stdout; the prompt to stderr.
+# Status 1 for an empty answer or end of input (a cancellation), 3 when no
+# terminal is available to ask.
 _vpn_read_line() {
   local prompt="$1"
   local default_value="${2:-}"
-  [[ -t 0 && -t 2 ]] || return 1
+  [[ -t 0 && -t 2 ]] || return 3
 
   if [[ -n "$default_value" ]]; then
     printf '  %s [%s]: ' "${(V)prompt}" "${(V)default_value}" >&2
@@ -353,8 +355,15 @@ _vpn_validate_iface_name() {
   local iface="${1:-}"
   [[ -n "$iface" ]] || return 1
   (( ${#iface} <= 64 )) || return 1
-  [[ "$iface" == [A-Za-z0-9]* ]] || return 1
-  [[ "$iface" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]
+  # Bracket globs compare code points; =~ ranges follow locale collation.
+  [[ "$iface" == [A-Za-z0-9]* && "$iface" != *[^A-Za-z0-9._-]* ]]
+}
+
+# A name for a new or renamed profile must also fit wg-quick's 15-character
+# interface limit; longer existing names stay listed so they can be renamed or
+# removed.
+_vpn_validate_new_iface_name() {
+  _vpn_validate_iface_name "${1:-}" && (( ${#1} <= 15 ))
 }
 
 _vpn_conf_path() {
@@ -531,7 +540,7 @@ _vpn_profile_file_fingerprint() {
   zmodload zsh/stat 2>/dev/null || return 1
   local -A before=() after=()
   local checksum=""
-  if zstat -H before -- "$target_path" 2>/dev/null; then
+  if [[ -r "$target_path" ]] && zstat -H before -- "$target_path" 2>/dev/null; then
     checksum=$(command cksum < "$target_path" 2>/dev/null) || {
       probe_status=$?
       (( probe_status == 130 || probe_status == 143 )) && return "$probe_status"
@@ -973,9 +982,18 @@ _vpn_configs_access_state() {
     return 0
   fi
 
+  # Direct access also requires readable profiles: a user-owned directory may
+  # hold root-owned mode-600 profiles, as the suite's own installer creates.
+  local profile_path=""
+  local -i profiles_readable=1
   if [[ -r "$dir" && -x "$dir" ]]; then
-    print -r -- "direct"
-    return 0
+    for profile_path in "$dir"/*.conf(N); do
+      [[ -r "$profile_path" ]] || { profiles_readable=0; break; }
+    done
+    if (( profiles_readable )); then
+      print -r -- "direct"
+      return 0
+    fi
   fi
 
   if _vpn_have_sudo_cache; then
@@ -1237,7 +1255,9 @@ _vpn_get_configs() {
     }
     names+=("$name")
   done
+  # An empty but readable inventory is a successful result, not a failure.
   (( ${#names[@]} > 0 )) && print -rl -- "${(on)names[@]}"
+  return 0
 }
 
 _vpn_config_exists() {
@@ -1335,8 +1355,11 @@ _vpn_redact_stream() {
     | command awk '
       NR > 35 { exit }
       {
+        # wireguard-tools removes all whitespace before matching keys, so
+        # "Private Key = ..." is still a secret.
         lowered = tolower($0)
-        if (lowered !~ /^[[:space:]]*(privatekey|presharedkey)[[:space:]]*=/) {
+        gsub(/[[:space:]]/, "", lowered)
+        if (lowered !~ /^(privatekey|presharedkey)=/) {
           print
         }
       }'
@@ -1601,20 +1624,21 @@ _vpn_pick_from_list() {
     --header='Up/Down navigate | Enter select | Esc cancel') || fzf_status=$?
 
   if (( fzf_status != 0 )); then
-    (( fzf_status == 1 || fzf_status == 130 )) && return 130
+    (( fzf_status == 1 || fzf_status == 130 )) && return 3
     return 1
   fi
 
-  [[ -n "$selected" ]] || return 130
+  [[ -n "$selected" ]] || return 3
   print -r -- "$selected"
 }
 
-# Resolves the profile a command should act on. Returns 130 when the user
-# cancels, so callers can treat cancellation as success without mutating.
+# Resolves the profile a command should act on. Returns 3 when the user
+# cancels, so callers can treat cancellation as success without mutating,
+# and preserves 130/143 when authentication is interrupted.
 _vpn_pick_profile() {
   local prompt="${1:-Select VPN profile}"
 
-  _vpn_ensure_profile_access || return 1
+  _vpn_ensure_profile_access || return $?
 
   local configs_raw
   configs_raw=$(_vpn_get_configs 2>/dev/null) || return 1

@@ -65,12 +65,20 @@ _vpn_state_resolve() {
     return 1
   fi
 
-  if [[ "$literal" != "$resolved" ]]; then
+  # Only components below HOME must be real directories: HOME itself may
+  # traverse a symlink, as with /home -> var/home.
+  local below_home=""
+  if [[ "$literal" == "${HOME:a}"/* ]]; then
+    below_home="${literal#"${HOME:a}/"}"
+  elif [[ "$literal" == "$home_root"/* ]]; then
+    below_home="${literal#"${home_root}/"}"
+  fi
+  if [[ -z "$below_home" || "$resolved" != "$home_root/$below_home" ]]; then
     _vpn_error "Refusing a symlinked $label directory component: $literal"
     return 1
   fi
 
-  print -r -- "$literal"
+  print -r -- "$resolved"
 }
 
 _vpn_state_prepare() {
@@ -244,7 +252,7 @@ _vpn_write_cached_iface() {
     _vpn_state_validate_file \
       "$temp_file" "$dir" "cache temporary" "$_VPN_MAX_CACHE_BYTES" \
       || return 1
-    print -r -- "$iface" > "$temp_file" 2>/dev/null || return 1
+    print -r -- "$iface" >| "$temp_file" 2>/dev/null || return 1
     command chmod 600 -- "$temp_file" 2>/dev/null || return 1
     _vpn_state_validate_file \
       "$temp_file" "$dir" "cache temporary" "$_VPN_MAX_CACHE_BYTES" \
@@ -473,7 +481,7 @@ _vpn_report_publish() {
 
     _vpn_assert_private_dir_identity \
       "$dir" "report directory" "$directory_identity" || return 1
-    local current_fingerprint
+    local current_fingerprint=""
     current_fingerprint=$(
       _vpn_state_file_fingerprint \
         "$temp_file" "$dir" "report temporary" "$_VPN_MAX_REPORT_BYTES"

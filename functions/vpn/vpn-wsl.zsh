@@ -28,17 +28,28 @@ _vpn_should_apply_wsl_ipv6_fix() {
 
 # --- resolv.conf preflight --------------------------------------------------
 
+# Separate so tests on hosts whose resolver is a symlink (systemd-resolved) can
+# model a pinnable regular file.
+_vpn_resolv_conf_is_symlink() {
+  [[ -L "${1:-/etc/resolv.conf}" ]]
+}
+
 _vpn_test_resolv_conf() {
-  local target="/etc/resolv.conf"
+  local target="${1:-/etc/resolv.conf}"
+
+  # chattr cannot pin a symbolic link, and the hook would write through it
+  # into the generated file, so the pin would silently do nothing.
+  if _vpn_resolv_conf_is_symlink "$target"; then
+    _vpn_error \
+      "$target is a symlink to $(command readlink -f -- "$target" 2>/dev/null); it cannot be pinned."
+    _vpn_info \
+      "Set 'generateResolvConf = false' under [network] in /etc/wsl.conf, replace the link with a regular file, and retry."
+    return 1
+  fi
 
   if [[ ! -e "$target" ]]; then
     _vpn_error "$target does not exist."
     return 1
-  fi
-
-  if [[ -L "$target" ]]; then
-    _vpn_dim \
-      "$target is a symlink to $(command readlink -f -- "$target" 2>/dev/null)."
   fi
 
   [[ -w "$target" ]] && return 0
@@ -251,7 +262,7 @@ _vpn_apply_wsl_dns_hooks() {
       return 1
     fi
 
-    print -rl -- "${output[@]}" > "$temp_file" || {
+    print -rl -- "${output[@]}" >| "$temp_file" || {
       _vpn_error "Could not stage the patched profile."
       return 1
     }
@@ -269,16 +280,19 @@ _vpn_apply_wsl_dns_hooks() {
     ) || return 1
 
     # Parse the staged file before publication, so a bad transformation never
-    # needs a rollback after touching the live profile.
-    if ! command wg-quick strip "$temp_file" >/dev/null 2>&1; then
+    # needs a rollback after touching the live profile. wg-quick escalates
+    # itself for strip, so it runs inside the announced sudo boundary.
+    _vpn_announce_privileged \
+      "wg-quick strip <staged WSL profile>, then atomically install it as $conf"
+    _vpn_ensure_sudo_access "Hardening the WireGuard profile" || return $?
+    local -i strip_rc=0
+    _vpn_sudo_exec wg-quick strip "$temp_file" >/dev/null 2>&1 || strip_rc=$?
+    (( strip_rc == 130 || strip_rc == 143 )) && return "$strip_rc"
+    if (( strip_rc != 0 )); then
       _vpn_error \
         "wg-quick could not parse the patched profile; the original is unchanged."
       return 1
     fi
-
-    _vpn_announce_privileged \
-      "atomically install <validated WSL profile> as $conf"
-    _vpn_ensure_sudo_access "Hardening the WireGuard profile" || return 1
     _vpn_atomic_install_staged "$temp_file" "$conf" \
       "$staged_fingerprint" "$profile_fingerprint" "$directory_identity" \
       "wsl-hooks"
@@ -381,7 +395,7 @@ _vpn_fix_ipv6_config() {
 
       local -a entries=("${(@s:,:)value}")
       local -a kept=()
-      local entry trimmed
+      local entry="" trimmed=""
       for entry in "${entries[@]}"; do
         trimmed="${entry//[[:space:]]/}"
         [[ -n "$trimmed" ]] || continue
@@ -432,21 +446,25 @@ _vpn_fix_ipv6_config() {
   temp_file="${stage_dir}/${iface}.conf"
 
   {
-    print -rl -- "${output[@]}" > "$temp_file" || return 1
+    print -rl -- "${output[@]}" >| "$temp_file" || return 1
     command chmod 600 -- "$temp_file" 2>/dev/null || return 1
     local staged_fingerprint
     staged_fingerprint=$(
       _vpn_user_file_fingerprint "$temp_file" "IPv6-stripped profile"
     ) || return 1
 
-    if ! command wg-quick strip "$temp_file" >/dev/null 2>&1; then
+    # wg-quick escalates itself for strip, so it runs inside the announced
+    # sudo boundary.
+    _vpn_announce_privileged \
+      "wg-quick strip <IPv6-stripped profile>, then atomically install it as $conf_file"
+    _vpn_ensure_sudo_access "Applying the WSL IPv6 tweak" || return $?
+    local -i strip_rc=0
+    _vpn_sudo_exec wg-quick strip "$temp_file" >/dev/null 2>&1 || strip_rc=$?
+    (( strip_rc == 130 || strip_rc == 143 )) && return "$strip_rc"
+    if (( strip_rc != 0 )); then
       _vpn_error "wg-quick rejected the IPv6-stripped profile."
       return 1
     fi
-
-    _vpn_announce_privileged \
-      "atomically install <IPv6-stripped profile> as $conf_file"
-    _vpn_ensure_sudo_access "Applying the WSL IPv6 tweak" || return 1
 
     if [[ "$backup_state" == "missing" ]]; then
       _vpn_wsl_backup_once "$conf_file" "$backup_file" \

@@ -296,7 +296,7 @@ _vpn_preview_build() {
     pane_file="${_VPN_PREVIEW_DIR}/${index}"
     if ! _vpn_preview_render "$command_name" "$description" "$target" \
       2>/dev/null | command head -c "$_VPN_MAX_PREVIEW_BYTES" \
-      > "$pane_file"; then
+      >| "$pane_file"; then
       _vpn_error "Could not render VPN preview row $index."
       _vpn_preview_dir_cleanup
       return 1

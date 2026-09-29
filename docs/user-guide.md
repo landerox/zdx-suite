@@ -160,7 +160,8 @@ vpn-profile-import ~/Downloads/office-vpn.conf
 The source must be a regular, owner-only file owned by you, with a link count of
 one, no symlink indirection, and a maximum size of 1 MiB. It must contain
 `[Interface]` and `[Peer]`. `PreUp`, `PostUp`, `PreDown`, and `PostDown` are
-refused because `wg-quick` would execute imported hook text as root. Add a
+refused because `wg-quick` would execute imported hook text as root, and so is
+any NUL or control byte other than tab and line breaks. Add a
 reviewed hook later with `vpn-config-edit` if needed.
 
 After reviewing a trusted download, restrict it before import if necessary:
@@ -171,7 +172,10 @@ chmod 600 ~/Downloads/office-vpn.conf
 
 You are asked for the profile name, and validated content is staged privately
 then installed atomically as mode `600` owned by root. An existing profile is
-never overwritten. Running `vpn-profile-import` with no path prompts for one.
+never overwritten. Running `vpn-profile-import` with no path prompts for one;
+without a terminal the import fails instead of reporting success. New and
+renamed profile names use at most 15 characters, the `wg-quick` interface
+limit.
 
 ### 💻 WSL DNS Hardening
 
@@ -179,6 +183,10 @@ Inside WSL, Windows routes DNS through a relay that ignores the tunnel resolver,
 so DNS leaks unless `/etc/resolv.conf` is pinned. On import, the suite offers to
 add `PostUp`/`PostDown` hooks that pin the resolver while the tunnel is up and
 restore public fallbacks while it is down.
+
+Hardening needs a regular `/etc/resolv.conf`. WSL generates a symbolic link by
+default, which `chattr` cannot pin; set `generateResolvConf = false` under
+`[network]` in `/etc/wsl.conf`, replace the link with a regular file, and retry.
 
 > [!IMPORTANT]
 > Those hooks are executed **by root on every tunnel transition**, so the

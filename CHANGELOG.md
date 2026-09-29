@@ -111,6 +111,22 @@ behavior, verification, and remaining limitations.
   - Container and image plans show the exact forced operation before
     confirmation; pressing Enter on an empty filtered list is a cancellation;
     `docker-menu :` is rejected as an unknown command.
+- VPN suite review:
+  - `vpn-profile-import` refuses NUL and control bytes, which could hide a
+    `PostUp` hook that `wg-quick` would run as root.
+  - `vpn-summary` no longer aborts the shell when profiles exist, and
+    `vpn-details` and the WSL IPv6 rewrite keep stdout empty.
+  - State writes work under `setopt NO_CLOBBER`; state directories accept a
+    `HOME` reached through a symbolic link; secret keys split by whitespace are
+    redacted; missing IP-info fields keep their columns.
+  - Profiles in a readable directory that are themselves unreadable use the
+    sudo path; an empty privileged inventory is not a failure;
+    `vpn-reconnect-last` works while the profile directory is locked; an
+    interrupted authentication from a picker keeps its `130` or `143` status.
+  - `wg-quick strip` validation runs inside the announced sudo boundary, and
+    WSL DNS hardening refuses a symlinked `/etc/resolv.conf` it cannot pin.
+  - Import, create, and rename fail without a terminal instead of reporting
+    success, and new profile names use at most 15 characters.
 
 ## [0.1.0] — 2026-09-06
 
