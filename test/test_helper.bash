@@ -26,6 +26,13 @@ unset XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS
 unset HOMEBREW_CURL_RETRIES HOMEBREW_NO_ANALYTICS HOMEBREW_NO_AUTO_UPDATE
 unset SUDO_ASKPASS
 
+# Git exports repository variables such as GIT_DIR to its hooks. Inherited by
+# the pre-push `just check`, they redirect every fixture repository a test
+# creates into the real one; from a linked worktree that rewrites its shared
+# config and refs. Clear the complete set Git itself reports as repository-local.
+# shellcheck disable=SC2046
+unset $(command git rev-parse --local-env-vars 2>/dev/null)
+
 # Setup mock bin directory and prepend to PATH
 export TEST_MOCK_BIN="$TEST_TEMP_DIR/bin"
 mkdir -p "$TEST_MOCK_BIN"

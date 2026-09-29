@@ -32,6 +32,7 @@ Tests live under `test/`:
 ```text
 test/
 ├── test_helper.bash       shared sandbox and process launcher
+├── sandbox_isolation.bats shared-sandbox isolation from inherited Git state
 ├── lazy_loading.bats      core lazy/eager loading parity
 ├── sys_contract.bats      frozen System public-surface parity
 ├── sys_capabilities.bats  System loader and host decision matrix
@@ -404,6 +405,13 @@ The shared helper clears inherited Homebrew retry, analytics, auto-update, and
 askpass controls. A test that exercises those boundaries exports its hostile
 values explicitly after setup rather than depending on the developer or runner
 environment.
+
+The helper also clears every repository-local Git variable that
+`git rev-parse --local-env-vars` reports, such as `GIT_DIR` and
+`GIT_INDEX_FILE`. Git exports them to hooks, so without this the pre-push
+`just check` would redirect every fixture repository into the real one; from a
+linked worktree, that rewrites its shared configuration and refs.
+`sandbox_isolation.bats` guards this boundary.
 
 A test may use a real temporary Git repository inside the sandbox. It may not
 use the repository under test as a mutation target.
