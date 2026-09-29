@@ -21,6 +21,14 @@ case "$1:${2:-}" in
   info:*) printf 'daemon-one\n' ;;
   version:*) printf '26.1.0\n' ;;
   container:ls)
+    if [[ " $* " == *" id="* ]]; then
+      [[ "$MOCK_DOCKER_INSPECT_RC" == 0 ]] || exit "$MOCK_DOCKER_INSPECT_RC"
+      case " $* " in
+        *" id=$MOCK_DOCKER_FIRST_ID "*) printf '%s|first|exited|alpine:3.20\n' "$MOCK_DOCKER_FIRST_ID" ;;
+        *" id=$MOCK_DOCKER_SECOND_ID "*) printf '%s|second|exited|alpine:3.20\n' "$MOCK_DOCKER_SECOND_ID" ;;
+      esac
+      exit 0
+    fi
     printf '%s|first|exited|alpine:3.20\n' "$MOCK_DOCKER_FIRST_ID"
     printf '%s|second|exited|alpine:3.20\n' "$MOCK_DOCKER_SECOND_ID"
     ;;
@@ -78,7 +86,7 @@ docker-clean --scope stopped-containers --yes >"$HOME/out"'
     run run_zsh 'unfunction command
 docker-clean --scope stopped-containers --yes'
     [ "$status" -eq "$MOCK_DOCKER_INSPECT_RC" ]
-    [ "$(grep -c 'container inspect' "$MOCK_DOCKER_LOG")" -eq 1 ]
+    [ "$(grep -c 'container ls .*id=' "$MOCK_DOCKER_LOG")" -eq 1 ]
     ! grep -q 'container rm' "$MOCK_DOCKER_LOG" || return 1
   done
 }
@@ -131,7 +139,8 @@ docker-clean --scope stopped-containers --dry-run'
 #!/usr/bin/env bash
 payload=$("$DOCKER_RECOVERY_REAL_HEAD" "$@") || exit "$?"
 printf '%s' "$payload"
-if [[ "$payload" == *'|/first|'* ]]; then
+# Only the per-target revalidation returns the first record by itself.
+if [[ "$payload" == *'|first|'* && "$payload" != *'|second|'* ]]; then
   exit "$MOCK_DOCKER_HEAD_RC"
 fi
 MOCK
@@ -143,6 +152,6 @@ MOCK
 docker-clean --scope stopped-containers --yes'
     [ "$status" -eq "$MOCK_DOCKER_HEAD_RC" ]
     ! grep -q 'container rm' "$MOCK_DOCKER_LOG" || return 1
-    [ "$(grep -c 'container inspect' "$MOCK_DOCKER_LOG")" -eq 1 ]
+    [ "$(grep -c 'container ls .*id=' "$MOCK_DOCKER_LOG")" -eq 1 ]
   done
 }

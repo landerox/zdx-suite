@@ -102,6 +102,15 @@ behavior, verification, and remaining limitations.
     completion offers the command's own options; `ws-list` renders its status
     glyphs under a matching header; loop variables no longer leak into the
     caller's shell.
+- Docker suite review:
+  - `docker-clean` removes stopped containers whose image tag was re-pulled or
+    rebuilt, instead of failing every run; dangling-image plans skip
+    intermediate parents that `image rm` cannot remove.
+  - Swarm-scope networks and legacy `--link` names no longer abort the cleanup
+    plan or the container dashboard.
+  - Container and image plans show the exact forced operation before
+    confirmation; pressing Enter on an empty filtered list is a cancellation;
+    `docker-menu :` is rejected as an unknown command.
 
 ## [0.1.0] — 2026-09-06
 

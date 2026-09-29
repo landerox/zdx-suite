@@ -71,6 +71,8 @@ _docker_container_inventory_data() {
   local -a records=()
   local -i record_count=0 total_bytes=0
   for record in "${(@f)inventory_output}"; do
+    _docker_container_record_normalize "$record"
+    record="$REPLY"
     _docker_container_record_valid "$record" || {
       _docker_error "Docker returned a malformed container record."
       return 1
@@ -128,6 +130,7 @@ _docker_container_plan() {
   local action_name="$1"
   local expected_record="$2"
   local -a context_snapshot=("${(@)argv[3,8]}")
+  local -i force_remove="${9:-0}"
   local container_id="" container_name="" container_state=""
   local image_name="" ports="" extra=""
   IFS='|' read -r container_id container_name container_state \
@@ -136,6 +139,16 @@ _docker_container_plan() {
   _docker_header "Docker Container Plan"
   _docker_info "Context: $REPLY"
   _docker_info "Action: $action_name"
+  case "$action_name" in
+    start|stop) _docker_info "Operation: container $action_name -- $container_id" ;;
+    remove)
+      if (( force_remove )); then
+        _docker_info "Operation: container rm --force -- $container_id"
+      else
+        _docker_info "Operation: container rm -- $container_id"
+      fi
+      ;;
+  esac
   _docker_info "Container: $container_name"
   _docker_info "Full ID: $container_id"
   _docker_info "State: $container_state"
@@ -221,7 +234,7 @@ _docker_container_execute_action() {
   fi
 
   _docker_container_plan "$action_name" "$expected_record" \
-    "${context_snapshot[@]}" || return 1
+    "${context_snapshot[@]}" "$force_remove" || return 1
   (( dry_run )) && {
     _docker_success "Dry run complete; no container was changed."
     return 0
