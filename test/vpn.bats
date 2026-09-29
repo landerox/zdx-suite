@@ -19,7 +19,7 @@ teardown() {
   export MOCK_SUDO_ALLOW=true
   export MOCK_LSATTR_ETC_RESOLV_CONF="--------- /etc/resolv.conf"
 
-  run run_zsh "_vpn_test_resolv_conf"
+  run run_zsh "_vpn_resolv_conf_is_symlink() { return 1; }; _vpn_test_resolv_conf"
   [ "$status" -eq 0 ]
 }
 
@@ -28,8 +28,17 @@ teardown() {
   export MOCK_LSATTR_ETC_RESOLV_CONF="----i---- /etc/resolv.conf"
   export MOCK_CHATTR_MISSING=1
 
-  run run_zsh "_vpn_test_resolv_conf"
+  run run_zsh "_vpn_resolv_conf_is_symlink() { return 1; }; _vpn_test_resolv_conf"
   [ "$status" -eq 1 ]
+}
+
+@test "vpn: _vpn_test_resolv_conf refuses a symlinked resolver it cannot pin" {
+  printf 'nameserver 1.1.1.1\n' > "$HOME/generated-resolv.conf"
+  ln -s generated-resolv.conf "$HOME/resolv.conf"
+  run run_zsh "_vpn_test_resolv_conf \"\$HOME/resolv.conf\""
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot be pinned"* ]]
+  [[ "$output" == *"generateResolvConf = false"* ]]
 }
 
 @test "vpn: _vpn_test_write_access checks directory writability" {
@@ -152,8 +161,9 @@ EOF
 @test "vpn: _vpn_apply_wsl_dns_hooks patches configuration correctly and is idempotent" {
   run run_zsh "
     export MOCK_SUDO_WRITE_ETC_RESOLV_CONF=1
-    export MOCK_SUDO_ALLOW='true,test,install,mktemp,mv,rm'
+    export MOCK_SUDO_ALLOW='true,test,install,mktemp,mv,rm,wg-quick'
     export MOCK_LSATTR_ETC_RESOLV_CONF='--------- /etc/resolv.conf'
+    _vpn_resolv_conf_is_symlink() { return 1; }
 
     local profile_dir=\"\$HOME/wireguard\"
     command mkdir -p -- \"\$profile_dir\"

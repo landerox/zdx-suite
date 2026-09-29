@@ -47,6 +47,7 @@ write_profile() {
 
   run run_zsh '
     export VPN_CONFIG_DIR="$VPN_PROFILE_DIR"
+    _vpn_resolv_conf_is_symlink() { return 1; }
     _vpn_apply_wsl_dns_hooks "$VPN_PROFILE_DIR/wg0.conf"
   '
 
@@ -69,6 +70,7 @@ write_profile() {
 
   run run_zsh '
     export VPN_CONFIG_DIR="$VPN_PROFILE_DIR"
+    _vpn_resolv_conf_is_symlink() { return 1; }
     _vpn_apply_wsl_dns_hooks "$VPN_PROFILE_DIR/wg0.conf"
   '
 
@@ -96,11 +98,12 @@ write_profile() {
   write_profile "wg0" "8.8.8.8, 8.8.4.4"
 
   export MOCK_SUDO_WRITE_ETC_RESOLV_CONF=1
-  export MOCK_SUDO_ALLOW='true,test,install,mktemp,mv,rm,__validate__'
+  export MOCK_SUDO_ALLOW='true,test,install,mktemp,mv,rm,__validate__,wg-quick'
   export MOCK_LSATTR_ETC_RESOLV_CONF='--------- /etc/resolv.conf'
 
   run run_zsh '
     export VPN_CONFIG_DIR="$VPN_PROFILE_DIR"
+    _vpn_resolv_conf_is_symlink() { return 1; }
     _vpn_apply_wsl_dns_hooks "$VPN_PROFILE_DIR/wg0.conf" || return 1
     _vpn_apply_wsl_dns_hooks "$VPN_PROFILE_DIR/wg0.conf" || return 2
     return 0

@@ -139,6 +139,7 @@ EOF
 
   run run_zsh '
     VPN_DNS_FALLBACK_PRIMARY="1.1.1.1, 9.9.9.9"
+    _vpn_resolv_conf_is_symlink() { return 1; }
     _vpn_apply_wsl_dns_hooks "$VPN_CONFIG_DIR/wg0.conf"
   '
 
@@ -156,7 +157,7 @@ EOF
     "0.0.0.0/0, ::/0"
   cp "$VPN_CONFIG_DIR/wg0.conf" "$HOME/original.conf"
   chmod 600 "$HOME/original.conf"
-  export MOCK_SUDO_ALLOW="true,install,mktemp,ln,rm,mv"
+  export MOCK_SUDO_ALLOW="true,install,mktemp,ln,rm,mv,wg-quick"
 
   run run_zsh '
     _vpn_fix_ipv6_config wg0 || return 1
@@ -300,5 +301,182 @@ EOF
     return 0
   '
 
+  [ "$status" -eq 0 ]
+}
+
+@test "vpn regressions: imported profiles cannot hide a hook behind a NUL byte" {
+  printf '[Interface]\nPrivateKey = K=\nPost\0Up = id > %s/pwned\n\n[Peer]\nPublicKey = P=\nAllowedIPs = 0.0.0.0/0\n' \
+    "$HOME" > "$HOME/smuggled.conf"
+  chmod 600 "$HOME/smuggled.conf"
+  printf '[Interface]\nPrivateKey = K=\n\n[Peer]\nPublicKey = P=\nAllowedIPs = 0.0.0.0/0\n' \
+    > "$HOME/clean.conf"
+  chmod 600 "$HOME/clean.conf"
+
+  run run_zsh '
+    _vpn_validate_profile_file "$HOME/smuggled.conf" 2>"$HOME/smuggled.stderr" && return 10
+    _vpn_validate_profile_file "$HOME/clean.conf" || return 11
+    return 0
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  grep -Fq "NUL or control bytes" "$HOME/smuggled.stderr"
+}
+
+@test "vpn regressions: the status summary lists profiles without aborting" {
+  write_regression_profile "$VPN_CONFIG_DIR/wg0.conf"
+  run run_zsh '
+    _vpn_active_interfaces() { reply=(); return 0; }
+    vpn-summary 2>"$HOME/summary.stderr" || return 10
+    print -r -- "after-summary"
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/summary.stderr" >&2; false; }
+  [[ "$output" == *"after-summary"* ]]
+  grep -Fq "wg0" "$HOME/summary.stderr"
+  ! grep -Fq "read-only variable" "$HOME/summary.stderr" || false
+}
+
+@test "vpn regressions: private state writes work under NO_CLOBBER" {
+  write_regression_profile "$VPN_CONFIG_DIR/wg0.conf"
+  run run_zsh '
+    setopt NO_CLOBBER
+    vpn-default-set wg0 >/dev/null 2>"$HOME/default.stderr" || return 10
+    [[ "$(_vpn_peek_default_iface)" == wg0 ]] || return 11
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/default.stderr" >&2; false; }
+}
+
+@test "vpn regressions: reconnect-last falls back to the recorded profile when locked" {
+  run run_zsh '
+    _vpn_require_platform() { return 0; }
+    _vpn_read_last_iface() { return 1; }
+    _vpn_peek_last_iface() { print -r -- wg0; }
+    _vpn_ensure_wg_access() { return 0; }
+    _vpn_active_interfaces() { reply=(); return 0; }
+    vpn-on() { print -r -- "vpn-on:$1"; }
+    vpn-reconnect-last 2>/dev/null
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"vpn-on:wg0"* ]]
+}
+
+@test "vpn regressions: unreadable profiles in a readable directory are not direct access" {
+  write_regression_profile "$VPN_CONFIG_DIR/wg0.conf"
+  chmod 000 "$VPN_CONFIG_DIR/wg0.conf"
+  [ ! -r "$VPN_CONFIG_DIR/wg0.conf" ] || skip "the test user can read mode-000 files"
+  run run_zsh '_vpn_configs_access_state'
+  chmod 600 "$VPN_CONFIG_DIR/wg0.conf"
+  [ "$status" -eq 0 ]
+  [ "$output" != "direct" ]
+}
+
+@test "vpn regressions: an empty privileged inventory is a successful result" {
+  chmod 300 "$VPN_CONFIG_DIR"
+  [ ! -r "$VPN_CONFIG_DIR" ] || { chmod 700 "$VPN_CONFIG_DIR"; skip "the test user can read mode-300 directories"; }
+  run run_zsh '
+    _vpn_have_sudo_cache() { return 0; }
+    _vpn_sudo_probe() { return 0; }
+    _vpn_get_configs
+  '
+  chmod 700 "$VPN_CONFIG_DIR"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "vpn regressions: WSL IPv6 stripping validates under sudo and keeps stdout empty" {
+  write_regression_profile \
+    "$VPN_CONFIG_DIR/wg0.conf" \
+    "10.0.0.2/24, fd00::2/128" \
+    "1.1.1.1, 2606:4700:4700::1111" \
+    "0.0.0.0/0, ::/0"
+  export MOCK_SUDO_ALLOW="true,install,mktemp,ln,rm,mv,wg-quick"
+  : > "$MOCK_SUDO_LOG"
+  run run_zsh '_vpn_fix_ipv6_config wg0 2>/dev/null'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'wg-quick strip' "$MOCK_SUDO_LOG"
+}
+
+@test "vpn regressions: details keep stdout empty and pickers preserve interruptions" {
+  run run_zsh '
+    _vpn_check_wg() { return 0; }
+    _vpn_active_interfaces() { reply=(wg0 wg1); return 0; }
+    _vpn_run_wg() { return 0; }
+    _vpn_info_capture_bounded() { print -r -- "details-for-$3"; }
+    vpn-details 2>/dev/null
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+
+  run run_zsh '
+    _vpn_ensure_profile_access() { return 130; }
+    _vpn_pick_profile "Pick" >/dev/null 2>&1
+    (( $? == 130 )) || return 10
+    vpn-on >/dev/null 2>&1
+    (( $? == 130 )) || return 11
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "vpn regressions: secret keys are redacted when split by whitespace" {
+  run run_zsh '
+    printf "%s\n" "Private Key = SECRET-ONE" "Preshared	Key=SECRET-TWO" \
+      "privatekey=SECRET-THREE" "PublicKey = PUBLIC" | _vpn_redact_stream
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PUBLIC"* ]]
+  [[ "$output" != *"SECRET"* ]]
+}
+
+@test "vpn regressions: missing IP-info fields keep their columns" {
+  command -v jq >/dev/null || skip "jq is not installed"
+  run run_zsh '
+    _vpn_load_provider_urls() { reply=(https://ipinfo.io/json); }
+    _vpn_curl_bounded() {
+      print -r -- "{\"ip\":\"203.0.113.7\",\"country\":\"US\",\"org\":\"AS64500 Example\"}"
+    }
+    _vpn_get_ip_info
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'203.0.113.7\t\t\tUS\tAS64500 Example\tipinfo.io' ]
+}
+
+@test "vpn regressions: import without a terminal fails instead of reporting success" {
+  printf '[Interface]\nPrivateKey = K=\n\n[Peer]\nPublicKey = P=\nAllowedIPs = 0.0.0.0/0\n' \
+    > "$HOME/import.conf"
+  chmod 600 "$HOME/import.conf"
+  run run_zsh '
+    _vpn_require_platform() { return 0; }
+    vpn-profile-import "$HOME/import.conf"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"interactive terminal"* ]]
+  [ ! -e "$VPN_CONFIG_DIR/import.conf" ]
+}
+
+@test "vpn regressions: state directories accept a HOME reached through a symlink" {
+  mkdir -p "$TEST_TEMP_DIR/var/home/user"
+  ln -s var/home "$TEST_TEMP_DIR/home-link"
+  run run_zsh '
+    export HOME="$TEST_TEMP_DIR/home-link/user"
+    _vpn_state_resolve "$HOME/.cache/zdx/vpn" cache
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$output" = "$TEST_TEMP_DIR/var/home/user/.cache/zdx/vpn" ]
+
+  run run_zsh '
+    command mkdir -p "$HOME/real-cache"
+    command ln -s real-cache "$HOME/link-cache"
+    _vpn_state_resolve "$HOME/link-cache/vpn" cache
+  '
+  [ "$status" -eq 1 ]
+}
+
+@test "vpn regressions: new profile names fit the wg-quick interface limit" {
+  run run_zsh '
+    _vpn_validate_new_iface_name abcdefghijklmno || return 10
+    _vpn_validate_new_iface_name abcdefghijklmnop && return 11
+    _vpn_validate_iface_name abcdefghijklmnop || return 12
+    vpn-profile-create abcdefghijklmnop >/dev/null 2>&1
+    (( $? == 2 )) || return 13
+  '
   [ "$status" -eq 0 ]
 }

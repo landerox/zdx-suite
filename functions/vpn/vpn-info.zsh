@@ -171,25 +171,26 @@ vpn-summary() {
 
   _vpn_blank
   _vpn_info "Profiles:"
-  local conf status backup_state
+  # `status` is a read-only Zsh special parameter.
+  local conf="" row_state="" backup_state=""
   for conf in "${_VPN_MENU_CONFIGS[@]}"; do
-    status="inactive"
+    row_state="inactive"
     if _vpn_state_iface_is_active "$conf"; then
-      status="active"
+      row_state="active"
     elif (( !_VPN_MENU_ACTIVE_KNOWN )); then
-      status="unknown"
+      row_state="unknown"
     fi
 
     if [[ -n "$_VPN_MENU_LAST_IFACE" && "$conf" == "$_VPN_MENU_LAST_IFACE" ]]; then
-      status="$status, last used"
+      row_state="$row_state, last used"
     fi
 
     backup_state=$(_vpn_state_iface_backup_state "$conf")
     case "$backup_state" in
-      available) status="$status, backup available" ;;
-      unknown) status="$status, backup unknown" ;;
+      available) row_state="$row_state, backup available" ;;
+      unknown) row_state="$row_state, backup unknown" ;;
     esac
-    _vpn_label "$conf" "$status"
+    _vpn_label "$conf" "$row_state"
   done
 }
 
@@ -197,7 +198,8 @@ vpn-summary() {
 #   Arguments: --help only.
 #   stdout:    none. Interface state is UI and goes to stderr.
 #   Effects:   read-only. May request sudo once to read per-interface state.
-#   Status:    0 on success or inaccessible live state, 1 when wg is missing.
+#   Status:    0 on success or inaccessible live state, 1 when wg is missing,
+#              130 or 143 when authentication is interrupted.
 vpn-details() {
   case "${1:-}" in
     -h|--help)
@@ -220,7 +222,10 @@ vpn-details() {
     active_known=1
     active_ifaces=("${reply[@]}")
   elif [[ "$(_vpn_wg_access_state)" == "locked" ]]; then
-    if _vpn_ensure_wg_access; then
+    local -i access_rc=0
+    _vpn_ensure_wg_access || access_rc=$?
+    (( access_rc == 130 || access_rc == 143 )) && return "$access_rc"
+    if (( access_rc == 0 )); then
       reply=()
       if _vpn_active_interfaces; then
         active_known=1
@@ -243,14 +248,16 @@ vpn-details() {
      ! _vpn_run_wg show "${active_ifaces[1]}" &>/dev/null && \
      ! _vpn_have_sudo_cache; then
     _vpn_warn "Detailed interface state requires sudo."
-    _vpn_ensure_sudo_access "Reading WireGuard interface details" || true
+    local -i sudo_rc=0
+    _vpn_ensure_sudo_access "Reading WireGuard interface details" || sudo_rc=$?
+    (( sudo_rc == 130 || sudo_rc == 143 )) && return "$sudo_rc"
   fi
 
   local iface
   if [[ ${#active_ifaces[@]} -gt 0 ]]; then
     for iface in "${active_ifaces[@]}"; do
       _vpn_header "Interface: $iface"
-      local details
+      local details=""
       if ! details=$(
         _vpn_info_capture_bounded \
           "$_VPN_MAX_PREVIEW_BYTES" _vpn_get_iface_details "$iface"
@@ -259,7 +266,7 @@ vpn-details() {
         _vpn_dim \
           "The state was inaccessible or exceeded the diagnostic safety limit."
       elif [[ -n "$details" ]]; then
-        local line
+        local line=""
         for line in "${(@f)details}"; do
           print -u2 -r -- "${(V)line}"
         done
@@ -943,13 +950,15 @@ _vpn_get_ip_info() {
   for url in "${json_providers[@]}"; do
     raw=$(_vpn_curl_bounded "$url" 5 3 2>/dev/null) || continue
     [[ -n "$raw" ]] || continue
+    # A missing field must stay an empty column: `empty` would shift every
+    # later value into the wrong position.
     parsed=$(print -r -- "$raw" | jq -r '
       [
-        .ip // empty,
-        .city // empty,
-        (.region // .region_name // empty),
-        (.country_name // .country // empty),
-        (.org // .asn_org // empty)
+        .ip // "",
+        .city // "",
+        (.region // .region_name // ""),
+        (.country_name // .country // ""),
+        (.org // .asn_org // "")
       ] | @tsv
     ' 2>/dev/null) || continue
     [[ -n "${parsed%%$'\t'*}" ]] || continue

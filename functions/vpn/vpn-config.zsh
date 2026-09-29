@@ -265,7 +265,8 @@ vpn-config-edit() {
     local picked
     local -i pick_status=0
     picked=$(_vpn_pick_profile "Edit VPN profile") || pick_status=$?
-    (( pick_status == 130 )) && return 0
+    (( pick_status == 3 )) && return 0
+    (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
     iface="$picked"
   fi
@@ -377,7 +378,8 @@ vpn-config-restore() {
       local -i pick_status=0
       picked=$(_vpn_pick_from_list "Restore backup for" "${candidates[@]}") \
         || pick_status=$?
-      (( pick_status == 130 )) && return 0
+      (( pick_status == 3 )) && return 0
+      (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
       (( pick_status != 0 )) && return 1
       iface=$(_vpn_sanitize_iface_capture "$picked") || {
         _vpn_error "Could not determine which profile to restore."

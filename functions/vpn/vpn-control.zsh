@@ -245,7 +245,8 @@ vpn-on() {
     local picked
     local -i pick_status=0
     picked=$(_vpn_pick_profile "Connect VPN profile") || pick_status=$?
-    (( pick_status == 130 )) && return 0
+    (( pick_status == 3 )) && return 0
+    (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
     iface="$picked"
   fi
@@ -328,7 +329,8 @@ vpn-off() {
       local -i pick_status=0
       picked=$(_vpn_pick_from_list "Disconnect VPN" "${active[@]}") \
         || pick_status=$?
-      (( pick_status == 130 )) && return 0
+      (( pick_status == 3 )) && return 0
+      (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
       (( pick_status != 0 )) && return 1
       iface=$(_vpn_sanitize_iface_capture "$picked") || {
         _vpn_error "Could not determine which interface to disconnect."
@@ -479,7 +481,10 @@ vpn-reconnect-last() {
 
   local last
   local -i pointer_rc=0
-  last=$(_vpn_read_last_iface 2>/dev/null) || pointer_rc=$?
+  # A locked profile directory cannot prove the profile still exists; fall
+  # back to the recorded pointer, as vpn-default-connect does, and let vpn-on
+  # authenticate and validate it.
+  last=$(_vpn_effective_last_iface) || pointer_rc=$?
   (( pointer_rc == 130 || pointer_rc == 143 )) && return "$pointer_rc"
   (( pointer_rc == 0 )) || last=""
   if [[ -z "$last" ]]; then
@@ -577,7 +582,8 @@ vpn-default-set() {
     local picked
     local -i pick_status=0
     picked=$(_vpn_pick_profile "Set default VPN profile") || pick_status=$?
-    (( pick_status == 130 )) && return 0
+    (( pick_status == 3 )) && return 0
+    (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
     iface="$picked"
   fi

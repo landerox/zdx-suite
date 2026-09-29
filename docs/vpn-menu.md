@@ -210,7 +210,11 @@ Every mutation follows the same sequence:
    primitive, but it does not regain interactive privilege between them.
 
 Directly readable paths never escalate: listing profiles, checking backups, and
-rendering previews record no `sudo` call at all. A protected system directory
+rendering previews record no `sudo` call at all. Access is direct only when the
+directory and every profile in it are readable; a user-owned directory holding
+root-owned mode-`600` profiles, as the suite's own installer creates, uses the
+announced sudo path instead. An empty inventory read through sudo is a
+successful empty result. A protected system directory
 can be read only after the user explicitly unlocks access; previews themselves
 never request credentials.
 
@@ -235,7 +239,12 @@ run and make the aggregate result nonzero.
 Profile existence, metadata, and checksum inspection also retain interruption
 statuses through the tunnel callers, including protected reads through sudo.
 An interrupted profile check of a saved default or last-used pointer stops
-before reconnecting; it never falls back to the unverified stored name.
+before reconnecting; it never falls back to the unverified stored name. When
+the profile directory is merely locked, `vpn-reconnect-last` uses the recorded
+pointer, as `vpn-default-connect` does, and `vpn-on` then authenticates and
+validates it. Picker cancellation is internal status `3`, distinct from an
+interrupted authentication, so a bare `vpn-on` or menu selection preserves
+`130` or `143`.
 
 ### The editor never runs as root
 
@@ -255,7 +264,10 @@ imported profile is therefore accepted only when it is a private, singly linked
 regular file owned by the current user, at most 1 MiB, containing
 `[Interface]` and `[Peer]`, and containing none of those lifecycle hooks.
 Symlinks, hard links, public modes, oversized files, and hook-bearing profiles
-are refused before sudo. A user can add a reviewed hook later through
+are refused before sudo. A NUL or any control byte other than tab, line feed,
+and carriage return is refused first: wg-quick's bash `read` silently drops
+NUL bytes, so `Post<NUL>Up` would evade a text search and still run as
+`PostUp`. A user can add a reviewed hook later through
 `vpn-config-edit`; the suite never elevates unreviewed imported shell text.
 
 Accepted content is copied into an owner-only staging directory, fingerprinted
@@ -283,7 +295,13 @@ $ vpn-profile-import ./hostile.conf     # DNS = 1.1.1.1'; curl … | sh; '
 Each configured fallback (`VPN_DNS_FALLBACK_PRIMARY`,
 `VPN_DNS_FALLBACK_SECONDARY`) must be exactly one valid IP literal. Patching
 builds an owner-only staged profile and asks `wg-quick strip` to parse that
-staged file **before** an atomic same-directory replacement. A parse or
+staged file **before** an atomic same-directory replacement. Because wg-quick
+re-executes itself through sudo for `strip`, that parse runs through
+`_vpn_sudo_exec` after the announcement and authentication, never as an
+unannounced escalation. Hardening refuses a symlinked `/etc/resolv.conf`
+(WSL's generated default): `chattr` cannot pin a link and the hook would write
+through it, so the user is told to set `generateResolvConf = false` and replace
+the link first. A parse or
 validation failure therefore leaves the live profile untouched. An existing
 sentinel is idempotent only when the exact complete generated hook block follows
 it; a partial or imitated sentinel is refused. The separate WSL IPv6
@@ -356,12 +374,15 @@ Both user-owned directories are validated on **every** use by
 - a path containing a `..` segment is refused;
 - the filesystem root and the home directory itself are refused;
 - the resolved path must live inside the user's home;
-- a symlinked directory is refused, checked on the **unresolved** path so a link
-  pointing elsewhere cannot be followed;
+- a symlinked directory component below the home is refused, checked on the
+  **unresolved** path so a link pointing elsewhere cannot be followed; the home
+  itself may traverse a symlink (for example `/home -> var/home`), and the
+  canonical path is used;
 - directories are created mode `700` and files mode `600`.
 
 Cache entry names are an internal allowlist (`last-iface`, `default-iface`),
-never user input. A pointer to a profile that no longer exists is *peeked* so the
+never user input. Writes into invocation-created temporaries use `>|`, so a
+user's `NO_CLOBBER` option cannot break them. A pointer to a profile that no longer exists is *peeked* so the
 menu can show and clear it, but `_vpn_read_cached_iface` refuses it, so a stale
 pointer is never acted on.
 
@@ -401,7 +422,8 @@ instead of displaying or acting on them.
 | `130`, `143` | Interrupted tunnel control, including its authentication or active-state query; no later batch mutation is attempted |
 
 A declined confirmation and "no interface is active" are both `0`. "No terminal
-available to confirm a mutation" is `1`. `_vpn_confirm` returns three distinct
+available to confirm a mutation" is `1`, and so is a profile name or import
+path that cannot be prompted for without a terminal. `_vpn_confirm` returns three distinct
 statuses (`0` confirmed, `1` declined, `2` cannot prompt) so no caller can
 conflate them; the previous `read -q` implementation returned non-zero without a
 terminal, which made a scripted `vpn-off-all` silently do nothing and report
@@ -426,13 +448,13 @@ completion. Scheduled for removal in **v0.3.0**.
 
 | File | Covered boundary |
 | --- | --- |
-| `vpn.bats` | Shared helpers: resolv.conf preflight, directory writability, name validation, cache pointers, WSL detection, and DNS hook idempotency |
+| `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, and DNS hook idempotency |
 | `vpn_contract.bats` | The frozen 22-command fixture, five-way parity, a host-independent command set, dispatcher coverage, deprecated forwarding, cancellation, timing label, argument forwarding, invalid-argument statuses |
 | `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity |
 | `vpn_privilege.bats` | DNS hook injection refusal, `sudoedit` instead of a root editor, target revalidation after authentication, the restore undo copy, least privilege on read paths, announcement ordering, destructive controls (`--dry-run`, declined, no-terminal, `--yes` scope), secret redaction in excerpts and panes, state permissions and traversal/symlink refusal, stale pointers, and the platform gate |
 | `vpn_grammar.bats` | Exact completion grammar, parser-before-probe behavior, option terminators, operand cardinality, and safety-flag parity |
 | `vpn_hardening.bats` | Profile-directory boundaries, unsafe profile and import sources, lifecycle-hook refusal, strict DNS literals, picker ambiguity, atomic cache and report publication, cleanup on failure, and no-privilege dry runs |
-| `vpn_regressions.bats` | Provider URL and curl restrictions, exact WSL hook ownership, single-IP fallbacks, atomic IPv6 rewrite, fail-closed connect, stream isolation, sudo timestamp failure, cache/report bounds, and signal-safe preview cleanup |
+| `vpn_regressions.bats` | Provider URL and curl restrictions, exact WSL hook ownership, single-IP fallbacks, atomic IPv6 rewrite, fail-closed connect, stream isolation, sudo timestamp failure, cache/report bounds, signal-safe preview cleanup, NUL-hidden import hooks, the profile summary, `NO_CLOBBER` state writes, locked reconnect fallback, unreadable-profile access, empty privileged inventories, sudo-bound `wg-quick strip`, stdout-clean details and IPv6 rewrites, picker interruption status, whitespace-split secret redaction, aligned IP-info columns, terminal-less import failure, symlinked homes, and 15-character new profile names |
 | `vpn_control_recovery.bats` | Exact profile paths for both transitions, post-authentication revalidation, missing profiles, interrupted batches, ordinary partial failures, and unknown live-state refusal |
 | `vpn_probe_recovery.bats` | Preserved sudo, WireGuard, and protected-profile inspection interruptions, no fallback after interruption, bounded capture statuses, and warm-cache-only ordinary probe recovery |
 | `vpn_menu_recovery.bats` | Action interruption without pause or rediscovery, private preview cleanup, ordinary failure recovery, picker cancellation, and literal POSIX preview paths with control characters or shell text |

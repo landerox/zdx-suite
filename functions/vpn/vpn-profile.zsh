@@ -30,11 +30,24 @@ _vpn_validate_profile_file() {
   local src="${1:-}"
   _vpn_user_file_fingerprint "$src" "profile source" >/dev/null || return 1
 
+  # wg-quick reads profiles with bash `read`, which silently drops NUL bytes,
+  # while grep treats them as binary data or line breaks: "Post<NUL>Up" would
+  # pass the hook check below and still run as PostUp. Refuse NUL and every
+  # control byte other than tab, line feed, and carriage return.
+  local control_bytes=""
+  control_bytes=$(command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
+    | LC_ALL=C command tr -d '\t\n\r\040-\176\200-\377' \
+    | LC_ALL=C command wc -c) || return 1
+  [[ "${control_bytes//[[:space:]]/}" == 0 ]] || {
+    _vpn_error "Imported profiles must not contain NUL or control bytes."
+    return 1
+  }
+
   # Imported hooks would be executed as root by wg-quick. The suite never
   # imports them from an untrusted file; trusted WSL hooks are generated later
   # from validated literals by vpn-wsl.zsh.
   if command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
-    | command grep -Eiq \
+    | command grep -aEiq \
       '^[[:space:]]*(PreUp|PostUp|PreDown|PostDown)[[:space:]]*='; then
     _vpn_error \
       "Imported profiles must not contain PreUp/PostUp/PreDown/PostDown hooks."
@@ -63,21 +76,37 @@ _vpn_expand_import_path() {
 }
 
 # Prompts for a profile name and validates it before returning.
-# stdout: the validated name. Status 1 when cancelled or invalid.
+# stdout: the validated name. Status 1 when cancelled, 2 when invalid, and 3
+# when no terminal is available.
 _vpn_prompt_profile_name() {
   local prompt="${1:-Profile name}"
   local default_name="${2:-}"
 
   local name
-  name=$(_vpn_read_line "$prompt" "$default_name") || return 1
+  name=$(_vpn_read_line "$prompt" "$default_name") || return $?
 
-  if ! _vpn_validate_iface_name "$name"; then
+  if ! _vpn_validate_new_iface_name "$name"; then
     _vpn_error "Invalid profile name: $name"
     _vpn_info \
-      "Names must start with a letter or digit and may contain . _ - only."
-    return 1
+      "Names must start with a letter or digit, contain only . _ -, and use"
+    _vpn_info "at most 15 characters (the wg-quick interface limit)."
+    return 2
   fi
   print -r -- "$name"
+}
+
+# Maps a prompt status to a command status: a cancellation succeeds, while an
+# invalid answer or a missing terminal fails instead of reporting success.
+_vpn_prompt_outcome() {
+  local -i prompt_rc="${1:-1}"
+  case "$prompt_rc" in
+    1) _vpn_info "Cancelled."; return 0 ;;
+    3)
+      _vpn_error "This step needs an interactive terminal."
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 _vpn_offer_set_default_profile() {
@@ -156,16 +185,16 @@ vpn-profile-create() {
   _vpn_require_platform || return 1
   _vpn_ensure_profile_dir || return 1
 
-  if [[ -n "$iface" ]] && ! _vpn_validate_iface_name "$iface"; then
+  if [[ -n "$iface" ]] && ! _vpn_validate_new_iface_name "$iface"; then
     _vpn_error "Invalid profile name: $iface"
+    _vpn_info "Use at most 15 characters from letters, digits, . _ and -."
     return 2
   fi
 
   if [[ -z "$iface" ]]; then
-    iface=$(_vpn_prompt_profile_name "New VPN profile name") || {
-      _vpn_info "Cancelled."
-      return 0
-    }
+    local -i prompt_rc=0
+    iface=$(_vpn_prompt_profile_name "New VPN profile name") || prompt_rc=$?
+    (( prompt_rc == 0 )) || { _vpn_prompt_outcome "$prompt_rc"; return $?; }
   fi
 
   local conf_file
@@ -194,7 +223,7 @@ vpn-profile-create() {
 
   {
     local staged="${stage_dir}/${iface}.conf"
-    _vpn_profile_template > "$staged" || {
+    _vpn_profile_template >| "$staged" || {
       _vpn_error "Could not stage the profile template."
       return 1
     }
@@ -266,10 +295,9 @@ vpn-profile-import() {
   _vpn_ensure_profile_dir || return 1
 
   if [[ -z "$source_path" ]]; then
-    source_path=$(_vpn_read_line "Path to the .conf file") || {
-      _vpn_info "Cancelled."
-      return 0
-    }
+    local -i prompt_rc=0
+    source_path=$(_vpn_read_line "Path to the .conf file") || prompt_rc=$?
+    (( prompt_rc == 0 )) || { _vpn_prompt_outcome "$prompt_rc"; return $?; }
   fi
 
   local resolved
@@ -296,10 +324,9 @@ vpn-profile-import() {
 
   local default_name="${${resolved:t}%.conf}"
   local iface
-  iface=$(_vpn_prompt_profile_name "Import profile as" "$default_name") || {
-    _vpn_info "Cancelled."
-    return 0
-  }
+  local -i prompt_rc=0
+  iface=$(_vpn_prompt_profile_name "Import profile as" "$default_name") || prompt_rc=$?
+  (( prompt_rc == 0 )) || { _vpn_prompt_outcome "$prompt_rc"; return $?; }
 
   local conf_file
   conf_file=$(_vpn_conf_path "$iface") || {
@@ -435,28 +462,30 @@ vpn-profile-rename() {
   _vpn_require_platform || return 1
   _vpn_ensure_profile_access || return 1
 
-  local name
-  for name in "$old_iface" "$new_iface"; do
-    if [[ -n "$name" ]] && ! _vpn_validate_iface_name "$name"; then
-      _vpn_error "Invalid profile name: $name"
-      return 2
-    fi
-  done
+  if [[ -n "$old_iface" ]] && ! _vpn_validate_iface_name "$old_iface"; then
+    _vpn_error "Invalid profile name: $old_iface"
+    return 2
+  fi
+  if [[ -n "$new_iface" ]] && ! _vpn_validate_new_iface_name "$new_iface"; then
+    _vpn_error "Invalid profile name: $new_iface"
+    _vpn_info "Use at most 15 characters from letters, digits, . _ and -."
+    return 2
+  fi
 
   if [[ -z "$old_iface" ]]; then
     local picked
     local -i pick_status=0
     picked=$(_vpn_pick_profile "Rename VPN profile") || pick_status=$?
-    (( pick_status == 130 )) && return 0
+    (( pick_status == 3 )) && return 0
+    (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
     old_iface="$picked"
   fi
 
   if [[ -z "$new_iface" ]]; then
-    new_iface=$(_vpn_prompt_profile_name "Rename profile as" "$old_iface") || {
-      _vpn_info "Cancelled."
-      return 0
-    }
+    local -i prompt_rc=0
+    new_iface=$(_vpn_prompt_profile_name "Rename profile as" "$old_iface") || prompt_rc=$?
+    (( prompt_rc == 0 )) || { _vpn_prompt_outcome "$prompt_rc"; return $?; }
   fi
 
   if [[ "$old_iface" == "$new_iface" ]]; then
@@ -696,7 +725,8 @@ vpn-profile-remove() {
     local picked
     local -i pick_status=0
     picked=$(_vpn_pick_profile "Remove VPN profile") || pick_status=$?
-    (( pick_status == 130 )) && return 0
+    (( pick_status == 3 )) && return 0
+    (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
     iface="$picked"
   fi

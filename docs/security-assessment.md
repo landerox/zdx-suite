@@ -843,9 +843,12 @@ never elevate downloaded or user-computed shell text.
 - Imported profiles can no longer introduce commands that `wg-quick` would
   execute as root. Import accepts only a private, singly linked, current-user
   regular file no larger than 1 MiB, verifies `[Interface]` and `[Peer]`, and
-  refuses every `PreUp`, `PostUp`, `PreDown`, or `PostDown` assignment. It
-  fingerprints the source around a private staging copy and atomically installs
-  validated mode-`600` content without replacing an existing profile.
+  refuses every `PreUp`, `PostUp`, `PreDown`, or `PostDown` assignment. NUL and
+  other control bytes are refused first, because wg-quick's bash `read` drops
+  NUL bytes and `Post<NUL>Up` would otherwise evade the text check and still run
+  as root. It fingerprints the source around a private staging copy and
+  atomically installs validated mode-`600` content without replacing an
+  existing profile.
 - The WSL DNS hooks the VPN suite writes are executed by root on every tunnel
   transition, and their resolver address came from an imported profile's `DNS =`
   line with no validation, which was an injection path from a downloaded profile
@@ -855,8 +858,10 @@ never elevate downloaded or user-computed shell text.
   A sentinel is trusted only when its exact complete generated hook block is
   present, so a partial or imitated marker cannot bypass hardening.
   Patching fingerprints the profile and directory, builds an owner-only staged
-  result, asks `wg-quick strip` to parse it before publication, revalidates
-  after authentication, and replaces the live profile atomically. The original
+  result, asks `wg-quick strip` to parse it through the announced sudo
+  boundary (wg-quick escalates itself for `strip`) before publication,
+  revalidates after authentication, and replaces the live profile atomically.
+  A symlinked `/etc/resolv.conf`, which `chattr` cannot pin, is refused. The original
   remains untouched on validation or parse failure. The IPv6 compatibility
   rewrite is also staged and parsed, keeps a one-time backup, and prevents
   `wg-quick up` when no required IPv4 value can be retained.
