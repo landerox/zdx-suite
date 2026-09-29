@@ -1901,6 +1901,13 @@ include a two-second forced-kill grace after their deadline; resource mutations
 remain outside that watchdog. An interrupted client may leave an accepted
 daemon operation, which must be inspected before any explicit retry.
 
+The 2026-09 review keeps that model and removes false refusals: stopped
+containers are revalidated from the same listing as the plan, so a moved image
+tag no longer blocks cleanup; dangling-image plans exclude intermediate
+parents; swarm network IDs and legacy link names no longer abort inventories.
+Container and image plans print the exact forced operation before
+confirmation, and the internal menu sentinel is no longer a public command.
+
 Docker-focused BATS tests freeze public-surface parity and exercise parser
 ordering, output separation, cancellation, context replacement, exact cleanup,
 Compose replacement, non-interactive refusal, and daemon-independent registry

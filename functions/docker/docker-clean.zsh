@@ -63,7 +63,9 @@ _docker_clean_record_valid() {
       ;;
     network)
       IFS='|' read -r kind target field3 field4 field5 extra <<< "$record"
-      [[ -z "$extra" && "$target" =~ '^[0-9a-f]{64}$' ]] \
+      # Local networks use 64-hex IDs; swarm-scope networks use 25 base36.
+      [[ -z "$extra" \
+        && ( "$target" =~ '^[0-9a-f]{64}$' || "$target" =~ '^[0-9a-z]{25}$' ) ]] \
         && _docker_validate_name "$field3" \
         && _docker_visible_safe "$field4" 128 \
         && _docker_visible_safe "$field5" 128
@@ -156,7 +158,8 @@ _docker_clean_collect_containers() {
   local -i record_count=0 output_bytes=0
   for raw_record in "${(@f)inventory_output}"; do
     [[ -n "$raw_record" ]] || continue
-    plan_record="container|$raw_record"
+    _docker_container_record_normalize "$raw_record"
+    plan_record="container|$REPLY"
     _docker_clean_record_valid "$plan_record" || {
       _docker_error "Docker returned a malformed stopped-container record."
       return 1
@@ -177,7 +180,7 @@ _docker_clean_collect_images() {
   local inventory_output=""
   _docker_capture_probe_bounded "$_DOCKER_MAX_PICKER_BYTES" 10 \
     "${docker_command[@]}" \
-    image ls -a --no-trunc --filter dangling=true \
+    image ls --no-trunc --filter dangling=true \
     --format '{{.ID}}' 2>/dev/null || {
     local -i probe_rc=$?
     _docker_error "Could not discover dangling images."
@@ -370,16 +373,18 @@ _docker_clean_record_revalidate() {
 
   case "$kind" in
     container)
+      # Revalidate from the same listing as the plan: the list shows the image
+      # ID once the container's tag has moved, while inspect keeps the name.
       _docker_capture_probe_bounded 4096 10 \
-        "${docker_command[@]}" container inspect \
-        --format '{{.Id}}|{{.Name}}|{{.State.Status}}|{{.Config.Image}}' \
-        -- "$target" 2>/dev/null || return $?
+        "${docker_command[@]}" container ls -a --no-trunc \
+        --filter "id=$target" \
+        --format '{{.ID}}|{{.Names}}|{{.State}}|{{.Image}}' \
+        2>/dev/null || return $?
       current_record="$REPLY"
-      local raw_name="${${current_record#*|}%%|*}"
-      [[ "$raw_name" == /* ]] || return 1
-      current_record="${current_record%%|*}|${raw_name#/}|"\
-"${${current_record#*|}#*|}"
-      current_record="container|$current_record"
+      [[ "$current_record" != *$'\n'* \
+        && "${current_record%%|*}" == "$target" ]] || return 1
+      _docker_container_record_normalize "$current_record"
+      current_record="container|$REPLY"
       ;;
     image)
       _docker_image_identity \

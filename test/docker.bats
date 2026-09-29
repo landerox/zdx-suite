@@ -119,6 +119,12 @@ case "$command_name:$subcommand" in
     joined=" ${args[*]} "
     if [[ "$joined" == *" volume="* ]]; then
       cat "$MOCK_VOLUME_USERS_FILE"
+    elif [[ "$joined" == *" id="* ]]; then
+      target="${joined##* id=}"
+      target="${target%% *}"
+      awk -F '|' -v target="$target" \
+        '$1 == target { print $1 "|" $2 "|" $3 "|" $4; exit }' \
+        "$MOCK_STOPPED_FILE" "$MOCK_CONTAINER_FILE"
     elif [[ "$joined" == *" status=created "* ]]; then
       cat "$MOCK_STOPPED_FILE"
     else
@@ -809,4 +815,71 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"unsafe Docker credential"* ]]
   ! grep -q " login " "$MOCK_DOCKER_LOG"
+}
+
+@test "docker: cleanup removes a stopped container whose image tag moved" {
+  # The daemon lists the image ID once the container's tag points elsewhere,
+  # while inspect keeps the original name; revalidation uses the listing.
+  printf '%s|web|exited|%s\n' "$CONTAINER_ID" "$IMAGE_ID" > "$MOCK_STOPPED_FILE"
+  printf '%s|web|exited|nginx:latest|\n' "$CONTAINER_ID" > "$MOCK_CONTAINER_FILE"
+  run run_zsh 'docker-clean --scope stopped-containers --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  grep -q "container rm -- $CONTAINER_ID" "$MOCK_DOCKER_LOG"
+  [[ "$output" != *"no longer eligible"* ]]
+}
+
+@test "docker: legacy link aliases in container names keep inventories usable" {
+  printf '%s|db,web/db|exited|alpine:3.20\n' "$CONTAINER_ID" > "$MOCK_STOPPED_FILE"
+  printf '%s|db,web/db|exited|alpine:3.20|\n' "$CONTAINER_ID" > "$MOCK_CONTAINER_FILE"
+  run run_zsh 'docker-clean --scope stopped-containers --dry-run'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"Exact target count: 1"* ]]
+
+  run run_zsh 'docker-containers --action list'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"$CONTAINER_ID|db|exited|alpine:3.20|"* ]]
+}
+
+@test "docker: swarm-scope networks and non-intermediate dangling images are planned" {
+  printf '%s|ingress-extra|overlay|swarm\n' "abcdefghijklmnopqrstuvwxy" > "$MOCK_NETWORK_FILE"
+  run run_zsh 'docker-clean --scope unused-networks --dry-run'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"Exact target count: 1"* ]]
+
+  : > "$MOCK_DOCKER_LOG"
+  run run_zsh 'docker-clean --scope dangling-images --dry-run'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  grep -q "image ls --no-trunc --filter dangling=true" "$MOCK_DOCKER_LOG"
+  ! grep -q "image ls -a" "$MOCK_DOCKER_LOG" || false
+}
+
+@test "docker: plans show forced removal before confirmation" {
+  run run_zsh 'docker-images --action remove --force --id "'"$IMAGE_ID"'" --dry-run'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"Operation: image rm --force -- $IMAGE_ID"* ]]
+
+  run run_zsh 'docker-containers --action remove --force --id "'"$CONTAINER_ID"'" --dry-run'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *"Operation: container rm --force -- $CONTAINER_ID"* ]]
+}
+
+@test "docker: an expect key on an empty filter is a cancellation" {
+  printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' "printf 'enter\\n'" 'exit 1' \
+    > "$TEST_MOCK_BIN/fzf"
+  chmod +x "$TEST_MOCK_BIN/fzf"
+  run run_zsh '
+    docker-menu --help >/dev/null 2>&1
+    local REPLY=""
+    _docker_fzf_capture --expect=enter < <(print -r -- row)
+    local capture_rc=$?
+    (( capture_rc == 1 )) || return 10
+    [[ -z "$REPLY" ]] || return 11
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" != *"returned selection data"* ]]
+}
+
+@test "docker: the internal section sentinel is not a public command" {
+  run run_zsh 'docker-menu :'
+  [ "$status" -eq 2 ]
 }

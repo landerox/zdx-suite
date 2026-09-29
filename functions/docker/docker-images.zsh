@@ -139,6 +139,8 @@ _docker_image_plan() {
   local action_name="$1"
   local expected_identity="$2"
   local -a context_snapshot=("${(@)argv[3,8]}")
+  local -i force_remove="${9:-0}"
+  local shell_name="${10:-/bin/sh}"
   local image_id="" repo_tags="" created_at="" size_bytes=""
   local operating_system="" architecture="" extra=""
   IFS='|' read -r image_id repo_tags created_at size_bytes \
@@ -147,6 +149,18 @@ _docker_image_plan() {
   _docker_header "Docker Image Plan"
   _docker_info "Context: $REPLY"
   _docker_info "Action: $action_name"
+  case "$action_name" in
+    run) _docker_info "Operation: run -it --rm -- $image_id $shell_name" ;;
+    remove)
+      if (( force_remove )); then
+        _docker_info "Operation: image rm --force -- $image_id"
+        _docker_warn \
+          "--force untags every reference and removes an image used by stopped containers."
+      else
+        _docker_info "Operation: image rm -- $image_id"
+      fi
+      ;;
+  esac
   _docker_info "Full ID: $image_id"
   _docker_info "Repository tags: ${repo_tags:-<none>}"
   _docker_info "Size bytes: $size_bytes"
@@ -165,7 +179,7 @@ _docker_image_execute_action() {
   local image_id="${expected_identity%%|*}"
 
   _docker_image_plan "$action_name" "$expected_identity" \
-    "${context_snapshot[@]}" || return 1
+    "${context_snapshot[@]}" "$force_remove" "$shell_name" || return 1
   _docker_warn \
     "Running an image or removing it can execute or destroy Docker-managed state."
 

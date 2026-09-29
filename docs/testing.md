@@ -355,7 +355,7 @@ separate trust decision.
 
 | File | Covered boundary |
 | --- | --- |
-| `docker.bats` | Strict parser-before-probe behavior; pinned config/context/daemon identity; private picker capture; bounded-output newline boundaries; hostile-stderr suppression; complete resource and recreated-volume identity; exact no-prune cleanup; Compose environment/workspace constraints; action-aware completion; daemon-independent login; and private config-file refusal |
+| `docker.bats` | Strict parser-before-probe behavior; pinned config/context/daemon identity; private picker capture; bounded-output newline boundaries; hostile-stderr suppression; complete resource and recreated-volume identity; exact no-prune cleanup; Compose environment/workspace constraints; action-aware completion; daemon-independent login; private config-file refusal; moved-tag container revalidation; legacy link names; swarm network IDs; non-intermediate dangling images; exact forced operations in plans; `--expect` no-match cancellation; and the non-public `:` sentinel |
 | `docker_contract.bats` | Frozen eight-command fixture and module/function/menu/help/dispatcher/completion/lazy parity, completion-to-parser value grammar, and destructive-action ordering |
 | `docker_recovery.bats` | Exact multi-resource cleanup membership, ordinary partial continuation, stopped interrupted removal/revalidation, and a real timeout against an invocation-owned process that ignores TERM |
 

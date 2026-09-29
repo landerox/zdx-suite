@@ -19,7 +19,8 @@ The repository-wide contracts in `development.md`, `menu-spec.md`, and
 | `docker-compose-logs` | `[--file FILE] [--tail 1..10000] [--follow]` |
 
 `docker-menu COMMAND ...` is the canonical direct router and forwards every
-argument unchanged. An unknown option or command returns `2`. With no
+argument unchanged. An unknown option or command returns `2`, including the
+internal `:` section sentinel, which only the interactive menu understands. With no
 arguments, `docker-menu`, `docker-containers`, `docker-images`, and
 `docker-clean` open their respective foreground picker. Esc is a successful
 cancellation. Flags that have no effect for the selected action are rejected
@@ -39,7 +40,9 @@ id|repository|tag|size|created
 
 Container IDs are complete 64-character lowercase hexadecimal IDs. Image IDs
 are complete `sha256:` identifiers. Formatted display rows never become
-mutation targets.
+mutation targets. When an older CLI lists legacy `--link` aliases in `.Names`
+(for example `db,web/db`), the record keeps the container's own name, the first
+entry without a slash.
 
 ## Context and daemon identity
 
@@ -93,7 +96,9 @@ stdout is captured in an invocation-owned mode-`600` file below a mode-`700`
 directory in a validated temporary root. File identity, owner, link count, and
 mode are checked before any chmod, removal, capture, or cleanup. The canonical
 path must be a pattern-matching direct child of its validated parent. A
-non-zero picker status carrying selection data is rejected.
+non-zero picker status carrying selection data is rejected, except status `1`:
+with `--expect`, fzf prints only the pressed key when nothing matches, which is
+a cancellation with no selection.
 
 Top-level selections must equal one complete menu row. Container and image
 pickers carry only a snapshot-local numeric index, validate the complete row,
@@ -119,7 +124,9 @@ and preserves the container session on stdout.
 Image run and removal both show all known repository tags, full content ID,
 size, platform, context, and resolved action. They support `--dry-run` and
 require confirmation or `--yes`. Removal does not force by default; `--force`
-is separate. The complete image identity and context are revalidated after
+is separate. Container and image plans print the exact operation, such as
+`image rm --force -- <id>`, before confirmation, and forced image removal also
+warns that it untags every reference. The complete image identity and context are revalidated after
 authorization. Running an image remains execution of image-defined code and
 requires terminal stdin and stdout; the interactive session remains on stdout.
 
@@ -139,7 +146,13 @@ side-effect-free `--dry-run`. Mutation requires a terminal confirmation or
 `--yes`. The complete batch is recomputed once after authorization, then each
 resource receives a narrow identity and eligibility check immediately before
 an explicit `container rm`, `image rm`, `network rm`, or `volume rm`.
-Resources that become eligible after review are not included. Batch membership
+Resources that become eligible after review are not included. A stopped
+container is revalidated from the same `container ls` listing as the plan,
+because the listing shows the image ID once the container's tag has moved
+while `inspect` keeps the name. Dangling images come from `image ls` without
+`-a`, like `docker image prune`, so untagged intermediate parents with children
+are never planned. Swarm-scope networks, whose IDs are 25 base36 characters,
+are accepted alongside 64-hex local network IDs. Batch membership
 is compared as individual exact records, including plans with multiple targets.
 Operations continue after an ordinary individual failure, report passed and
 failed counts, and return non-zero for a partial result. An interruption

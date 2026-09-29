@@ -783,7 +783,11 @@ _docker_fzf_capture() {
           selection=$(<&$(( read_fd )))
           exec {read_fd}>&-
           read_fd=-1
-          if (( fzf_rc != 0 )) && [[ -n "$selection" ]]; then
+          if (( fzf_rc == 1 )); then
+            # No match: fzf still prints an --expect key line, which carries
+            # no selection. Treat it as the cancellation it represents.
+            selection=""
+          elif (( fzf_rc != 0 )) && [[ -n "$selection" ]]; then
             _docker_error "A failed Docker picker returned selection data."
             selection=""
             fzf_rc=125
@@ -863,6 +867,32 @@ _docker_validate_name() {
     && [[ "$value" =~ '^[A-Za-z0-9][A-Za-z0-9_.-]*$' ]]
 }
 
+# Older CLIs list legacy --link aliases in .Names (for example "db,web/db");
+# the container's own name is the first entry without a slash.
+_docker_primary_container_name() {
+  local names="${1:-}"
+  local name=""
+  REPLY=""
+  for name in "${(@s:,:)names}"; do
+    [[ -n "$name" && "$name" != */* ]] || continue
+    REPLY="$name"
+    return 0
+  done
+  return 1
+}
+
+# Replaces the names field of an id|names|... container record with the
+# primary name. REPLY keeps the original record when it cannot be normalized.
+_docker_container_record_normalize() {
+  local record="${1:-}"
+  REPLY="$record"
+  [[ "$record" == *'|'*'|'* ]] || return 1
+  local container_id="${record%%|*}"
+  local remainder="${record#*|}"
+  _docker_primary_container_name "${remainder%%|*}" || return 1
+  REPLY="$container_id|$REPLY|${remainder#*|}"
+}
+
 _docker_validate_uint() {
   local value="${1:-}"
   local -i maximum="${2:-1000000}"
@@ -892,7 +922,6 @@ _docker_dispatch() {
     docker-compose-down)    docker-compose-down "$@" ;;
     docker-compose-restart) docker-compose-restart "$@" ;;
     docker-compose-logs)    docker-compose-logs "$@" ;;
-    :)                      return 0 ;;
     "")
       _docker_error "A Docker command is required."
       return 2
