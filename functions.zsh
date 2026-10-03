@@ -286,6 +286,26 @@ _zdx_ui_heading() {
   fi
 }
 
+# One key-value line: a two-space indent, the key with exactly one trailing
+# colon padded to 18 display columns, a space, and the value. The key is bold
+# in the terminal's own foreground, so it stays readable on light and dark
+# themes. Usage: _zdx_ui_label <key> <value>
+_zdx_ui_label() {
+  emulate -L zsh
+  local key="${1-}" value="${2-}"
+  key="${key%:}"
+  [[ -n "$key" ]] || return 2
+  key="${(V)key}:"
+  value="${(V)value}"
+  local -i padding=$(( 19 - ${(m)#key} ))
+  (( padding < 1 )) && padding=1
+  if _zdx_ui_color_enabled; then
+    printf '  \033[1m%s\033[0m%*s%s\n' "$key" "$padding" '' "$value" >&2
+  else
+    printf '  %s%*s%s\n' "$key" "$padding" '' "$value" >&2
+  fi
+}
+
 # Returns 0 when "<index> <total>" is a valid step counter.
 _zdx_ui_step_counter_valid() {
   emulate -L zsh

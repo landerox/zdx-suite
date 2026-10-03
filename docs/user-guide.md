@@ -23,7 +23,13 @@ and perform no action. Hidden commands and descriptions are not search terms.
 In the master `zdx` menu, route tokens such as `(app)` and `(ws)` appear in the
 labels, so those abbreviations can be typed directly.
 
-Context appears above the entries. Multi-selection is available only in menus
+Context appears above the entries, in at most two lines. Menus whose actions
+change a location first name it, such as `Project: zdx-suite` in `dev-menu` or
+`Repository: zdx-suite` in `git-menu`; a second line lists facts that change
+what the actions can do. Host-wide menus such as `sys-menu` show only that
+facts line. An entry that cannot run yet stays listed with a `○` and names what
+is missing, for example `○ Run Tests (missing: pytest in .venv)`; the command
+itself explains how to provide it. Multi-selection is available only in menus
 that advertise it: `Tab` marks entries, and `Ctrl-A` / `Ctrl-D` select all or
 none where shown. App keeps its task descriptions visible and reviews project
 execution before authorization. VPN keeps its tunnel-state preview and refresh

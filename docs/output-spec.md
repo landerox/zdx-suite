@@ -51,6 +51,25 @@ Detail lines are indented two spaces and dimmed. A message is written once:
 a step that reports its outcome to an aggregate MUST NOT also print its own
 success line (see [step results](#step-results-and-the-result-slot)).
 
+## Key-value lines
+
+A labelled fact, such as a repository origin or a version, is one key-value
+line rendered by `_zdx_ui_label <key> <value>` through the suite
+`_<prefix>_label`:
+
+```text
+  Origin:            https://github.com/junegunn/fzf.git
+  Current commit:    b1be3a8
+```
+
+- The line is indented two spaces. The key ends in exactly one colon, which the
+  service adds when the caller omits it, and is padded to 18 display columns
+  plus one space; a longer key is followed by a single space.
+- The key is bold in the terminal's own foreground color. A forced color such
+  as bright white disappears on a light theme.
+- Every suite uses the same width so facts align across suites. A list of more
+  than a few records with several fields is a table instead.
+
 ## Headings
 
 - A command's top-level heading is `════ Title ════`, surrounded by one blank
@@ -229,6 +248,7 @@ defined in `development.md` and does not change.
 | `_zdx_ui_outcome <token>` | `REPLY` glyph and word |
 | `_zdx_ui_command_display <argv...>` | `REPLY` display-only quoted command with `~` |
 | `_zdx_ui_heading <title>` | heading, omitted or demoted inside a step |
+| `_zdx_ui_label <key> <value>` | key-value line; status `2` for an empty key |
 | `_zdx_ui_step_banner <i> <n> <label>` | step banner |
 | `_zdx_ui_step_result <i> <n> <label> <outcome> <detail> <seconds>` | one result line |
 | `_zdx_ui_table [--outcome-column N] <header-tsv> [row-tsv...]` | aligned table; status `2` prints nothing |
@@ -243,7 +263,8 @@ back to plain output, so a suite sourced without the core still works.
 
 ## Adoption checklist
 
-1. Route the suite heading helper through `_zdx_ui_heading`.
+1. Route the suite heading and label helpers through `_zdx_ui_heading` and
+   `_zdx_ui_label`.
 2. Replace bespoke capture with a `_<prefix>_run_captured` wrapper that passes
    a human-readable display string.
 3. Replace `(s)` and `(ies)` with `_zdx_count_noun`.

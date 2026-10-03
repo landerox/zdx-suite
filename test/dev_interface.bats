@@ -300,8 +300,7 @@ teardown() {
   [[ "$output" == *"runtime:1:"* ]]
   [[ "$output" == *"uvx runner was not found"* ]]
   [[ "$output" != *"ephemeral execution is disabled"* ]]
-  [[ "$output" == \
-    *"advisory:ruff (project/local or ephemeral opt-in)"* ]]
+  printf '%s\n' "$output" | grep -Fxq 'advisory:ruff'
 }
 
 @test "dev interface: one render caches shallow probes without running Python" {
@@ -404,7 +403,7 @@ teardown() {
     *"Update Python Without Venv|dev-update-python|Delegate installation."* ]]
   [[ "$output" != *"Update Python Without Venv (missing:"* ]]
   [[ "$output" == \
-    *"Update Python With Venv (missing: uv)|dev-update-python|"* ]]
+    *"  ○ Update Python With Venv (missing: uv)|dev-update-python|"* ]]
 }
 
 @test "dev interface: coverage annotation includes its project backend" {
@@ -419,8 +418,7 @@ teardown() {
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pytest-cov or coverage (installed in .venv)"* ]]
-  [[ "$output" != *"pytest (installed in .venv)"* ]]
+  [ "$output" = "pytest-cov or coverage in .venv" ]
 }
 
 @test "dev interface: the header advertises only bindings that are active" {

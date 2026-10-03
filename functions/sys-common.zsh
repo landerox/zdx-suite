@@ -59,11 +59,17 @@ _sys_dim()     {
     printf '  %s\n' "${(V)1}" >&2
   fi
 }
+# Key-value line; the core service owns its layout (docs/output-spec.md).
 _sys_label()   {
+  if (( ${+functions[_zdx_ui_label]} )); then
+    _zdx_ui_label "${1-}" "${2-}"
+    return
+  fi
+  local key="${1%:}:"
   if _sys_color_enabled; then
-    printf "\033[1;37m  %-18s\033[0m %s\n" "${(V)1}" "${(V)2}" >&2
+    printf "  \033[1m%-18s\033[0m %s\n" "${(V)key}" "${(V)2}" >&2
   else
-    printf "  %-18s %s\n" "${(V)1}" "${(V)2}" >&2
+    printf "  %-18s %s\n" "${(V)key}" "${(V)2}" >&2
   fi
 }
 _sys_blank()   { print -u2 -r -- ""; }
@@ -1053,8 +1059,10 @@ _sys_menu_entry() {
   local missing
   missing=$(_sys_menu_missing_requirements "$command_name") || return $?
 
+  # docs/menu-spec.md: an unavailable action keeps its command field and is
+  # marked by a leading circle plus the requirement written in text.
   if [[ -n "$missing" ]]; then
-    printf "  %s (missing: %s)|%s|%s\n" \
+    printf "  ○ %s (missing: %s)|%s|%s\n" \
       "$label" "$missing" "$command_name" "$description"
   else
     printf "  %s|%s|%s\n" "$label" "$command_name" "$description"

@@ -25,7 +25,7 @@ teardown() {
   '
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Update Node.js (missing: loaded nvm)"* ]]
+  [[ "$output" == *"  ○ Update Node.js (missing: loaded nvm)|"* ]]
   [[ "$output" == *"nvm is installed but is not loaded in this shell."* ]]
 }
 
@@ -47,7 +47,7 @@ teardown() {
   '
 
   [ "$status" -eq 0 ]
-  [ "$output" = $'  Update Node.js|update-node|Install the latest LTS release.\n  Update Node.js (missing: fnm or nvm)|update-node|Install the latest LTS release.' ]
+  [ "$output" = $'  Update Node.js|update-node|Install the latest LTS release.\n  ○ Update Node.js (missing: fnm or nvm)|update-node|Install the latest LTS release.' ]
   [ ! -e "$HOME/nvm.executed" ]
 }
 
@@ -84,6 +84,6 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [ "$output" = "  Update Node.js (missing: fnm or nvm)|update-node|Install the latest LTS release." ]
+  [ "$output" = "  ○ Update Node.js (missing: fnm or nvm)|update-node|Install the latest LTS release." ]
   [ ! -e "$HOME/fnm.executed" ]
 }

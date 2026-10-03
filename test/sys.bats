@@ -114,7 +114,7 @@ EOF
       "Inspect OS, kernel, memory, tools, packages, and WSL state."
   '
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "  Update Homebrew Packages (missing: brew)|update-brew|Refresh formulae, upgrade installed packages, and clean old versions." ]
+  [ "${lines[0]}" = "  ○ Update Homebrew Packages (missing: brew)|update-brew|Refresh formulae, upgrade installed packages, and clean old versions." ]
   [ "${lines[1]}" = "  Show System Info|sys-info|Inspect OS, kernel, memory, tools, packages, and WSL state." ]
 }
 

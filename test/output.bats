@@ -21,7 +21,8 @@ teardown() {
       _zdx_count_noun _zdx_outcome_class _zdx_ui_outcome _zdx_ui_heading \
       _zdx_ui_step_banner _zdx_ui_step_result _zdx_ui_table _zdx_step_exec \
       _zdx_step_report _zdx_step_reported _zdx_step_active \
-      _zdx_run_captured _zdx_run_captured_here _zdx_ui_command_display; do
+      _zdx_run_captured _zdx_run_captured_here _zdx_ui_command_display \
+      _zdx_ui_label; do
       typeset -f "$name" &>/dev/null || { print -r -- "missing:$name"; exit 3; }
     done
     print -r -- lazy-ok
@@ -125,6 +126,35 @@ teardown() {
   [ ! -s "$HOME/step" ]
   [ "$(cat "$HOME/verbose")" = "  ▸ Demoted" ]
   [[ "$(cat "$HOME/escaped")" == *"a^[b"* ]]
+}
+
+@test "output: key-value lines share one width and a theme-safe key" {
+  run run_zsh '
+    _zdx_ui_label Origin "https://example.invalid/fzf.git"
+    _zdx_ui_label "Current commit:" b1be3a8
+    _zdx_ui_label "Current candidates:" 28
+    _zdx_ui_label Escaped $'"'"'a\eb'"'"'
+    _zdx_ui_label "" value && return 1
+    _zdx_ui_label ":" value && return 1
+    _sys_label "Origin:" sys-value
+    _dev_label demo-profile dev-value
+    return 0
+  '
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "  Origin:            https://example.invalid/fzf.git" ]
+  [ "${lines[1]}" = "  Current commit:    b1be3a8" ]
+  [ "${lines[2]}" = "  Current candidates: 28" ]
+  [[ "${lines[3]}" == "  Escaped:           a^[b" ]]
+  [ "${lines[4]}" = "  Origin:            sys-value" ]
+  [ "${lines[5]}" = "  demo-profile:      dev-value" ]
+
+  run run_zsh '
+    exec 2>"$HOME/tty-label"
+    _zdx_ui_color_enabled() { return 0; }
+    _zdx_ui_label Origin value
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/tty-label")" = $'  \e[1mOrigin:\e[0m            value' ]
 }
 
 @test "output: step banners and result lines have an exact shape" {

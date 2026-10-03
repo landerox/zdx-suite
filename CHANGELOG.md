@@ -18,6 +18,15 @@ behavior, verification, and remaining limitations.
 
 ### Changed
 
+- Menu presentation rules now cover content as well as the shared frame. A
+  context block has at most a scope line, such as `Project:` or `Repository:`,
+  and a state line of `Key: value` facts. The System and Developer menus mark
+  an action that cannot run yet as `○ <label> (missing: …)`, and Developer
+  names requirements without nested remediation, such as
+  `missing: pytest in .venv` instead of `missing: pytest (installed in .venv)`.
+- Key-value lines share one 18-column key with a single colon through the new
+  `_zdx_ui_label` service, and their keys use bold text in the terminal's own
+  color instead of bright white, which was hard to read on light themes.
 - Only the outermost `<suite>:<command>` timing line is printed. Commands
   delegated to another suite and steps inside an aggregate no longer print
   their own timing lines; opt-in telemetry still records each of them.
@@ -26,6 +35,8 @@ behavior, verification, and remaining limitations.
 ### Fixed
 
 - Timing lines keep a decimal point under decimal-comma locales.
+- The Developer menu reports the fzf status when it cannot open, as System
+  does.
 - AI updates compare the release version instead of the whole version line, so
   a vendor's relative release age, such as Amp's `(released …, 4h ago)`, no
   longer reports an update. A launcher symlink that a vendor re-creates for the

@@ -302,7 +302,7 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"markdownlint (project/local or ephemeral opt-in)"* ]]
+  printf '%s\n' "$output" | grep -Fxq 'markdownlint'
 
   run run_zsh '
     cd "$DEV_PROJECT"

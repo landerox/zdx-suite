@@ -90,7 +90,7 @@ create a separate test file merely because a production file exists.
 
 | File | Covered boundary |
 | --- | --- |
-| `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; exact step banners and result lines; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; and the outermost-only timing footer with per-level telemetry |
+| `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; key-value lines with one key width, an added colon, and a theme-safe bold key; exact step banners and result lines; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; and the outermost-only timing footer with per-level telemetry |
 
 ### Current System refactor coverage
 
@@ -587,8 +587,11 @@ With a deterministic `fzf` mock, verify:
 
 `menu_presentation.bats` captures effective options through each real
 command-menu wrapper, checks compact layout and cancellation, and exercises
-section/action previews with shell-looking description text. It checks the
-shared presentation contract rather than freezing each action's wording.
+section/action previews with shell-looking description text. It also checks
+that every context block has at most a scope line and a state line, and that
+migrated suites mark unavailable rows as `○ <label> (missing: …)` without
+nested parentheses. It checks the shared presentation contract rather than
+freezing each action's wording.
 `menu_domain_presentation.bats` covers existing multi-selection scopes, the
 compact telemetry selector, and VPN details with and without preview data.
 `menu_master_app_presentation.bats` covers route-token filtering, loaded plugin
