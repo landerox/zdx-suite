@@ -39,8 +39,8 @@ teardown() {
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Host uv is unavailable."* ]]
-  [[ "$output" == *"Managed by APT."* ]]
-  [[ "$output" == *"Cleaning All Project Artifacts"* ]]
+  [[ "$output" == *"Terraform ownership — delegated: APT → sys-menu update-apt"* ]]
+  [[ "$output" == *"Project cleanup — current: nothing to clean"* ]]
   [[ "$output" != *"Missing required dependency:"* ]]
   [[ "$output" != *"UNEXPECTED_NETWORK_PROBE"* ]]
 }

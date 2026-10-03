@@ -25,61 +25,6 @@ _dev_update_pypi_ready() {
   esac
 }
 
-# --- Version comparison -----------------------------------------------------
-
-# stdout: "major", "minor", "patch", or "none".
-# PEP 440 aware so pre-releases such as b0 or rc1 classify correctly.
-_dev_version_bump_type() {
-  local old_version="$1"
-  local new_version="$2"
-
-  VERSION_OLD="$old_version" VERSION_NEW="$new_version" \
-    command python3 -I - <<'PY_VERCMP' 2>/dev/null
-import os
-import re
-
-old = os.environ.get("VERSION_OLD", "").strip()
-new = os.environ.get("VERSION_NEW", "").strip()
-
-pep440 = re.compile(
-    r'^\s*v?'
-    r'(?P<release>[0-9]+(?:\.[0-9]+)*)'
-    r'(?:(?P<pre_l>a|b|rc)(?P<pre_n>[0-9]+))?'
-    r'(?:\.post(?P<post>[0-9]+))?'
-    r'(?:\.dev(?P<dev>[0-9]+))?'
-    r'(?:\+[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*)?'
-    r'\s*$'
-)
-
-
-def classify(value):
-    match = pep440.match(value)
-    if not match:
-        return None
-    release = [int(part) for part in match.group("release").split(".")]
-    while len(release) < 2:
-        release.append(0)
-    return release[0], release[1]
-
-
-if old == new:
-    print("none")
-    raise SystemExit
-
-old_parts = classify(old)
-new_parts = classify(new)
-if old_parts and new_parts:
-    if old_parts[0] != new_parts[0]:
-        print("major")
-    elif old_parts[1] != new_parts[1]:
-        print("minor")
-    else:
-        print("patch")
-else:
-    print("patch")
-PY_VERCMP
-}
-
 # --- pyproject.toml specifier rewriting -------------------------------------
 
 # Plans only declared dependency strings and preserves their original TOML

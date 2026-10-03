@@ -172,7 +172,8 @@ run_hook_update() {
   '
   [ "$status" -eq 0 ]
   [[ "$output" != *"UNEXPECTED_PYTHON"* ]]
-  [[ "$output" == *"skipped (no pyproject.toml)"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  Dependency preview +⊘ skipped +no pyproject[.]toml$'
   [[ "$output" == *"Cleanup preview"*"completed"* ]]
 }
 

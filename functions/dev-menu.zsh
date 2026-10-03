@@ -441,38 +441,11 @@ _dev_menu_execute() {
 # Multi-select runs actions sequentially in the order fzf reported them and
 # continues past a failing step so the summary covers the whole batch.
 _dev_menu_execute_batch() {
-  local -a command_names=("$@")
-  local -i total=${#command_names[@]}
-
-  (( total > 0 )) || {
+  (( $# > 0 )) || {
     _dev_info "No runnable tasks were selected."
     return 0
   }
-
-  _dev_header "Running $total selected task(s)"
-  local batch_start
-  batch_start=$(_dev_now)
-
-  local -i index=0 failures=0
-  local command_name
-  for command_name in "${command_names[@]}"; do
-    index=$(( index + 1 ))
-    _dev_info "[$index/$total] Executing: $command_name"
-    _dev_timed "dev:$command_name" _dev_dispatch "$command_name" \
-      || failures=$(( failures + 1 ))
-  done
-
-  local elapsed
-  elapsed=$(_dev_elapsed "$batch_start")
-
-  _dev_blank
-  if (( failures == 0 )); then
-    _dev_success "All $total task(s) completed in ${elapsed}s."
-    return 0
-  fi
-
-  _dev_warn "$failures of $total task(s) failed (${elapsed}s)."
-  return 1
+  _dev_run_task_batch "Selected Tasks" "$@"
 }
 
 _dev_interactive() {

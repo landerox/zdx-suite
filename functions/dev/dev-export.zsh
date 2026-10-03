@@ -167,6 +167,7 @@ _dev_export_validate_temp() {
 dev-export-deps() {
   emulate -L zsh
 
+  local REPLY
   local include_dev=0
   local all_groups=0
   local output_file="requirements.txt"
@@ -440,7 +441,8 @@ dev-export-deps() {
         }
         temp_output=""
       fi
-      _dev_success "Exported $count package(s) to $resolved_output"
+      _dev_count_noun "$count" package
+      _dev_success "Exported $REPLY to $resolved_output"
     } always {
       (( temp_fd >= 0 )) && exec {temp_fd}>&-
       [[ -n "$temp_output" && -e "$temp_output" ]] \

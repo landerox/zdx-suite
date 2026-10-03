@@ -43,6 +43,10 @@ _dev_color_enabled() {
 }
 
 _dev_header() {
+  if (( ${+functions[_zdx_ui_heading]} )); then
+    _zdx_ui_heading "$1"
+    return
+  fi
   if _dev_color_enabled; then
     printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
   else
@@ -120,6 +124,182 @@ _dev_display_escape() {
   print -r -- "${(V)1}"
 }
 
+# --- Command output services -------------------------------------------------
+# docs/output-spec.md owns the vocabulary and rendering. Each wrapper checks
+# the core service at call time and keeps a plain fallback, so a standalone
+# source of this suite still works without functions.zsh.
+
+# REPLY: "<count> <noun>". Usage: _dev_count_noun <count> <singular> [plural]
+_dev_count_noun() {
+  if (( ${+functions[_zdx_count_noun]} )); then
+    _zdx_count_noun "$@"
+    return
+  fi
+  local count="${1:-}" singular="${2:-}" plural="${3:-${2:-}s}"
+  [[ "$count" == <-> && -n "$singular" ]] || return 2
+  if (( count == 1 )); then REPLY="1 $singular"; else REPLY="$count $plural"; fi
+}
+
+# REPLY: one display duration. Usage: _dev_duration_label <seconds>
+_dev_duration_label() {
+  if (( ${+functions[_zdx_format_duration]} )); then
+    _zdx_format_duration "${1:-0}"
+    return
+  fi
+  local -i seconds="${${1:-0}%%.*}"
+  REPLY="${seconds}s"
+}
+
+# Aligned columns from TAB-separated rows; plain lines when a row is rejected.
+# Usage: _dev_table [--outcome-column N] <header-tsv> [row-tsv...]
+_dev_table() {
+  if (( ${+functions[_zdx_ui_table]} )); then
+    _zdx_ui_table "$@" && return 0
+  fi
+  [[ "${1:-}" == --outcome-column ]] && shift 2
+  local table_row
+  for table_row in "$@"; do
+    _dev_dim "${table_row//$'\t'/  }"
+  done
+}
+
+# Usage: _dev_step_banner <index> <total> <label>
+_dev_step_banner() {
+  if (( ${+functions[_zdx_ui_step_banner]} )); then
+    _zdx_ui_step_banner "$@"
+    return
+  fi
+  _dev_info "[${1:-?}/${2:-?}] ${3:-}"
+}
+
+# Usage: _dev_step_result <index> <total> <label> <outcome> <detail> <seconds>
+_dev_step_result() {
+  if (( ${+functions[_zdx_ui_step_result]} )); then
+    _zdx_ui_step_result "$@"
+    return
+  fi
+  local REPLY
+  _dev_duration_label "${6:-0}"
+  _dev_dim "${3:-}: ${4:-done}${5:+ — $5} ($REPLY)"
+}
+
+# Runs one step in the current shell; reply=(outcome detail seconds). It never
+# redirects the step's input or output, so a child can still confirm its exact
+# targets on the terminal.
+_dev_step_exec() {
+  if (( ${+functions[_zdx_step_exec]} )); then
+    _zdx_step_exec "$@"
+    return
+  fi
+  local -i _dev_step_started=$SECONDS _dev_step_rc=0
+  "$@" || _dev_step_rc=$?
+  local _dev_step_outcome=done
+  case $_dev_step_rc in
+    0) ;;
+    124) _dev_step_outcome=timed-out ;;
+    130|143) _dev_step_outcome=interrupted ;;
+    *) _dev_step_outcome=failed ;;
+  esac
+  reply=("$_dev_step_outcome" "" "$(( SECONDS - _dev_step_started ))")
+  return $_dev_step_rc
+}
+
+# Records a terminal outcome for an enclosing aggregate step, or prints the
+# standalone message when there is none. Failure paths normally pass no
+# message because the command already printed its diagnostics.
+# Usage: _dev_report_result <outcome> <detail> [standalone-message]
+_dev_report_result() {
+  local outcome="${1:-}" detail="${2:-}" message="${3:-}"
+  if (( ${+functions[_zdx_step_report]} )); then
+    local -i report_rc=0
+    _zdx_step_report "$outcome" "$detail" || report_rc=$?
+    (( report_rc == 0 )) && return 0
+    (( report_rc == 1 )) || return 2
+  fi
+  [[ -n "$message" ]] || return 0
+  case "$outcome" in
+    updated|current|done|passed) _dev_success "$message" ;;
+    failed|blocked|interrupted|timed-out) _dev_error "$message" ;;
+    *) _dev_info "$message" ;;
+  esac
+}
+
+# True when the active step slot in this shell already holds a report.
+_dev_step_reported() {
+  (( ${+functions[_zdx_step_reported]} )) && _zdx_step_reported
+}
+
+# Prints a dim detail line only when ZDX_VERBOSE=1.
+_dev_verbose_dim() {
+  [[ "${ZDX_VERBOSE:-0}" == 1 ]] || return 0
+  _dev_dim "${1:-}"
+}
+
+# Renders an aggregate summary from "label<TAB>outcome<TAB>seconds<TAB>detail"
+# records; seconds may be empty. Usage: _dev_print_step_summary <title> <record>...
+_dev_print_step_summary() {
+  local title="${1:-Summary}"
+  shift
+  local REPLY record time_label
+  local -a fields=() rows=()
+  for record in "$@"; do
+    fields=("${(@ps:\t:)record}")
+    time_label=""
+    if [[ -n "${fields[3]:-}" ]]; then
+      _dev_duration_label "${fields[3]}"
+      time_label="$REPLY"
+    fi
+    rows+=("${fields[1]:-}"$'\t'"${fields[2]:-done}"$'\t'"$time_label"$'\t'"${fields[4]:-}")
+  done
+  _dev_header "$title"
+  _dev_table --outcome-column 2 $'Step\tResult\tTime\tDetail' "${rows[@]}"
+}
+
+# Runs "$@" with closed stdin and its output captured privately. Only a failure
+# replays a bounded, escaped, credential-redacted tail; ZDX_VERBOSE=1 streams
+# the output live instead. <display> is the readable command announced before
+# it runs. Returns the command's status.
+# Usage: _dev_run_captured <display> <cmd> [args...]
+_dev_run_captured() {
+  local display="${1:-}"
+  shift
+  [[ -n "$display" ]] && (( $# > 0 )) || return 2
+  if (( ${+functions[_zdx_run_captured]} )); then
+    _zdx_run_captured "$display" "" "" "$@"
+    return
+  fi
+  # Standalone fallback without the core: announce and stream the command.
+  _dev_dim "\$ $display"
+  ( "$@" ) </dev/null >&2
+}
+
+# True inside an aggregate step unless ZDX_VERBOSE=1: detail that the step's
+# result line already conveys is then omitted.
+_dev_step_quiet() {
+  (( ${+functions[_zdx_step_active]} )) && _zdx_step_active \
+    && [[ "${ZDX_VERBOSE:-0}" != 1 ]]
+}
+
+# Prints an explanatory note in a standalone run. Inside an aggregate step it
+# appears only with ZDX_VERBOSE=1, because the aggregate plan already states it.
+_dev_note() {
+  if (( ${+functions[_zdx_step_active]} )) && _zdx_step_active; then
+    _dev_verbose_dim "${1:-}"
+    return 0
+  fi
+  _dev_info "${1:-}"
+}
+
+# REPLY: a display-only command line for _dev_run_captured.
+# Usage: _dev_command_display <argv...>
+_dev_command_display() {
+  if (( ${+functions[_zdx_ui_command_display]} )); then
+    _zdx_ui_command_display "$@"
+    return
+  fi
+  REPLY="${(j: :)@}"
+}
+
 # --- Timing -----------------------------------------------------------------
 # The core runtime owns _timed. A standalone source of this suite must not
 # depend on it, and it must never define a competing global implementation.
@@ -133,21 +313,6 @@ _dev_timed() {
   else
     "$@"
   fi
-}
-
-_dev_now() {
-  if [[ -n "${EPOCHREALTIME:-}" ]]; then
-    print -r -- "$EPOCHREALTIME"
-  else
-    print -r -- "0"
-  fi
-}
-
-_dev_elapsed() {
-  local start="${1:-0}"
-  local now
-  now=$(_dev_now)
-  printf '%.1f' $(( now - start ))
 }
 
 # --- Prompts ----------------------------------------------------------------
@@ -1913,6 +2078,71 @@ _dev_delegate_sys() {
 
   _dev_debug "Delegating $command_name to the sys suite."
   sys-menu "$command_name" "$@"
+}
+
+# Runs selected batch-safe tasks in order as aggregate steps for dev-menu
+# --multi and saved profiles. A failing task does not stop the batch, so the
+# summary covers every task; an interruption stops it. Each task keeps its own
+# output. Status: 0 when every task succeeded, 1 when any failed, or the
+# status of an interrupted task.
+# Usage: _dev_run_task_batch <title> <task...>
+_dev_run_task_batch() {
+  local title="${1:-Selected Tasks}"
+  shift
+  local -a tasks=("$@") summary_records=() failed_tasks=() reply=()
+  local -i total=${#tasks[@]} index=0 failures=0 interrupted_status=0
+  local -i task_status=0
+  local task outcome detail seconds REPLY
+
+  _dev_header "$title"
+  for task in "${tasks[@]}"; do
+    (( ++index ))
+    if (( interrupted_status )); then
+      summary_records+=("$task"$'\tnot-run\t\tbatch interrupted')
+      continue
+    fi
+    _dev_step_banner "$index" "$total" "$task"
+    task_status=0
+    _dev_step_exec _dev_timed "dev:$task" _dev_dispatch "$task" \
+      || task_status=$?
+    outcome="${reply[1]:-done}"
+    detail="${reply[2]:-}"
+    seconds="${reply[3]:-}"
+    # A quality gate that finishes without its own result has passed.
+    [[ "$outcome" == done && "$task" == dev-run-* ]] && outcome=passed
+    _dev_step_result "$index" "$total" "$task" "$outcome" "$detail" "$seconds"
+    summary_records+=("$task"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
+    (( task_status == 0 )) && continue
+    (( ++failures ))
+    if (( task_status == 130 || task_status == 143 )); then
+      interrupted_status=$task_status
+    else
+      failed_tasks+=("$task")
+    fi
+  done
+
+  _dev_print_step_summary "Task Summary" "${summary_records[@]}"
+  _dev_count_noun "$total" task
+  if (( interrupted_status )); then
+    _dev_error \
+      "Tasks were interrupted (status $interrupted_status); later tasks did not run."
+    return $interrupted_status
+  fi
+  if (( failures == 0 )); then
+    if (( total == 1 )); then
+      _dev_success "The only task completed successfully."
+    else
+      _dev_success "All $REPLY completed successfully."
+    fi
+    return 0
+  fi
+  _dev_error "$failures of $REPLY failed."
+  _dev_info "Run a failing task directly:"
+  local failed_task
+  for failed_task in "${(@u)failed_tasks}"; do
+    _dev_dim "dev-menu $failed_task"
+  done
+  return 1
 }
 
 # Docker lifecycle is owned by the docker suite. These tokens remain only as

@@ -445,7 +445,11 @@ wrong base directory causes deletion or overwrite outside the intended scope.
 - `dev-update-all` freezes project-file and infrastructure applicability and
   reuses one PyPI reachability probe within its authorized invocation. It
   reports inapplicable steps as skipped and failed specifier queries as
-  failures, and prints a per-step summary with direct retry commands. A PyPI
+  failures, and prints a per-step summary with direct retry commands. Chatty
+  backends run with privately captured, bounded output that is replayed
+  redacted only on failure; the lockfile evidence reads `uv.lock` through a
+  no-follow descriptor with a 16 MiB bound, and the hook revision table is
+  built from the guard's validated records. A PyPI
   failure does not block uv's configured index/cache or independent Git hook
   repositories. The probe distinguishes DNS, TCP,
   and stalled-TLS failures so an MTU mismatch behind a VPN is named instead of

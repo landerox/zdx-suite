@@ -115,6 +115,7 @@ dev-run-audit() {
 #   Status:    Bandit's status, 0 when no Python files exist, 2 on bad args.
 dev-run-bandit() {
   emulate -L zsh
+  local REPLY
 
   # Bandit severity: -l (LOW+), -ll (MEDIUM+), -lll (HIGH only).
   # Bandit confidence: -i (LOW+), -ii (MEDIUM+), -iii (HIGH only).
@@ -157,7 +158,8 @@ dev-run-bandit() {
   _dev_python_tool_runner bandit "uv add --dev bandit" || return 1
   local -a runner=("${reply[@]}")
 
-  _dev_info "Scanning ${#python_files[@]} Python file(s) for security issues..."
+  _dev_count_noun "${#python_files[@]}" "Python file"
+  _dev_info "Scanning $REPLY for security issues..."
   local -i exit_code=0 batch_status=0 offset=1
   local -a batch=()
   while (( offset <= ${#python_files[@]} )); do

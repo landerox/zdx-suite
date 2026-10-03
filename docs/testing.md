@@ -58,6 +58,7 @@ test/
 ├── dev_contract.bats      frozen Developer public-surface parity
 ├── dev_interface.bats     Developer routing, menu, and load-mode behavior
 ├── dev_maintenance.bats   Developer cleanup, remote-code, and state safety
+├── dev_output.bats        Developer step results, evidence, and summaries
 ├── file_contract.bats     frozen File public-surface parity
 ├── file_safety.bats       File output, path, bulk, and extraction boundaries
 ├── app_contract.bats      frozen App public-surface parity
@@ -182,6 +183,7 @@ different source and target devices before moving anything. See
 | `dev_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, stream separation, `NO_COLOR`, record validation, keyboard-legend accuracy, foreground private picker capture and cleanup, snapshot-validated selection and multi-select dispatch, argument forwarding, and lazy/eager parity |
 | `dev_maintenance.bats` | Cleanup plans, dry runs, declined versus unavailable confirmations, protected roots, `.git` exclusion, awkward filenames, partial failures, owner delegation without installer fallback across every Developer source file, ephemeral gating, state-directory validation, profile-name validation, PyPI helpers, and atomic export publication |
 | `dev_update_safety.bats` | Frozen aggregate applicability, aggregate and exact-cleanup authorization, exact dependency rollback, hostile-option stream isolation, host tool ownership, frozen private hook plans, revision downgrade retention, all-stage environment installation, concurrent live-config preservation, temporary workspace identity, and staged Python replacement; interrupted dependency planning and locking, aggregate stop after an interrupted step, partial hook plans with an unchanged mutable revision, and an interrupted `.venv` rename that keeps the original |
+| `dev_output.bats` | A failing check's replayed tail and retry command, changed locked versions read from `uv.lock` and an unchanged refresh, one guard record for every hook revision, installed hook types from a flow-style list, a System result kept through the delegated toolchain step, and verbose-only policy notes |
 | `dev_update_dispatch.bats` | Child-specific dependency gates, missing uv with independent Terraform inspection and cleanup, and maintenance help/error routing before probes |
 | `dev_update_recovery.bats` | Validated partial hook updates, refusal of unsafe or interrupted candidates and failed environment installation, independent package/Git backends, native HTTP stall settings, dry-run applicability, and retry summaries and removal of the pre-commit update's PyPI cache |
 | `dev_update_specifiers.bats` | Dependency-only TOML rewrites with normalized names, repeated and inline declarations, preserved formatting and unrelated content, version ordering, bounded matching, dry-run behavior, and failed queries |
