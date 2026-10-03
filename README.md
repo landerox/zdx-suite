@@ -313,6 +313,14 @@ borders and indicators. Row text may still contain Unicode. `NO_COLOR` forces
 color off even with a custom theme. Built-in pickers isolate inherited fzf
 defaults without changing your shell environment.
 
+Multi-step commands such as `update-system` and `dev-update-all` show a
+numbered plan, one result line per step, and a summary table. A step says
+`updated` only when it compared the state before and after, and chatty tool
+output is captured privately and shown only when a step fails. Pass
+`--verbose` to those commands, or set `ZDX_VERBOSE=1` in `config.zsh`, to
+stream it instead; see
+[command output and verbosity](docs/user-guide.md#command-output-and-verbosity).
+
 See [terminal rendering and recovery](docs/user-guide.md#terminal-rendering-and-recovery)
 for locale behavior, diagnostics, and terminal limits. Native macOS
 Terminal.app/iTerm2 light/dark validation remains manual; rendering changes do
@@ -426,9 +434,10 @@ Sigstore-backed GitHub build provenance; verification instructions live in
 
 For branch naming, conventional-commit scopes, and the full contributor checklist, see [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
 
-For the canonical suite architecture, command, safety, and interactive-menu
-contracts, see [`docs/development.md`](docs/development.md) and
-[`docs/menu-spec.md`](docs/menu-spec.md).
+For the canonical suite architecture, command, safety, interactive-menu, and
+command-output contracts, see [`docs/development.md`](docs/development.md),
+[`docs/menu-spec.md`](docs/menu-spec.md), and
+[`docs/output-spec.md`](docs/output-spec.md).
 
 ---
 

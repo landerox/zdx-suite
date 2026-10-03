@@ -372,6 +372,22 @@ also applies the output-spec adoption checklist:
 | CI, Environment, ZDX master control | `~`-abbreviated directory scope |
 | Hugging Face, GPU, Network | label helpers through `_zdx_ui_label` |
 
+The command-output pass applies the same checklist to each suite's own
+output. A count of `(s)` and `(ies)` plurals and private capture helpers at
+the time System and Developer were migrated sizes each pass:
+
+| Suite | Counted-noun sites | Own capture or temporary-output sites | Aggregates to rebuild on step services |
+| --- | --- | --- | --- |
+| Git | 23 | 7 | multi-repository and cleanup workflows |
+| Workspace | 12 | 2 | batch clone and migration |
+| AI | 9 | 7 | the `ai-update` ledger and summary |
+| VPN | 8 | 1 | — |
+| CI | 8 | 1 | — |
+| File | 4 | 2 | — |
+| Environment, Python | 2 each | 3 each | — |
+| App, Network | 1 each | 1 each | — |
+| Docker, GPU, Hugging Face | 0 | 1 each | Docker cleanup plans |
+
 ### 🧠 Phase 2: AI Execution, APIs & Database Dashboards (v0.2.0 - Next Milestone)
 
 *Focus: Bringing LLMs, REST/gRPC clients, and local databases directly to the command line to boost backend and data development workflows.*

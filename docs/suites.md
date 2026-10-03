@@ -151,9 +151,9 @@ NOT implement a second telemetry writer or schema.
 ### Command output
 
 The core runtime owns the command-output vocabulary and renderers defined in
-[`output-spec.md`](output-spec.md): headings, step banners and results,
-summary tables, durations, counted nouns, step result slots, and captured
-child-tool output. Suites call them through thin `_<prefix>_*` wrappers with a
+[`output-spec.md`](output-spec.md): headings, key-value lines, step banners
+and results, summary tables, durations, counted nouns, step result slots, and
+captured child-tool output. Suites call them through thin `_<prefix>_*` wrappers with a
 standalone fallback. A suite MUST NOT introduce a second outcome vocabulary,
 duration format, or failure-capture service. Suite machine protocols, such as
 `ai-update-result-v1`, stay suite-owned and are mapped by their consumer.
