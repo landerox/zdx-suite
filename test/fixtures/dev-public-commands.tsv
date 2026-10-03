@@ -31,11 +31,11 @@ dev-run-tests	dev-checks.zsh	mutating	dev
 dev-run-tflint	dev-checks.zsh	read-only	dev
 dev-run-ty	dev-checks.zsh	read-only	dev
 dev-update-all	dev-update.zsh	destructive	dev
-dev-update-deps	dev-update.zsh	mutating	dev
-dev-update-deps-dry	dev-update.zsh	read-only	dev
-dev-update-lock	dev-update.zsh	mutating	dev
-dev-update-precommit	dev-update.zsh	mutating	dev
-dev-update-python	dev-update.zsh	destructive	dev
+dev-update-deps	dev-update-deps.zsh	mutating	dev
+dev-update-deps-dry	dev-update-deps.zsh	read-only	dev
+dev-update-lock	dev-update-deps.zsh	mutating	dev
+dev-update-precommit	dev-update-precommit.zsh	mutating	dev
+dev-update-python	dev-update-python.zsh	destructive	dev
 dev-update-terraform	dev-update.zsh	read-only	dev
 dev-update-tflint	dev-update.zsh	read-only	dev
 dev-update-toolchain	dev-update.zsh	mutating	dev

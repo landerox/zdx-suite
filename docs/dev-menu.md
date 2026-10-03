@@ -42,7 +42,12 @@ functions/dev-menu.zsh          public loader, router, menu model
     -> functions/dev/dev-report.zsh     Markdown report buffer
     -> functions/dev/dev-pypi.zsh       PEP 503, pyproject parsing, PyPI queries
     -> functions/dev/dev-export.zsh     dependency export, package build
-    -> functions/dev/dev-update.zsh     specifiers, lockfile, toolchain, runtime
+    -> functions/dev/dev-update-transaction.zsh  workspaces, fingerprints, rollback
+    -> functions/dev/dev-update-specifiers.zsh   TOML specifier plans, PyPI readiness
+    -> functions/dev/dev-update-deps.zsh         specifier updates, lockfile refresh
+    -> functions/dev/dev-update-precommit.zsh    guarded frozen hook revisions
+    -> functions/dev/dev-update-python.zsh       staged .venv replacement
+    -> functions/dev/dev-update.zsh     toolchain, ownership reports, full maintenance
     -> functions/dev/dev-checks.zsh     linters, type checkers, tests, health
     -> functions/dev/dev-security.zsh   pip-audit, Bandit
     -> functions/dev/dev-clean.zsh      planned, confirmable removal
@@ -50,8 +55,12 @@ functions/dev-menu.zsh          public loader, router, menu model
     -> functions/dev/dev-compat.zsh     deprecated unprefixed names
 ```
 
-Load order is explicit in the entrypoint. `dev-compat.zsh` loads last because
-every wrapper it defines forwards to a command declared by an earlier module.
+Load order is explicit in the entrypoint. The update transaction and specifier
+helper modules load before the update workflows that consume them, and
+`dev-update.zsh` loads after the deps and pre-commit modules whose commands and
+outcome state its `dev-update-all` aggregate orchestrates. `dev-compat.zsh`
+loads last because every wrapper it defines forwards to a command declared by
+an earlier module.
 
 ## Invocation order and effect metadata
 
