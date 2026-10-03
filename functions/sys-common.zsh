@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# System Common: shared UI, safety, and routing helpers
+# System Common: shared UI, safety, privilege, and routing helpers
 # =============================================================================
 #
 # Loaded by sys-menu.zsh before every module under functions/sys/.
@@ -630,6 +630,311 @@ _sys_cmd_deps() {
     sys-processes)      print -r -- "ps" ;;
     *)                  print -r -- "" ;;
   esac
+}
+
+# --- Update step primitives ---------------------------------------------------
+# Shared by the sys-update*.zsh modules: argument grammars, trusted program and
+# owner-bound path validators, and the Darwin Homebrew askpass guard.
+
+# Return 0 and set REPLY to "run" or "help"; invalid arguments return 2.
+_sys_update_parse_no_args() {
+  local command_name="$1"
+  shift
+  REPLY="run"
+  if (( $# == 0 )); then
+    return 0
+  fi
+  if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    print -u2 -r -- "Usage: $command_name [-h|--help]"
+    REPLY="help"
+    return 0
+  fi
+  _sys_error "Unknown or extra argument for $command_name: $1"
+  return 2
+}
+
+# Shared grammar for the plan-based updaters: [--dry-run] [-y|--yes] [-h|--help].
+# Returns 0 with reply=(dry_run assume_yes), or REPLY="help" after printing
+# usage. Unknown or extra arguments return 2 before any probe runs.
+_sys_update_parse_plan_flags() {
+  local command_name="$1"
+  shift
+  local -i assume_yes=0 dry_run=0
+  REPLY="run"
+  reply=()
+  while (( $# )); do
+    case "$1" in
+      -h|--help)
+        (( $# == 1 && ! dry_run && ! assume_yes )) || {
+          _sys_error "--help accepts no additional options or arguments."
+          return 2
+        }
+        print -u2 -r -- \
+          "Usage: $command_name [--dry-run] [-y|--yes] [-h|--help]"
+        REPLY="help"
+        return 0
+        ;;
+      --dry-run) dry_run=1 ;;
+      -y|--yes)  assume_yes=1 ;;
+      *)
+        _sys_error "Unknown option for $command_name: $1"
+        return 2
+        ;;
+    esac
+    shift
+  done
+  reply=("$dry_run" "$assume_yes")
+  return 0
+}
+
+_sys_brew_askpass_program() {
+  local program="/usr/bin/false"
+  local -A program_state=()
+  zmodload zsh/stat 2>/dev/null \
+    && [[ -f "$program" && ! -L "$program" && -x "$program" ]] \
+    && zstat -H program_state "$program" 2>/dev/null || return 1
+  (( program_state[uid] == 0 \
+    && program_state[nlink] == 1 \
+    && (program_state[mode] & 8#22) == 0 )) || return 1
+  REPLY="$program"
+}
+
+_sys_update_resolve_trusted_program() {
+  local requested_program="${1:-dnf}"
+  [[ "$requested_program" == "apt-config" \
+    || "$requested_program" == "dnf" \
+    || "$requested_program" == "dpkg" \
+    || "$requested_program" == "dpkg-query" \
+    || "$requested_program" == "env" \
+    || "$requested_program" == "zsh" ]] || return 2
+  local program
+  program=$(whence -p "$requested_program" 2>/dev/null) || return 1
+  [[ "$program" == /* && "$program" != *[[:cntrl:]]* ]] || return 1
+  program="${program:A}"
+  local -A program_state=()
+  zmodload zsh/stat 2>/dev/null \
+    && [[ -f "$program" && ! -L "$program" && -x "$program" ]] \
+    && zstat -H program_state "$program" 2>/dev/null || return 1
+  (( program_state[uid] == 0 \
+    && (program_state[mode] & 8#22) == 0 )) || return 1
+  local -A directory_state=()
+  local directory_cursor="" directory_component
+  for directory_component in "${(@s:/:)${program:h}}"; do
+    [[ -n "$directory_component" ]] || continue
+    directory_cursor+="/$directory_component"
+    [[ -d "$directory_cursor" && ! -L "$directory_cursor" ]] \
+      && zstat -H directory_state "$directory_cursor" 2>/dev/null \
+      || return 1
+    (( directory_state[uid] == 0 \
+      && (directory_state[mode] & 8#22) == 0 )) || return 1
+  done
+  REPLY="$program"
+}
+
+# Validate an existing path below an owner-bound trust root. The trust root and
+# every child component must be owned by the current user and must not be a
+# symbolic link. Set REPLY to the canonical candidate path on success.
+_sys_update_validate_owned_path() {
+  local allowed_root="${1:-}"
+  local candidate_path="${2:-}"
+  local expected_type="${3:-directory}"
+  [[ -n "$allowed_root" && -n "$candidate_path" \
+    && "$allowed_root" == /* && "$candidate_path" == /* \
+    && "$allowed_root" != *[[:cntrl:]]* \
+    && "$candidate_path" != *[[:cntrl:]]* \
+    && ( "$expected_type" == "directory" \
+      || "$expected_type" == "file" ) ]] || return 2
+
+  local root_lexical="${allowed_root:a}"
+  local candidate_lexical="${candidate_path:a}"
+  [[ -d "$root_lexical" && ! -L "$root_lexical" \
+    && -O "$root_lexical" && "${root_lexical:A}" == "$root_lexical" \
+    && "$candidate_lexical" == "$root_lexical"/* ]] || return 1
+
+  local relative_path="${candidate_lexical#$root_lexical/}"
+  local -a path_components=("${(@s:/:)relative_path}")
+  (( ${#path_components[@]} > 0 )) || return 1
+
+  local component current_path="$root_lexical"
+  for component in "${path_components[@]}"; do
+    [[ -n "$component" && "$component" != "." \
+      && "$component" != ".." ]] || return 1
+    current_path+="/$component"
+    [[ -e "$current_path" || -L "$current_path" ]] || return 1
+    [[ ! -L "$current_path" && -O "$current_path" ]] || return 1
+  done
+
+  case "$expected_type" in
+    directory) [[ -d "$candidate_lexical" ]] || return 1 ;;
+    file)      [[ -f "$candidate_lexical" ]] || return 1 ;;
+  esac
+  REPLY="${candidate_lexical:A}"
+}
+
+# --- Privileged update session ------------------------------------------------
+# One announced sudo authentication plus an owned, non-interactive timestamp
+# refresher, shared by update-apt and the update-system aggregate.
+
+# Small predicate so tests can model an interactive terminal without a PTY.
+_sys_update_can_prompt() {
+  [[ -t 0 && -t 2 ]]
+}
+
+# Report whether an aggregate step can require the shared sudo authorization.
+# Homebrew formulae normally remain unprivileged, but macOS casks can delegate
+# installer packages to sudo, so the Darwin aggregate keeps the same bounded
+# credential alive through that adjacent step as well.
+_sys_update_step_requires_privilege() {
+  local command_name="${1:-}"
+  case "$command_name" in
+    update-apt|_sys_update_platform_packages|update-snap)
+      return 0
+      ;;
+    update-brew)
+      _sys_has_capability "os:darwin"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Authenticate sudo once, announced, when the authorized plan contains a
+# privileged package step. The caller scopes a non-interactive timestamp
+# refresher to the consecutive package entries. Suite-owned privilege calls use
+# sudo -n; Darwin Homebrew receives a fixed failing askpass guard. An unavailable
+# credential therefore becomes a visible failure, not a second prompt.
+# Advisory only; it never fails the aggregate by itself.
+_sys_update_preauthenticate() {
+  REPLY=0
+  local entry command_name
+  local -i privileged=0 darwin_homebrew=0
+  for entry in "$@"; do
+    command_name="${entry#*;}"
+    _sys_update_step_requires_privilege "$command_name" && privileged=1
+    [[ "$command_name" == "update-brew" ]] && darwin_homebrew=1
+  done
+  (( privileged )) || return 0
+  (( EUID != 0 )) || return 0
+  _sys_has_capability "privilege:sudo" \
+    && command -v sudo &>/dev/null || return 0
+  if command sudo -n true 2>/dev/null; then
+    REPLY=1
+    return 0
+  fi
+  _sys_update_can_prompt || return 0
+
+  _sys_info \
+    "Privileged operation: sudo -v (authenticate once for the authorized package steps)"
+  _sys_dim "Later ZDX privilege calls use sudo -n."
+  if (( darwin_homebrew )) && _sys_has_capability "os:darwin"; then
+    _sys_dim \
+      "macOS Homebrew cask operations use a fixed non-interactive askpass guard."
+  fi
+  if command sudo -v >&2; then
+    REPLY=1
+  else
+    _sys_warn \
+      "sudo authentication failed; privileged steps will fail without reprompting."
+  fi
+  return 0
+}
+
+# Wait for either a private stop request on the worker's pseudo-terminal or the
+# next refresh interval. Status 0 means input is ready; status 1 is a timeout.
+_sys_update_sudo_keepalive_wait() {
+  zmodload zsh/zselect 2>/dev/null || return 2
+  zselect -r 0 -t 3000 2>/dev/null
+}
+
+_sys_update_sudo_keepalive_worker() {
+  emulate -L zsh
+  setopt NO_MONITOR NO_NOTIFY
+  local control=""
+  local -i refresh_enabled=1 wait_rc=0
+  while true; do
+    _sys_update_sudo_keepalive_wait
+    wait_rc=$?
+    if (( wait_rc == 0 )); then
+      IFS= read -r control || return 1
+      [[ "$control" == "stop" ]] || return 1
+      print -r -- "zdx-sudo-keepalive-stopped"
+      return 0
+    fi
+    (( wait_rc == 1 )) || return 1
+    if (( refresh_enabled )) \
+      && ! command sudo -n -v </dev/null >/dev/null 2>&1; then
+      # A failed refresh is never retried. Keep this owned worker alive so its
+      # private handle cannot be confused with a later process.
+      refresh_enabled=0
+    fi
+  done
+}
+
+# Keep the one authorized sudo timestamp valid only while consecutive package
+# entries run. A private zpty handle avoids the caller's interactive job table;
+# the stop handshake and zpty deletion retain exact worker ownership.
+_sys_update_start_sudo_keepalive() {
+  emulate -L zsh
+  local authenticated="${1:-0}"
+  REPLY=""
+  [[ "$authenticated" == 0 || "$authenticated" == 1 ]] || return 2
+  (( authenticated && EUID != 0 )) || return 0
+  _sys_has_capability "privilege:sudo" \
+    && command -v sudo &>/dev/null || return 0
+  zmodload zsh/zpty zsh/zselect 2>/dev/null || return 1
+  command sudo -n -v </dev/null >/dev/null 2>&1 || return 1
+
+  local keepalive_handle="zdx-sudo-keepalive-${sysparams[pid]:-$$}-${RANDOM}-${RANDOM}"
+  [[ "$keepalive_handle" =~ '^zdx-sudo-keepalive-[0-9]+-[0-9]+-[0-9]+$' ]] \
+    || return 1
+  zpty -b "$keepalive_handle" _sys_update_sudo_keepalive_worker \
+    2>/dev/null || return 1
+  zpty -t "$keepalive_handle" 2>/dev/null || {
+    zpty -d "$keepalive_handle" 2>/dev/null || true
+    return 1
+  }
+  REPLY="$keepalive_handle"
+  _sys_dim \
+    "Sudo timestamp refresh is active only for the authorized package entries." \
+    || true
+  REPLY="$keepalive_handle"
+  return 0
+}
+
+_sys_update_stop_sudo_keepalive() {
+  emulate -L zsh
+  local keepalive_handle="${1:-}"
+  [[ "$keepalive_handle" \
+    =~ '^zdx-sudo-keepalive-[0-9]+-[0-9]+-[0-9]+$' ]] || return 2
+  zmodload zsh/zpty zsh/zselect 2>/dev/null || return 1
+  if ! zpty -t "$keepalive_handle" 2>/dev/null; then
+    zpty -d "$keepalive_handle" 2>/dev/null || true
+    return 0
+  fi
+  zpty -w "$keepalive_handle" stop 2>/dev/null || {
+    zpty -d "$keepalive_handle" 2>/dev/null || true
+    return 1
+  }
+
+  local response="" chunk=""
+  local -i attempt=0 acknowledged=0 stopped=0
+  while (( ++attempt <= 100 )); do
+    chunk=""
+    if zpty -r -t "$keepalive_handle" chunk 2>/dev/null; then
+      response+="$chunk"
+      (( ${#response} <= 1024 )) || break
+      [[ "$response" == *"zdx-sudo-keepalive-stopped"* ]] \
+        && acknowledged=1
+    fi
+    if ! zpty -t "$keepalive_handle" 2>/dev/null; then
+      stopped=1
+      break
+    fi
+    zselect -t 1 2>/dev/null || true
+  done
+  zpty -d "$keepalive_handle" 2>/dev/null || return 1
+  (( acknowledged && stopped ))
 }
 
 # --- Menu helpers (canonical: args = output positions) ----------------------

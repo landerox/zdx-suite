@@ -46,6 +46,8 @@ if (( _sys_menu_load_rc != 0 )); then
 fi
 
 # --- Load capability adapters and feature modules ---------------------------
+# The update step modules load before the sys-update.zsh orchestrator that
+# consumes their step commands and applicability predicates.
 
 typeset _sys_menu_module
 for _sys_menu_module in \
@@ -53,6 +55,10 @@ for _sys_menu_module in \
   adapters/sys-linux.zsh \
   adapters/sys-wsl.zsh \
   adapters/sys-macos.zsh \
+  sys-update-apt.zsh \
+  sys-update-packages.zsh \
+  sys-update-git.zsh \
+  sys-update-tools.zsh \
   sys-update.zsh \
   sys-clean.zsh \
   sys-diag.zsh \
