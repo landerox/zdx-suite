@@ -545,19 +545,23 @@ _sys_apt_reboot_required() {
     && "$before_identity" == "$after_identity" ]] || return 2
 }
 
+# REPLY: "required", "unknown", or empty for the reboot-required marker.
 _sys_apt_report_reboot_requirement() {
   _sys_apt_reboot_required
   local marker_rc=$?
+  REPLY=""
   case "$marker_rc" in
     0)
       _sys_warn \
         "A system reboot is required to finish applying package updates."
+      REPLY=required
       ;;
     1)
       ;;
     *)
       _sys_warn \
         "The reboot-required marker exists but could not be validated safely; reboot status is unknown."
+      REPLY=unknown
       ;;
   esac
   return 0
@@ -608,6 +612,252 @@ _sys_apt_announce_operation() {
   return 0
 }
 
+# --- APT output relay and diagnosis -------------------------------------------
+
+# Relays APT's own output to stderr unchanged and keeps a bounded private tail
+# in REPLY for diagnosis. It must be the last pipeline element so it runs in
+# this shell. It drains its input to end of file, so APT never receives
+# SIGPIPE, and it never reopens stderr, so a redirected log is not truncated.
+_sys_apt_relay_output() {
+  emulate -L zsh
+  local LC_ALL=C chunk="" tail=""
+  local -i limit="${1:-65536}" read_rc=0
+  if ! zmodload zsh/system 2>/dev/null; then
+    command cat >&2
+    REPLY=""
+    return 0
+  fi
+  while true; do
+    chunk=""
+    sysread -i 0 -s 8192 chunk
+    read_rc=$?
+    (( read_rc == 0 )) || break
+    print -rn -u2 -- "$chunk"
+    tail+="$chunk"
+    (( ${#tail} > limit )) && tail="${tail[-limit,-1]}"
+  done
+  REPLY="$tail"
+}
+
+# reply=(upgraded installed removed held) from APT's transaction summary line.
+# Returns 1 when no summary line is present.
+_sys_apt_transaction_counts() {
+  emulate -L zsh
+  local line MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=() counts=()
+  reply=()
+  for line in "${(@f)1}"; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ '^([0-9]+) upgraded, ([0-9]+) newly installed, ([0-9]+ reinstalled, )?([0-9]+ downgraded, )?([0-9]+) to remove and ([0-9]+) not upgraded[.]$' ]]; then
+      counts=("${match[1]}" "${match[2]}" "${match[5]}" "${match[6]}")
+    fi
+  done
+  (( ${#counts} == 4 )) || return 1
+  reply=("${counts[@]}")
+}
+
+# Display-only source: credentials in a URI are removed, the text is bounded,
+# and control characters are made visible.
+_sys_apt_display_source() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local source="${1-}"
+  source="${source//(#b)([a-zA-Z][a-zA-Z0-9+.-]#:\/\/)[^\/@[:space:]]##@/${match[1]}}"
+  (( ${#source} > 120 )) && source="${source[1,119]}…"
+  REPLY="${(V)source}"
+}
+
+# REPLY: "<class><TAB><problem>" for one APT failure reason.
+_sys_apt_classify_index_problem() {
+  emulate -L zsh
+  local reason="${1-}" MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  if [[ "$reason" =~ '(NO_PUBKEY|EXPKEYSIG|EXPSIG|REVKEYSIG|BADSIG) ([0-9A-Fa-f]{8,40})' ]]; then
+    case "${match[1]}" in
+      NO_PUBKEY) REPLY=$'key\tsigning key not installed ('"${match[1]} ${match[2]}"')' ;;
+      EXPKEYSIG|EXPSIG) REPLY=$'key\tsigning key expired ('"${match[1]} ${match[2]}"')' ;;
+      REVKEYSIG) REPLY=$'key\tsigning key revoked ('"${match[1]} ${match[2]}"')' ;;
+      *) REPLY=$'key\tbad signature ('"${match[1]} ${match[2]}"')' ;;
+    esac
+  elif [[ "$reason" == *"is not signed"* ]]; then
+    REPLY=$'key\trepository is not signed'
+  elif [[ "$reason" == *"Could not resolve"* \
+    || "$reason" == *"Temporary failure resolving"* ]]; then
+    REPLY=$'network\thost lookup failed'
+  elif [[ "$reason" == *"Could not connect"* || "$reason" == *"Unable to connect"* \
+    || "$reason" == *"Connection timed out"* \
+    || "$reason" == *"Connection failed"* ]]; then
+    REPLY=$'network\tconnection failed'
+  elif [[ "$reason" =~ '(^|[[:space:]])(5[0-9][0-9]) ' ]]; then
+    REPLY=$'network\tserver error HTTP '"${match[2]}"
+  elif [[ "$reason" =~ '(^|[[:space:]])(4[0-9][0-9]) ' \
+    || "$reason" == *"does not have a Release file"* ]]; then
+    REPLY=$'missing\trepository or suite not found'
+  elif [[ "$reason" == *"is not valid yet"* ]]; then
+    REPLY=$'clock\trelease file not valid yet'
+  elif [[ "$reason" == *"is expired"* ]]; then
+    REPLY=$'release\trelease file expired'
+  elif [[ "$reason" == *"changed its '"* ]]; then
+    REPLY=$'release\trelease metadata changed'
+  elif [[ "$reason" == *"Could not get lock"* ]]; then
+    REPLY=$'lock\tlock held by another package process'
+  else
+    local text="${reason##[[:space:]]#}"
+    (( ${#text} > 80 )) && text="${text[1,79]}…"
+    REPLY=$'other\t'"${(V)text}"
+  fi
+}
+
+# Private: record one failure in the caller's dynamically scoped problems,
+# classes, and order. A key problem is never replaced by a generic one.
+_sys_apt_index_record() {
+  local record_source="$1" record_reason="$2" REPLY
+  _sys_apt_classify_index_problem "$record_reason"
+  local record_class="${REPLY%%$'\t'*}" record_problem="${REPLY#*$'\t'}"
+  if (( ! ${+problems[$record_source]} )); then
+    order+=("$record_source")
+  elif [[ "${classes[$record_source]}" == key && "$record_class" != key ]]; then
+    return 0
+  fi
+  problems[$record_source]="$record_problem"
+  classes[$record_source]="$record_class"
+}
+
+# reply: "<class><TAB><source><TAB><problem>" records for failed repositories,
+# at most one per source. A key problem replaces a generic one for a source.
+_sys_apt_index_failures() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local tail="${1-}" line source reason pending_source="" MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=() order=()
+  local -A problems=() classes=()
+  reply=()
+  for line in "${(@f)tail}"; do
+    line="${line%$'\r'}"
+    if [[ -n "$pending_source" && "$line" == [[:space:]]##* ]]; then
+      _sys_apt_index_record "$pending_source" "$line"
+      pending_source=""
+      continue
+    fi
+    pending_source=""
+    if [[ "$line" =~ '^Err:[0-9]+ ([^ ]+ [^ ]+)' ]]; then
+      pending_source="${match[1]}"
+    elif [[ "$line" =~ 'GPG error: ([^ ]+ [^ :]+)[^:]*: (.*)$' ]]; then
+      _sys_apt_index_record "${match[1]}" "${match[2]}"
+    elif [[ "$line" =~ "The repository '([^']+)' (.*)$" ]]; then
+      source="${match[1]% Release}"
+      source="${source% InRelease}"
+      _sys_apt_index_record "$source" "${match[2]}"
+    elif [[ "$line" =~ '^E: Failed to fetch ([^ ]+)[[:space:]]+(.*)$' ]]; then
+      source="${match[1]}"
+      reason="${match[2]}"
+      if [[ "$source" =~ '^(.+)/dists/([^/]+)/' ]]; then
+        source="${match[1]} ${match[2]}"
+      fi
+      _sys_apt_index_record "$source" "$reason"
+    elif [[ "$line" =~ '^E: Could not get lock (.*)$' ]]; then
+      _sys_apt_index_record "APT lock" "Could not get lock ${match[1]}"
+    fi
+  done
+  local display_source=""
+  for source in "${order[@]}"; do
+    _sys_apt_display_source "$source"
+    display_source="$REPLY"
+    reply+=("${classes[$source]}"$'\t'"$display_source"$'\t'"${problems[$source]}")
+  done
+}
+
+# Prints the diagnosis of a failed index refresh. REPLY: one short detail for
+# the step result. Usage: _sys_apt_report_index_failure <tail> <candidates|"">
+_sys_apt_report_index_failure() {
+  local tail="${1-}" candidates="${2-}" record first_detail=""
+  local -a reply=() failures=() rows=() classes=()
+  local -i shown=0
+  _sys_apt_index_failures "$tail"
+  failures=("${reply[@]}")
+  if (( ${#failures} == 0 )); then
+    _sys_dim "APT reported no recognizable repository error; review its output above."
+  else
+    _sys_count_noun "${#failures}" repository repositories
+    _sys_info "$REPLY could not be refreshed:"
+    for record in "${failures[@]}"; do
+      classes+=("${record%%$'\t'*}")
+      (( shown < 10 )) || continue
+      rows+=("${record#*$'\t'}")
+      (( ++shown ))
+    done
+    _sys_table $'Repository\tProblem' "${rows[@]}"
+    (( ${#failures} > shown )) \
+      && _sys_dim "… and $(( ${#failures} - shown )) more"
+    local first="${failures[1]#*$'\t'}"
+    local first_source="${first%%$'\t'*}" first_problem="${first#*$'\t'}"
+    first_source="${first_source#*://}"
+    first_source="${first_source%%[/ ]*}"
+    # The table keeps the key evidence; the one-line detail stays short.
+    first_detail="${first_problem% \(*} ($first_source)"
+    (( ${#failures} > 1 )) && first_detail+=" and $(( ${#failures} - 1 )) more"
+  fi
+  if (( ${classes[(Ie)key]} )); then
+    _sys_dim "A repository signing key is missing, expired, revoked, or replaced. Install the publisher's current key from its official instructions, or disable that source. ZDX never downloads or installs keys."
+  elif (( ${classes[(Ie)lock]} )); then
+    _sys_dim "Another package process holds an APT lock; let it finish before running the update again."
+  elif (( ${classes[(Ie)clock]} )); then
+    _sys_dim "The system clock appears to be behind the repository; correct the time first."
+  elif (( ${classes[(Ie)release]} )); then
+    _sys_dim "A repository changed or expired its release metadata; review the change before trusting it."
+  elif (( ${classes[(Ie)missing]} )); then
+    _sys_dim "A repository path or suite no longer exists; correct or remove that source entry."
+  elif (( ${classes[(Ie)network]} )); then
+    _sys_dim "Check network and DNS access to the listed hosts."
+  fi
+  if [[ "$candidates" == <-> ]]; then
+    _sys_count_noun "$candidates" candidate
+    if (( candidates == 1 )); then
+      _sys_dim "No package was upgraded; $REPLY remains pending."
+    else
+      _sys_dim "No package was upgraded; $REPLY remain pending."
+    fi
+  else
+    _sys_dim "No package was upgraded; pending candidates are unknown."
+  fi
+  _sys_dim "After fixing the cause, run: sys-menu update-apt"
+  REPLY="index refresh failed${first_detail:+: $first_detail}"
+}
+
+# reply=(outcome detail message-suffix) for a finished APT transaction.
+# Usage: _sys_apt_transaction_outcome <upgrade-tail> <autoremove-tail> <reboot>
+_sys_apt_transaction_outcome() {
+  local upgrade_tail="${1-}" autoremove_tail="${2-}" reboot_state="${3-}"
+  local -a counts=() removed=()
+  local outcome=done detail="transaction completed" suffix="."
+  if _sys_apt_transaction_counts "$upgrade_tail"; then
+    counts=("${reply[@]}")
+    removed=(0 0 0 0)
+    _sys_apt_transaction_counts "$autoremove_tail" && removed=("${reply[@]}")
+    local -i upgraded="${counts[1]}" installed="${counts[2]}" held="${counts[4]}"
+    local -i removed_total=$(( counts[3] + removed[3] ))
+    if (( upgraded + installed + removed_total > 0 )); then
+      outcome=updated
+      detail="$upgraded upgraded, $installed newly installed, $removed_total removed"
+    else
+      outcome=current
+      detail="no package changes"
+    fi
+    (( held > 0 )) && detail+=", $held held back"
+  fi
+  case "$reboot_state" in
+    required) detail+=", reboot required" ;;
+    unknown)  detail+=", reboot status unknown" ;;
+  esac
+  if [[ "$outcome" == current ]]; then
+    suffix="; no package changes were needed."
+    [[ "$detail" == "no package changes" ]] || suffix=": $detail."
+  elif [[ "$outcome" == updated ]]; then
+    suffix=": $detail."
+  fi
+  reply=("$outcome" "$detail" "$suffix")
+}
+
 update-apt() {
   local REPLY
   local -i assume_yes=0 dry_run=0 include_phased_updates=0 verbose=0
@@ -648,9 +898,7 @@ update-apt() {
   # PATH for the rest of the shell session.
   local PATH=/usr/sbin:/usr/bin:/sbin:/bin
   _sys_header "APT Update Scope"
-  _sys_info "Operations: refresh indexes, full-upgrade packages, then autoremove."
-  _sys_warn "The package snapshot below is advisory."
-  _sys_dim "Refreshing indexes can change the final transaction resolved by APT."
+  _sys_verbose_dim "Operations: refresh indexes, full-upgrade packages, then autoremove."
   _sys_update_resolve_trusted_program env || {
     _sys_error "A trusted root-owned env program is required for APT."
     return 1
@@ -680,7 +928,7 @@ update-apt() {
   )
   local apt_environment_label=
   apt_environment_label="HOME=/nonexistent XDG_CACHE_HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM=dumb DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none"
-  local simulation
+  local simulation candidate_count=""
   local -i simulation_rc=0
   simulation=$(
     _sys_run_with_timeout 30 \
@@ -693,7 +941,9 @@ update-apt() {
     /^Inst / { count++ }
     END { print count + 0 }
   ')
-    _sys_label "Current candidates:" "$upgrade_count"
+    candidate_count="$upgrade_count"
+    _sys_label "Current candidates:" \
+      "$upgrade_count (advisory; APT resolves the final transaction)"
   else
     _sys_warn \
       "Unable to calculate the advisory APT snapshot (status $simulation_rc)."
@@ -701,16 +951,16 @@ update-apt() {
     _sys_dim \
       "An authorized execution can refresh the indexes before resolving the real transaction."
   fi
-  _sys_dim \
+  _sys_verbose_dim \
     "APT uses lock timeout 0 and network retries 0; ZDX does not poll or rerun the step."
   if (( include_phased_updates )); then
     _sys_warn \
       "Phased updates are explicitly included for this APT transaction."
   else
-    _sys_dim \
+    _sys_verbose_dim \
       "Ubuntu phased-update eligibility remains in effect unless --include-phased-updates is supplied."
   fi
-  _sys_dim \
+  _sys_verbose_dim \
     "Only an exact automatic unattended-upgrade can receive one cooperative SIGTERM."
 
   local apt_fingerprint=""
@@ -730,7 +980,11 @@ update-apt() {
       _sys_error "The APT dry run could not calculate package candidates."
       return 1
     fi
-    _sys_info "Dry run complete; APT state was not changed."
+    local planned_candidates=""
+    _sys_count_noun "${candidate_count:-0}" candidate
+    planned_candidates="$REPLY"
+    _sys_report_result planned "$planned_candidates" \
+      "Dry run complete; APT state was not changed."
     return 0
   }
   if (( ! assume_yes )); then
@@ -769,7 +1023,11 @@ update-apt() {
 
   local _SYS_APT_AUTHORIZED_FINGERPRINT="$apt_fingerprint"
   {
-    _sys_apt_prepare_transaction "$apt_fingerprint" || return $?
+    _sys_apt_prepare_transaction "$apt_fingerprint" || {
+      local -i prepare_rc=$?
+      _sys_report_result blocked "package state needs manual review"
+      return $prepare_rc
+    }
     local -a privilege_prefix=()
     _sys_resolve_privilege_prefix || return 1
     privilege_prefix=("${reply[@]}")
@@ -778,52 +1036,81 @@ update-apt() {
       && privilege_label="${(j: :)privilege_prefix} "
     local apt_policy_label="${(j: :)apt_policy}"
     local -i transaction_rc=0
+    local -a phase_status=()
+    local phase_tail="" upgrade_tail="" autoremove_tail="" result_detail=""
     _sys_apt_announce_operation "$verbose" "$privilege_label" \
       "$apt_env_program" "$apt_environment_label" "$apt_policy_label" \
       update --error-on=any || return 2
     # APT otherwise returns success for some download failures while retaining
     # old indexes. The supported flag makes an incomplete refresh fail before
-    # package mutation; older APT versions refuse the unsupported option.
-    "${privilege_prefix[@]}" "$apt_env_program" -i \
-      "${apt_environment[@]}" \
-      apt-get "${apt_policy[@]}" update --error-on=any </dev/null >&2 || {
+    # package mutation; older APT versions refuse the unsupported option. Its
+    # output stays live; the relay keeps a bounded tail for diagnosis.
+    { "${privilege_prefix[@]}" "$apt_env_program" -i \
+        "${apt_environment[@]}" \
+        apt-get "${apt_policy[@]}" update --error-on=any </dev/null 2>&1 } \
+      | _sys_apt_relay_output
+    phase_status=("${pipestatus[@]}")
+    phase_tail="$REPLY"
+    if (( phase_status[1] != 0 )); then
       _sys_error "APT index update failed."
+      _sys_apt_report_index_failure "$phase_tail" "$candidate_count"
+      result_detail="$REPLY"
       transaction_rc=1
-    }
+    fi
     if (( transaction_rc == 0 )); then
       _sys_apt_announce_operation "$verbose" "$privilege_label" \
         "$apt_env_program" "$apt_environment_label" "$apt_policy_label" \
         full-upgrade -y || return 2
-      "${privilege_prefix[@]}" "$apt_env_program" -i \
-        "${apt_environment[@]}" \
-        apt-get "${apt_policy[@]}" full-upgrade -y </dev/null >&2 || {
+      { "${privilege_prefix[@]}" "$apt_env_program" -i \
+          "${apt_environment[@]}" \
+          apt-get "${apt_policy[@]}" full-upgrade -y </dev/null 2>&1 } \
+        | _sys_apt_relay_output
+      phase_status=("${pipestatus[@]}")
+      upgrade_tail="$REPLY"
+      if (( phase_status[1] != 0 )); then
         _sys_error "APT full-upgrade failed."
+        result_detail="full-upgrade failed (status ${phase_status[1]})"
         transaction_rc=1
-      }
+      fi
     fi
     if (( transaction_rc == 0 )); then
       _sys_apt_announce_operation "$verbose" "$privilege_label" \
         "$apt_env_program" "$apt_environment_label" "$apt_policy_label" \
         autoremove -y || return 2
-      "${privilege_prefix[@]}" "$apt_env_program" -i \
-        "${apt_environment[@]}" \
-        apt-get "${apt_policy[@]}" autoremove -y </dev/null >&2 || {
+      { "${privilege_prefix[@]}" "$apt_env_program" -i \
+          "${apt_environment[@]}" \
+          apt-get "${apt_policy[@]}" autoremove -y </dev/null 2>&1 } \
+        | _sys_apt_relay_output
+      phase_status=("${pipestatus[@]}")
+      autoremove_tail="$REPLY"
+      if (( phase_status[1] != 0 )); then
         _sys_error "APT autoremove failed."
+        result_detail="autoremove failed (status ${phase_status[1]})"
         transaction_rc=1
-      }
+      fi
     fi
 
     # Audit the resulting dpkg state even after a failed mutation. A partial
     # package operation is exactly when this postcondition is most valuable.
     local -i post_audit_rc=0
+    local reboot_state=""
     _sys_apt_dpkg_state_clean after || post_audit_rc=$?
     if (( post_audit_rc == 0 )); then
+      REPLY=""
       _sys_apt_report_reboot_requirement
+      reboot_state="$REPLY"
     else
       transaction_rc=1
+      [[ -n "$result_detail" ]] \
+        || result_detail="package state needs manual review"
     fi
     if (( transaction_rc == 0 )); then
-      _sys_success "APT update plan completed."
+      _sys_apt_transaction_outcome \
+        "$upgrade_tail" "$autoremove_tail" "$reboot_state"
+      _sys_report_result "${reply[1]}" "${reply[2]}" \
+        "APT update plan completed${reply[3]}"
+    else
+      _sys_report_result failed "$result_detail"
     fi
     return $transaction_rc
   } always {

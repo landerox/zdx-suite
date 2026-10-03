@@ -613,6 +613,17 @@ status `1`. Nested AI failures name the responsible updater, for example
 `AI assistants — Cursor Agent: authentication required`. If every applicable
 step fails, the command reports an ordinary failure instead.
 
+Each step shows one result line, such as
+`✔ [4/11] fzf — current: 0.74.4 (b1be3a8) (3.0s)`. A step says `updated` only
+when it compared the state before and after, for example two versions or two
+commits; `current` means nothing changed, and `done` means the step succeeded
+without such evidence. The closing `Update Summary` table repeats every
+result with its time and detail, and the failed steps are followed by the
+exact commands that retry them. When APT cannot refresh a repository, for
+example because its signing key is missing or expired, the run names the
+repository and the problem, states that no package was upgraded, and leaves
+installing the publisher's key to you.
+
 Git-owned fzf, Oh My Zsh, custom Zsh plugin repositories, and the AI suite's
 installed-assistant update plan are included unless `--safe-only` is present.
 The Git-owned repository paths display their origin and current commit,
@@ -936,7 +947,10 @@ Every broad cleanup displays its typed target plan. Execution runs only those
 confirmed records, forwards their recorded scopes to the owning helpers, and
 revalidates dynamic cache paths before mutation. A non-interactive mutation
 fails closed without `--yes`; dry-run does not require confirmation. Partial
-failures are reported and return non-zero. Generic cleanup never removes shared
+failures are reported and return non-zero. Each step shows one result line and
+the closing `Cleanup Summary` table lists every step; `current` means there was
+nothing to clean. Ctrl-C stops the cleanup and leaves the remaining targets
+untouched. Generic cleanup never removes shared
 `/tmp` content and never prunes Docker resources; use the Docker suite for
 Docker lifecycle operations.
 

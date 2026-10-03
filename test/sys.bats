@@ -118,16 +118,19 @@ EOF
   [ "${lines[1]}" = "  Show System Info|sys-info|Inspect OS, kernel, memory, tools, packages, and WSL state." ]
 }
 
-@test "sys: _sys_format_duration formats seconds correctly" {
+@test "sys: _sys_duration_label uses the core format with a standalone fallback" {
   run run_zsh "
-    echo \$(_sys_format_duration 0)
-    echo \$(_sys_format_duration 65)
-    echo \$(_sys_format_duration 3605)
+    _sys_duration_label 0.4; print -r -- \$REPLY
+    _sys_duration_label 65; print -r -- \$REPLY
+    _sys_duration_label 3605; print -r -- \$REPLY
+    unfunction _zdx_format_duration
+    _sys_duration_label 65.7; print -r -- \$REPLY
   "
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "0m 00s" ]]
-  [[ "${lines[1]}" == "1m 05s" ]]
-  [[ "${lines[2]}" == "60m 05s" ]]
+  [ "${lines[0]}" = "0.4s" ]
+  [ "${lines[1]}" = "1m 05s" ]
+  [ "${lines[2]}" = "1h 00m" ]
+  [ "${lines[3]}" = "65s" ]
 }
 
 @test "sys: _sys_repeat_char repeats character" {
@@ -284,7 +287,7 @@ EOF
       'echo success-out; echo success-err >&2'
   "
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Running test_cmd"* ]]
+  [[ "$output" == *'$ test_cmd  (output shown on failure)'* ]]
   [[ "$output" != *"success-out"* ]]
   [[ "$output" != *"success-err"* ]]
   [ -z "$(find "$capture_tmp" -mindepth 1 -print -quit)" ]
@@ -322,7 +325,7 @@ EOF
   "
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Running stdin-check"* ]]
+  [[ "$output" == *'$ stdin-check  (output shown on failure)'* ]]
   [[ "$output" != *"must-not-reach-command"* ]]
   [[ "$output" != *"unexpected:"* ]]
   [ -z "$(find "$capture_tmp" -mindepth 1 -print -quit)" ]

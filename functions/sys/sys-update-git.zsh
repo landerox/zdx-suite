@@ -32,9 +32,15 @@ _sys_update_git_read() {
   )
 }
 
+# Usage: _sys_update_git_logged <git arguments...>
 _sys_update_git_logged() {
-  local label="${1:-git}"
-  shift
+  local REPLY display=""
+  if (( ${+functions[_zdx_ui_command_display]} )); then
+    _zdx_ui_command_display git "$@"
+    display="$REPLY"
+  else
+    display="git ${(j: :)@}"
+  fi
   (
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
     unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR
@@ -53,8 +59,28 @@ _sys_update_git_logged() {
     export GIT_CONFIG_COUNT=2
     export GIT_CONFIG_KEY_0=http.lowSpeedLimit GIT_CONFIG_VALUE_0=1024
     export GIT_CONFIG_KEY_1=http.lowSpeedTime GIT_CONFIG_VALUE_1=60
-    _sys_run_logged "$label" git "$@"
+    _sys_run_logged "$display" git "$@"
   )
+}
+
+# REPLY: "updated" or "current" for one checkout; reply=(detail).
+# Usage: _sys_update_git_change <repository> <before-head> <after-head>
+_sys_update_git_change() {
+  local repository="${1:-}" before="${2:-}" after="${3:-}" count_output=""
+  if [[ -n "$after" && "$after" != "$before" ]]; then
+    local detail="${before[1,7]} → ${after[1,7]}"
+    if count_output=$(_sys_update_git_read -C "$repository" \
+      rev-list --count "$before..$after" 2>/dev/null) \
+      && [[ "$count_output" == <-> ]]; then
+      _sys_count_noun "$count_output" commit
+      detail+=" · $REPLY"
+    fi
+    reply=("$detail")
+    REPLY=updated
+  else
+    reply=("${before[1,7]}")
+    REPLY=current
+  fi
 }
 
 # Resolve the active ZDX checkout from the core's source-derived functions
@@ -352,7 +378,7 @@ update-fzf() {
   _sys_header "Updating fzf"
 
   if ! command -v fzf &>/dev/null; then
-    _sys_info "fzf not installed, skipping."
+    _sys_report_result skipped "not installed" "fzf not installed, skipping."
     return 0
   fi
 
@@ -368,13 +394,15 @@ update-fzf() {
     # Managed by Homebrew
     if command -v brew &>/dev/null \
       && _sys_brew list fzf &>/dev/null 2>&1; then
-      _sys_warn "Managed by Homebrew — use update-brew instead."
+      _sys_report_result delegated "Homebrew → sys-menu update-brew" \
+        "Managed by Homebrew — use update-brew instead."
       return 0
     fi
 
     # Managed by APT
     if command -v dpkg &>/dev/null && dpkg -s fzf &>/dev/null; then
-      _sys_warn "Managed by APT — use update-apt instead."
+      _sys_report_result delegated "APT → sys-menu update-apt" \
+        "Managed by APT — use update-apt instead."
       return 0
     fi
   fi
@@ -399,7 +427,8 @@ update-fzf() {
     _sys_label "Origin:" "$(_sys_display_escape "$origin")"
     _sys_label "Current commit:" "$current_commit"
     (( dry_run )) && {
-      _sys_info "Dry run complete; the repository was not updated."
+      _sys_report_result planned "at ${current_commit[1,7]}" \
+        "Dry run complete; the repository was not updated."
       return 0
     }
     if (( ! assume_yes )); then
@@ -420,13 +449,13 @@ update-fzf() {
     _sys_update_git_revalidate \
       "$HOME" "$fzf_dir" "$expected_fingerprint" || return 1
 
-    if _sys_update_git_logged \
-      fzf-pull -C "$fzf_dir" pull --ff-only origin; then
+    if _sys_update_git_logged -C "$fzf_dir" pull --ff-only origin; then
       _sys_update_git_revalidate_stable \
         "$HOME" "$fzf_dir" "$fzf_dir" "$origin" \
         "$expected_repo_device" "$expected_repo_inode" \
         "$expected_git_device" "$expected_git_inode" || return 1
       local post_pull_fingerprint="$REPLY"
+      local updated_head="${reply[3]}"
 
       if [[ -e "$fzf_dir/install" || -L "$fzf_dir/install" ]]; then
         _sys_update_fzf_install_fingerprint "$fzf_dir" || return 1
@@ -450,7 +479,14 @@ update-fzf() {
       ) || version_output=""
       updated_version="${version_output%%[[:space:]]*}"
       [[ -n "$updated_version" ]] || updated_version="unknown"
-      _sys_success "fzf updated to $updated_version."
+      _sys_update_git_change "$fzf_dir" "$current_commit" "$updated_head"
+      if [[ "$REPLY" == updated ]]; then
+        _sys_report_result updated "${reply[1]} ($updated_version)" \
+          "fzf updated: ${reply[1]} ($updated_version)."
+      else
+        _sys_report_result current "$updated_version (${reply[1]})" \
+          "fzf is already up to date ($updated_version, ${reply[1]})."
+      fi
     else
       _sys_warn "fzf git update failed."
       return 1
@@ -459,11 +495,13 @@ update-fzf() {
   fi
 
   (( dry_run )) && {
-    _sys_info "No Git-owned fzf update applies."
+    _sys_report_result skipped "no Git-owned checkout" \
+      "No Git-owned fzf update applies."
     return 0
   }
   _sys_warn "fzf is installed, but its package manager could not be determined."
   _sys_dim "Update it using the same method you originally used to install it."
+  _sys_report_result skipped "installation owner unknown"
 }
 
 update-omz() {
@@ -476,7 +514,7 @@ update-omz() {
 
   if [[ -z "${ZSH:-}" \
     || ( ! -e "$ZSH/.git" && ! -L "$ZSH/.git" ) ]]; then
-    _sys_warn "Oh My Zsh not detected."
+    _sys_report_result skipped "not detected" "Oh My Zsh not detected."
     return 0
   fi
 
@@ -500,7 +538,8 @@ update-omz() {
   _sys_label "Current commit:" "$current_commit"
   _sys_dim "Uses Git fast-forward only; tools/upgrade.sh will not be executed."
   (( dry_run )) && {
-    _sys_info "Dry run complete; Git pull was not executed."
+    _sys_report_result planned "at ${current_commit[1,7]}" \
+      "Dry run complete; Git pull was not executed."
     return 0
   }
   if (( ! assume_yes )); then
@@ -521,13 +560,19 @@ update-omz() {
   _sys_update_git_revalidate \
     "$HOME" "$omz_dir" "$expected_fingerprint" || return 1
 
-  if _sys_update_git_logged \
-    omz-pull -C "$omz_dir" pull --ff-only origin; then
+  if _sys_update_git_logged -C "$omz_dir" pull --ff-only origin; then
     _sys_update_git_revalidate_stable \
       "$HOME" "$omz_dir" "$omz_dir" "$origin" \
       "$expected_repo_device" "$expected_repo_inode" \
       "$expected_git_device" "$expected_git_inode" || return 1
-    _sys_success "Oh My Zsh updated."
+    _sys_update_git_change "$omz_dir" "$current_commit" "${reply[3]}"
+    if [[ "$REPLY" == updated ]]; then
+      _sys_report_result updated "${reply[1]}" \
+        "Oh My Zsh updated: ${reply[1]}."
+    else
+      _sys_report_result current "at ${reply[1]}" \
+        "Oh My Zsh is already up to date (${reply[1]})."
+    fi
   else
     _sys_error "Oh My Zsh update failed."
     return 1
@@ -632,30 +677,36 @@ update-zsh-plugins() {
       _sys_update_counted_noun \
         "$linked_zdx_count" "checkout" "checkouts" || return 2
       local linked_summary_noun="$REPLY"
-      _sys_success \
+      _sys_report_result skipped \
+        "$linked_zdx_count linked ZDX development $linked_summary_noun skipped" \
         "$linked_zdx_count linked ZDX development $linked_summary_noun skipped; no managed repository update was required."
       return 0
     fi
-    _sys_info "No custom Git-owned plugins or themes were found."
+    _sys_report_result skipped "no Git-owned plugins or themes" \
+      "No custom Git-owned plugins or themes were found."
     return 0
   fi
 
   _sys_warn "These repositories contain executable shell code."
   _sys_info "Fast-forward update plan:"
   local -i repository_index
+  local -a plan_rows=()
   for (( repository_index = 1;
     repository_index <= ${#git_repositories[@]};
     repository_index++ )); do
     repository="${git_repositories[repository_index]}"
-    _sys_dim "${repository:t} | $(_sys_display_escape "${repository_origins[repository_index]}") | ${repository_heads[repository_index]}"
+    plan_rows+=("${repository:t}"$'\t'"${repository_origins[repository_index]}"$'\t'"${repository_heads[repository_index][1,7]}")
   done
+  _sys_table $'Repository\tOrigin\tCommit' "${plan_rows[@]}"
   if (( validation_failures > 0 )); then
     _sys_update_counted_noun \
       "$validation_failures" "repository" "repositories" || return 2
     _sys_warn "$validation_failures $REPLY failed safety validation."
   fi
   (( dry_run )) && {
-    _sys_info "Dry run complete; no repository was updated."
+    _sys_count_noun "${#git_repositories[@]}" repository repositories
+    _sys_report_result planned "$REPLY" \
+      "Dry run complete; no repository was updated."
     (( validation_failures == 0 ))
     return $?
   }
@@ -670,8 +721,8 @@ update-zsh-plugins() {
     }
   fi
 
-  local -i updated=0 failed=$validation_failures
-  local -a ready_indices=()
+  local -i updated=0 current=0 failed=$validation_failures
+  local -a ready_indices=() updated_names=()
   # Revalidate every repository immediately after the shared authorization.
   for (( repository_index = 1;
     repository_index <= ${#git_repositories[@]};
@@ -689,7 +740,6 @@ update-zsh-plugins() {
 
   for repository_index in "${ready_indices[@]}"; do
     repository="${git_repositories[repository_index]}"
-    _sys_info "Updating ${repository:t}..."
     # This second exact check is adjacent to the mutating Git command.
     if ! _sys_update_git_revalidate \
       "$HOME" "$repository" \
@@ -698,7 +748,7 @@ update-zsh-plugins() {
       _sys_warn "${repository:t} changed before execution and was skipped."
       continue
     fi
-    if ! _sys_update_git_logged "zsh-${repository:t}" \
+    if ! _sys_update_git_logged \
       -C "$repository" pull --ff-only --quiet origin; then
       (( failed++ ))
       _sys_warn "${repository:t} was left unchanged or requires manual review."
@@ -715,41 +765,36 @@ update-zsh-plugins() {
       _sys_warn "${repository:t} identity changed during update."
       continue
     fi
-    (( updated++ ))
-  done
-  if (( failed > 0 )); then
-    _sys_update_counted_noun "$updated" "repository" "repositories" \
-      || return 2
-    local updated_noun="$REPLY"
-    if (( linked_zdx_count > 0 )); then
-      _sys_update_counted_noun \
-        "$linked_zdx_count" "checkout" "checkouts" || return 2
-      local linked_failed_noun="$REPLY"
-      _sys_error \
-        "$updated $updated_noun updated; $failed failed; $linked_zdx_count linked ZDX development $linked_failed_noun skipped."
+    _sys_update_git_change \
+      "$repository" "${repository_heads[repository_index]}" "${reply[3]}"
+    if [[ "$REPLY" == updated ]]; then
+      (( updated++ ))
+      updated_names+=("${repository:t}")
     else
-      _sys_error "$updated $updated_noun updated; $failed failed."
+      (( current++ ))
     fi
+  done
+  local -a summary_parts=()
+  if (( updated > 0 )); then
+    local updated_preview="${(j:, :)updated_names[1,3]}"
+    (( ${#updated_names} > 3 )) && updated_preview+=", …"
+    summary_parts+=("$updated updated ($updated_preview)")
+  fi
+  (( current > 0 )) && summary_parts+=("$current current")
+  (( failed > 0 )) && summary_parts+=("$failed failed")
+  if (( linked_zdx_count > 0 )); then
+    _sys_count_noun "$linked_zdx_count" "linked ZDX development checkout"
+    summary_parts+=("$REPLY skipped")
+  fi
+  local summary="${(j: · :)summary_parts}"
+  if (( failed > 0 )); then
+    _sys_report_result failed "$summary" "Zsh plugins and themes: $summary."
     return 1
   fi
-  _sys_update_counted_noun \
-    "$updated" "repository" "repositories" || return 2
-  local updated_success_noun="$REPLY"
-  local updated_success_verb="were"
-  local updated_success_subject="All $updated executable-code $updated_success_noun"
-  if (( updated == 1 )); then
-    updated_success_verb="was"
-    updated_success_subject="$updated executable-code $updated_success_noun"
-  fi
-  if (( linked_zdx_count > 0 )); then
-    _sys_update_counted_noun \
-      "$linked_zdx_count" "checkout" "checkouts" || return 2
-    local linked_success_noun="$REPLY"
-    _sys_success \
-      "$updated_success_subject $updated_success_verb updated; $linked_zdx_count linked ZDX development $linked_success_noun skipped."
+  if (( updated > 0 )); then
+    _sys_report_result updated "$summary" "Zsh plugins and themes: $summary."
   else
-    _sys_success \
-      "$updated_success_subject $updated_success_verb updated."
+    _sys_report_result current "$summary" "Zsh plugins and themes: $summary."
   fi
 }
 

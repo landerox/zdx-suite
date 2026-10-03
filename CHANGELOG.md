@@ -31,12 +31,34 @@ behavior, verification, and remaining limitations.
   delegated to another suite and steps inside an aggregate no longer print
   their own timing lines; opt-in telemetry still records each of them.
 - Timing lines use the shared duration format, such as `24s` or `1m 18s`.
+- `update-system` shows a numbered plan table with at most two disclosures,
+  a `── [n/N] Step ──` banner and one result line per step, an
+  `Update Summary` table with each result, time, and detail, and the commands
+  that retry failed steps. APT, phased-update, and lock policy details move to
+  `--verbose` and `--dry-run`, and `--verbose` also streams captured output.
+- Update steps report `updated` only with evidence: APT transaction counts,
+  outdated Homebrew packages, pending Snap refreshes, Git HEAD before and
+  after, compared versions for uv, Starship, AWS CLI through Homebrew, Rust,
+  and Node.js, the pipx application inventory, and the AI owner's result
+  records. Otherwise they report `current` or `done`.
+- `clean-system-quick` and `clean-system-deep` use the same plan table, step
+  results, and `Cleanup Summary`, and Ctrl-C stops the remaining steps.
 
 ### Fixed
 
 - Timing lines keep a decimal point under decimal-comma locales.
 - The Developer menu reports the fzf status when it cannot open, as System
   does.
+- A failed APT index refresh names each repository and its problem, such as
+  a missing or expired signing key, says that no package was upgraded, and
+  counts the candidates left pending, instead of only reporting
+  `APT index update failed`.
+- Captured update commands are announced as readable commands such as
+  `$ git -C ~/.fzf pull --ff-only origin` instead of internal labels such as
+  `zsh-zsh-autosuggestions`, and the output of `nvm alias default` and
+  `nvm use` no longer leaks into a successful update.
+- Zsh plugin updates no longer claim that every repository was updated when
+  nothing changed.
 - AI updates compare the release version instead of the whole version line, so
   a vendor's relative release age, such as Amp's `(released …, 4h ago)`, no
   longer reports an update. A launcher symlink that a vendor re-creates for the

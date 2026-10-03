@@ -29,13 +29,24 @@ fi
 case " $* " in
   *" update "*)
     printf 'update\n' >> "$APT_RECOVERY_LOG"
+    if [[ -n "${APT_INDEX_FAILURE_FILE:-}" ]]; then
+      cat "$APT_INDEX_FAILURE_FILE"
+      exit 100
+    fi
     if [[ "$APT_TRANSIENT_INDEX_ERROR" == 1 ]]; then
       printf 'W: Some index files failed to download. They have been ignored, or old ones used instead.\n' >&2
       [[ " $* " == *" --error-on=any "* ]] && exit 100
     fi
     ;;
-  *" full-upgrade "*) printf 'full-upgrade\n' >> "$APT_RECOVERY_LOG" ;;
-  *" autoremove "*) printf 'autoremove\n' >> "$APT_RECOVERY_LOG" ;;
+  *" full-upgrade "*)
+    printf 'full-upgrade\n' >> "$APT_RECOVERY_LOG"
+    [[ -z "${APT_UPGRADE_SUMMARY:-}" ]] || printf '%s\n' "$APT_UPGRADE_SUMMARY"
+    ;;
+  *" autoremove "*)
+    printf 'autoremove\n' >> "$APT_RECOVERY_LOG"
+    [[ -z "${APT_AUTOREMOVE_SUMMARY:-}" ]] \
+      || printf '%s\n' "$APT_AUTOREMOVE_SUMMARY"
+    ;;
   *) exit 97 ;;
 esac
 exit 0
@@ -149,4 +160,49 @@ run_apt_recovery_zsh() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"trusted root-owned env program"* ]]
   [ ! -s "$APT_RECOVERY_LOG" ]
+}
+
+@test "sys APT recovery: a failed index refresh names each repository problem" {
+  export APT_INDEX_FAILURE_FILE="$TEST_TEMP_DIR/apt-update.out"
+  cat > "$APT_INDEX_FAILURE_FILE" <<'EOF'
+Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease
+Get:2 https://cli.github.com/packages stable InRelease [3917 B]
+Err:2 https://cli.github.com/packages stable InRelease
+  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5612B36462313325
+Err:6 https://user:secret@private.example/apt focal InRelease
+  Could not resolve 'private.example'
+Reading package lists... Done
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://cli.github.com/packages stable InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5612B36462313325
+E: Failed to fetch https://cli.github.com/packages/dists/stable/InRelease  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5612B36462313325
+E: Some index files failed to download. They have been ignored, or old ones used instead.
+EOF
+  run run_apt_recovery_zsh
+
+  [ "$status" -eq 1 ]
+  # APT's own output stays visible; the diagnosis reads a bounded copy.
+  [[ "$output" == *"Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease"* ]]
+  [[ "$output" == *"APT index update failed."* ]]
+  [[ "$output" == *"2 repositories could not be refreshed:"* ]]
+  [[ "$output" == *"  https://cli.github.com/packages stable"*"signing key not installed (NO_PUBKEY 5612B36462313325)"* ]]
+  # A displayed source never carries URI credentials.
+  [[ "$output" == *"  https://private.example/apt focal"*"host lookup failed"* ]]
+  [[ "$output" == *"Install the publisher's current key from its official instructions"* ]]
+  [[ "$output" == *"No package was upgraded; 1 candidate remains pending."* ]]
+  [[ "$output" == *"After fixing the cause, run: sys-menu update-apt"* ]]
+  [ "$(cat "$APT_RECOVERY_LOG")" = $'simulate\naudit:before\nupdate\naudit:after\nreboot-report' ]
+}
+
+@test "sys APT recovery: transaction counts decide updated or current" {
+  export APT_UPGRADE_SUMMARY='3 upgraded, 1 newly installed, 0 to remove and 2 not upgraded.'
+  export APT_AUTOREMOVE_SUMMARY='0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.'
+  run run_apt_recovery_zsh
+  [ "$status" -eq 0 ]
+  [[ "$output" == \
+    *"APT update plan completed: 3 upgraded, 1 newly installed, 2 removed, 2 held back."* ]]
+
+  export APT_UPGRADE_SUMMARY='0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'
+  export APT_AUTOREMOVE_SUMMARY="$APT_UPGRADE_SUMMARY"
+  run run_apt_recovery_zsh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"APT update plan completed; no package changes were needed."* ]]
 }

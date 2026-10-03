@@ -18,7 +18,7 @@ update-brew() {
   _sys_header "Updating Homebrew"
 
   if ! command -v brew &>/dev/null; then
-    _sys_info "Homebrew not installed, skipping."
+    _sys_report_result skipped "not installed" "Homebrew not installed, skipping."
     return 0
   fi
 
@@ -46,9 +46,9 @@ update-brew() {
   fi
 
   _sys_info "Fetching latest formulae..."
-  _sys_dim \
+  _sys_verbose_dim \
     "The metadata refresh is bounded to 120s with Homebrew curl retries disabled."
-  _sys_warn \
+  _sys_verbose_dim \
     "Homebrew exposes no supported zero-wait control for its internal download locks; ZDX will not kill an active package mutation."
   # The refresh is a download, not a package mutation, so it may be bounded.
   # The absolute executable prevents a caller-defined shell function from
@@ -67,6 +67,19 @@ update-brew() {
   # Mutating phases run to their reported result. HOMEBREW_NO_AUTO_UPDATE
   # prevents each phase from starting a second, unbounded metadata fetch.
   local -x HOMEBREW_NO_AUTO_UPDATE=1
+  # The list is evidence for the result only; a failed probe never blocks the
+  # upgrade and leaves the outcome without a change count.
+  local outdated_output=""
+  local -a outdated_names=()
+  local -i outdated_known=0
+  if outdated_output=$(
+    _sys_run_bounded_probe 60 262144 "$brew_program" outdated --quiet \
+      </dev/null 2>/dev/null
+  ); then
+    outdated_known=1
+    outdated_names=("${(@f)outdated_output}")
+    outdated_names=("${(@)outdated_names:#}")
+  fi
   _sys_info "Upgrading packages..."
   if ! "$brew_program" upgrade --no-ask </dev/null >&2; then
     _sys_error "Homebrew upgrade failed."
@@ -85,7 +98,21 @@ update-brew() {
     return 1
   fi
 
-  _sys_success "Homebrew updated."
+  local outdated_count_label=""
+  if (( ! outdated_known )); then
+    _sys_report_result done "upgrade, autoremove, and cleanup completed" \
+      "Homebrew update completed."
+  elif (( ${#outdated_names} == 0 )); then
+    _sys_report_result current "no outdated formulae or casks" \
+      "Homebrew is up to date; no outdated formulae or casks were found."
+  else
+    _sys_count_noun "${#outdated_names}" package
+    outdated_count_label="$REPLY"
+    local outdated_preview="${(j:, :)outdated_names[1,5]}"
+    (( ${#outdated_names} > 5 )) && outdated_preview+=", …"
+    _sys_report_result updated "$outdated_count_label upgraded ($outdated_preview)" \
+      "Homebrew updated: $outdated_count_label upgraded ($outdated_preview)."
+  fi
 }
 
 update-snap() {
@@ -97,7 +124,7 @@ update-snap() {
   _sys_header "Snap Update Scope"
 
   if ! command -v snap &>/dev/null; then
-    _sys_info "Snap not installed, skipping."
+    _sys_report_result skipped "not installed" "Snap not installed, skipping."
     return 0
   fi
 
@@ -121,18 +148,24 @@ update-snap() {
   fi
   if [[ -z "${refresh_plan//[[:space:]]/}" \
     || "$refresh_plan" == "All snaps up to date." ]]; then
-    _sys_info "No Snap refreshes are currently pending."
+    _sys_report_result current "no refreshes pending" \
+      "No Snap refreshes are currently pending."
     return 0
   fi
-  _sys_warn "The records below are an advisory snapshot."
-  _sys_dim "snap refresh resolves the final transaction when it executes."
-  _sys_info "Currently pending Snap refreshes:"
+  _sys_info "Currently pending Snap refreshes (advisory; snap resolves the final transaction):"
   local plan_line
+  local -a pending_snaps=()
   for plan_line in "${(@f)refresh_plan}"; do
     _sys_dim "$(_sys_display_escape "$plan_line")"
+    [[ -n "$plan_line" && "$plan_line" != Name[[:space:]]* ]] \
+      && pending_snaps+=("${plan_line%%[[:space:]]*}")
   done
+  local pending_label=""
+  _sys_count_noun "${#pending_snaps}" snap
+  pending_label="$REPLY"
   (( dry_run )) && {
-    _sys_info "Dry run complete; Snap packages were not changed."
+    _sys_report_result planned "$pending_label pending" \
+      "Dry run complete; Snap packages were not changed."
     return 0
   }
   if (( ! assume_yes )); then
@@ -154,7 +187,11 @@ update-snap() {
     && privilege_label="${(j: :)privilege_prefix} "
   _sys_info "Privileged operation: ${privilege_label}snap refresh"
   if "${privilege_prefix[@]}" snap refresh </dev/null >&2; then
-    _sys_success "Snap packages updated."
+    local pending_preview="${(j:, :)pending_snaps[1,5]}"
+    (( ${#pending_snaps} > 5 )) && pending_preview+=", …"
+    _sys_report_result updated \
+      "$pending_label refreshed${pending_preview:+ ($pending_preview)}" \
+      "Snap packages refreshed: $pending_label${pending_preview:+ ($pending_preview)}."
   else
     _sys_error "Snap refresh failed."
     return 1
@@ -621,7 +658,8 @@ _sys_update_platform_packages() {
   (( render_platform_plan )) \
     && _sys_update_render_platform_plan "$plan_output"
   if (( dry_run )); then
-    _sys_info "Dry run complete; no package installation command was executed."
+    _sys_report_result planned "$package_backend candidates listed" \
+      "Dry run complete; no package installation command was executed."
     return 0
   fi
 
@@ -692,7 +730,8 @@ _sys_update_platform_packages() {
     _sys_error "The $package_backend package update failed."
     return "$update_rc"
   }
-  _sys_success "Native $package_backend packages updated."
+  _sys_report_result done "$package_backend upgrade completed" \
+    "Native $package_backend package update completed."
 }
 
 # Aggregate applicability predicates. update-system calls them only through
