@@ -69,9 +69,12 @@ if [[ "$1" == "--version" ]]; then
 fi
 if [[ "$1" == "update" ]]; then
   # Re-create both links for the same release, as the vendor updater does.
-  rm -f "$root/current" "$TEST_MOCK_BIN/codex"
-  ln -s "$root/releases/0.160.0" "$root/current"
-  ln -s "$root/current/bin/codex" "$TEST_MOCK_BIN/codex"
+  # Renaming each new link over the old one guarantees a new inode, which a
+  # remove-then-create sequence may reuse.
+  ln -s "$root/releases/0.160.0" "$root/current.new"
+  mv -fT "$root/current.new" "$root/current"
+  ln -s "$root/current/bin/codex" "$TEST_MOCK_BIN/codex.new"
+  mv -fT "$TEST_MOCK_BIN/codex.new" "$TEST_MOCK_BIN/codex"
   exit 0
 fi
 exit 97
