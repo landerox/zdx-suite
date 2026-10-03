@@ -695,9 +695,9 @@ update-zsh-plugins() {
     repository_index <= ${#git_repositories[@]};
     repository_index++ )); do
     repository="${git_repositories[repository_index]}"
-    plan_rows+=("${repository:t}"$'\t'"${repository_origins[repository_index]}"$'\t'"${repository_heads[repository_index][1,7]}")
+    plan_rows+=("${repository:t}"$'\t'"${repository_heads[repository_index][1,7]}"$'\t'"${repository_origins[repository_index]}")
   done
-  _sys_table $'Repository\tOrigin\tCommit' "${plan_rows[@]}"
+  _sys_table $'Repository\tCommit\tOrigin' "${plan_rows[@]}"
   if (( validation_failures > 0 )); then
     _sys_update_counted_noun \
       "$validation_failures" "repository" "repositories" || return 2

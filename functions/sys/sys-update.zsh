@@ -322,9 +322,11 @@ _sys_update_render_policy() {
   _sys_dim "Package candidates are advisory; each package manager resolves its final transaction at execution."
   if (( apt_planned )); then
     if (( phased )); then
-      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0; phased updates are explicitly included."
+      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0."
+      _sys_dim "Phased updates are explicitly included."
     else
-      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0; phased-update eligibility remains in effect."
+      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0."
+      _sys_dim "Phased-update eligibility remains in effect."
     fi
     _sys_dim "No other package process is signaled, no lock file is deleted, and SIGKILL is never used."
   fi
@@ -562,7 +564,7 @@ _sys_update_run_previews() {
   local assume_yes="${1:-0}" phased="${2:-0}" verbose="${3:-0}"
   shift 3 2>/dev/null || return 2
   local REPLY entry label command_name outcome detail seconds
-  local -a reply=() previews=() preview_args=()
+  local -a reply=() previews=() preview_args=() summary_records=()
   local -i preview_failures=0 index=0 preview_rc=0
   for entry in "$@"; do
     case "${entry#*;}" in
@@ -576,6 +578,7 @@ _sys_update_run_previews() {
         ;;
     esac
   done
+  (( ${#previews[@]} > 0 )) && _sys_header "Detailed Previews"
   for entry in "${previews[@]}"; do
     (( ++index ))
     label="${entry%%;*}"
@@ -590,7 +593,7 @@ _sys_update_run_previews() {
         (( assume_yes )) && preview_args+=(--yes)
         ;;
     esac
-    _sys_step_banner "$index" "${#previews[@]}" "Detailed preview: $label"
+    _sys_step_banner "$index" "${#previews[@]}" "$label"
     preview_rc=0
     _sys_step_exec "$command_name" "${preview_args[@]}" </dev/null \
       || preview_rc=$?
@@ -600,8 +603,11 @@ _sys_update_run_previews() {
     [[ "$outcome" == done ]] && outcome=planned
     _sys_step_result "$index" "${#previews[@]}" "$label" "$outcome" \
       "$detail" "$seconds"
+    summary_records+=("$label"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
     (( preview_rc == 0 )) || (( ++preview_failures ))
   done
+  (( ${#summary_records[@]} > 0 )) \
+    && _sys_print_step_summary "Preview Summary" "${summary_records[@]}"
   if (( preview_failures > 0 )); then
     _sys_count_noun "$preview_failures" "detailed preview"
     _sys_error "$REPLY failed."

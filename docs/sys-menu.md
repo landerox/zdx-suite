@@ -434,7 +434,9 @@ sub-updater cause behind the aggregate label.
   and the lock path appear only with `--verbose` or `--dry-run`.
 - Each entry prints a `── [n/N] Label ──` banner and one result line. A
   child's own heading is omitted inside the step; `--verbose` demotes it to a
-  `▸` sub-heading and streams privately captured tool output live.
+  `▸` sub-heading and streams privately captured tool output live. A dry run
+  shows each detailed preview the same way under `Detailed Previews`, followed
+  by a `Preview Summary` table.
 - Results follow the change-evidence rule. APT parses its transaction counts;
   Homebrew lists outdated packages before upgrading; Snap counts its pending
   refreshes; Git-owned checkouts compare HEAD before and after the pull; uv,

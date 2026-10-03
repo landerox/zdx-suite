@@ -36,6 +36,7 @@ behavior, verification, and remaining limitations.
   `Update Summary` table with each result, time, and detail, and the commands
   that retry failed steps. APT, phased-update, and lock policy details move to
   `--verbose` and `--dry-run`, and `--verbose` also streams captured output.
+  A dry run shows its detailed previews as steps with a `Preview Summary`.
 - Update steps report `updated` only with evidence: APT transaction counts,
   outdated Homebrew packages, pending Snap refreshes, Git HEAD before and
   after, compared versions for uv, Starship, AWS CLI through Homebrew, Rust,
