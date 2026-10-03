@@ -9,8 +9,10 @@ quickest way to land a change is to follow these conventions.
   suite architecture, and validation. Don't skip it.
 - For deeper context check [`docs/`](../docs/). Start with
   [`development.md`](../docs/development.md) (suite engineering contract),
-  [`suites.md`](../docs/suites.md) (ownership map), and
-  [`menu-spec.md`](../docs/menu-spec.md) (canonical menu contract).
+  [`suites.md`](../docs/suites.md) (ownership map),
+  [`menu-spec.md`](../docs/menu-spec.md) (canonical menu contract), and
+  [`output-spec.md`](../docs/output-spec.md) (canonical command-output
+  contract).
 
 ## Quick checklist
 

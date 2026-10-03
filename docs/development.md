@@ -75,8 +75,9 @@ independent implementations of the same lifecycle.
 - configuration loading;
 - lazy entrypoint registration;
 - the shared visual theme;
-- shared command-output services: headings, step banners and results, the
-  outcome vocabulary, summary tables, duration and counted-noun formatting,
+- shared command-output services: headings, key-value lines, step banners
+  and results, the outcome vocabulary, summary tables, duration and
+  counted-noun formatting,
   step result slots, and captured child-tool output, specified by
   [`output-spec.md`](output-spec.md);
 - timing and opt-in telemetry;
