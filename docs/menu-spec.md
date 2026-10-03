@@ -2,8 +2,9 @@
 
 This is the canonical contract for interactive ZDX menus. General command,
 safety, stream, and architecture rules are defined in
-[`development.md`](development.md). Existing menus remain legacy until they
-meet both documents.
+[`development.md`](development.md). What a command prints after a menu
+dispatches it is defined in [`output-spec.md`](output-spec.md). Existing menus
+remain legacy until they meet these documents.
 
 The comparison, rejected alternatives, and suite-wide presentation decision
 are recorded in [`menu-design.md`](menu-design.md).
@@ -224,10 +225,13 @@ Every `<suite>-menu` provides both interactive and direct modes:
 }
 ```
 
-The timing wrapper is applied exactly once. It MUST preserve the dispatched
-command's exit status. If the core timing service is unavailable during a
-standalone source test, the suite invokes the dispatcher directly or uses a
-documented core fallback; it MUST NOT define a competing global `_timed`.
+The timing wrapper is applied exactly once per dispatch. It MUST preserve the
+dispatched command's exit status. A nested `_timed`, reached through
+delegation to another suite or inside an aggregate step, records telemetry
+but prints no footer; see [`output-spec.md`](output-spec.md). If the core
+timing service is unavailable during a standalone source test, the suite
+invokes the dispatcher directly or uses a documented core fallback; it MUST
+NOT define a competing global `_timed`.
 
 Help is concise and includes syntax, flags, direct-command behavior, destructive
 flags, and important prerequisites. Under the repository stream policy, usage

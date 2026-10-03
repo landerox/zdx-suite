@@ -15,8 +15,9 @@ When repository documents overlap, use this order:
 1. `AGENTS.md` for repository-wide operational mandates.
 2. This document for suite architecture and command behavior.
 3. `menu-spec.md` for interactive menu behavior.
-4. `headers.md`, `testing.md`, and `plugins.md` for their named domains.
-5. `menus.md` for migration context only; it is not normative.
+4. `output-spec.md` for non-menu command output.
+5. `headers.md`, `testing.md`, and `plugins.md` for their named domains.
+6. `menus.md` for migration context only; it is not normative.
 
 Existing code can predate this contract. A legacy implementation is evidence
 to study, not permission to copy a non-conforming pattern.
@@ -74,6 +75,10 @@ independent implementations of the same lifecycle.
 - configuration loading;
 - lazy entrypoint registration;
 - the shared visual theme;
+- shared command-output services: headings, step banners and results, the
+  outcome vocabulary, summary tables, duration and counted-noun formatting,
+  step result slots, and captured child-tool output, specified by
+  [`output-spec.md`](output-spec.md);
 - timing and opt-in telemetry;
 - plugin discovery;
 - final user overrides.
@@ -231,6 +236,11 @@ Everything intended only for a person goes to `stderr`:
 Never let UI output contaminate command substitution. A function that produces
 data MUST document its record format and MUST produce no extra stdout text.
 Callers MUST check its exit status before consuming the data.
+
+Human-oriented command output (plans, step progress, results, summaries, and
+timing) follows [`output-spec.md`](output-spec.md). Child-process output is UI:
+it is captured or streamed to stderr and MUST NOT reach stdout unless the
+command documents it as data.
 
 Use `print -r --` or `printf` instead of portable-shell-oriented `echo -e`.
 Logging helpers MUST accept arbitrary text as data, not as format strings.
@@ -417,7 +427,14 @@ contains both failed and non-failed terminal results may call
 `_zdx_timed_mark_partial`; this changes only the human timing phrase to
 `completed with partial failures`. It does not convert the non-zero status or
 telemetry record to success, and the marker fails closed outside the dynamic
-scope of `_timed`.
+scope of `_timed`. The marker applies to the innermost active timer.
+
+Only the outermost `_timed` prints its human footer, and only when no
+aggregate step is active: aggregate steps already report their own durations
+in their result lines. A nested timer, such as a command delegated to another
+suite or a step wrapped for telemetry, prints nothing but still writes its
+opt-in telemetry record with the unchanged schema. Displayed durations use
+`_zdx_format_duration`.
 
 Performance work must not weaken validation, confirmations, or integrity
 checks.

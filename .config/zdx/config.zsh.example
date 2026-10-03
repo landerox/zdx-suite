@@ -177,6 +177,13 @@
 # display settings and the loaded source path, then open a new terminal after
 # updating that installation so source guards cannot retain old functions.
 
+# Long-running commands capture chatty tool output privately and replay a
+# bounded, redacted tail only when a step fails. Set ZDX_VERBOSE=1 to stream
+# that output live instead (unredacted) and show nested headings. Package-
+# manager transactions are always shown, and AI vendor updater output is never
+# shown. Aggregate --verbose flags enable this for one run. Accepted: 0 or 1.
+# ZDX_VERBOSE=0
+
 # Lazy suite loading is the default. Eager loading is useful only for
 # compatibility or diagnostics and increases shell startup work.
 # ZDX_EAGER_LOAD=1
