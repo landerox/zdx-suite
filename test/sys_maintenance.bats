@@ -3610,7 +3610,9 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
     "ai-update --skip-homebrew-managed --result-tsv --dry-run --yes" ]
-  [[ "$output" == *"Detailed preview: AI assistants"* ]]
+  [[ "$output" == *"════ Detailed Previews ════"* ]]
+  [[ "$output" == *"[1/1] AI assistants — planned"* ]]
+  [[ "$output" == *"════ Preview Summary ════"* ]]
   assert_no_privilege_network_or_signal
 }
 
