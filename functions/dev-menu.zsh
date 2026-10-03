@@ -43,8 +43,9 @@ if (( _dev_menu_load_rc != 0 )); then
 fi
 
 # --- Load feature modules ---------------------------------------------------
-# Order is explicit: state and report primitives first, then the modules that
-# consume them, and finally the deprecated compatibility wrappers.
+# Order is explicit: state and report primitives first, then the update
+# transaction and specifier helpers before the update workflows that consume
+# them, and finally the deprecated compatibility wrappers.
 
 typeset _dev_menu_module
 for _dev_menu_module in \
@@ -52,6 +53,11 @@ for _dev_menu_module in \
   dev-report.zsh \
   dev-pypi.zsh \
   dev-export.zsh \
+  dev-update-transaction.zsh \
+  dev-update-specifiers.zsh \
+  dev-update-deps.zsh \
+  dev-update-precommit.zsh \
+  dev-update-python.zsh \
   dev-update.zsh \
   dev-checks.zsh \
   dev-security.zsh \

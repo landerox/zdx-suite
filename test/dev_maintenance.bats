@@ -215,10 +215,17 @@ teardown() {
 # --- Remote code policy -----------------------------------------------------
 
 @test "dev remote: uv update never pipes an installer to a shell" {
-  ! grep -qE 'curl[^|]*\|[[:space:]]*(sh|bash|zsh)' \
-    "$TEST_SUITE_ROOT/functions/dev/dev-update.zsh"
-  ! grep -qE 'astral\.sh/uv/install\.sh' \
-    "$TEST_SUITE_ROOT/functions/dev/dev-update.zsh"
+  local -a sources=(
+    "$TEST_SUITE_ROOT"/functions/dev-*.zsh
+    "$TEST_SUITE_ROOT"/functions/dev/*.zsh
+  )
+  [ "${#sources[@]}" -ge 17 ]
+
+  # A non-final `! cmd` never fails a BATS test, so assert each status.
+  run grep -lE 'curl[^|]*\|[[:space:]]*(sh|bash|zsh)' "${sources[@]}"
+  [ "$status" -eq 1 ]
+  run grep -lE 'astral\.sh/uv/install\.sh' "${sources[@]}"
+  [ "$status" -eq 1 ]
 }
 
 @test "dev remote: unavailable sys owner never falls back to a uv installer" {
