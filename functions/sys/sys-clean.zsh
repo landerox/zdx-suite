@@ -240,18 +240,22 @@ _sys_clean_step_snap_revisions() {
     || return 1
 
   if [[ -z "$disabled_snaps" ]]; then
-    _sys_info "No disabled snap revisions to remove."
+    _sys_report_result current "no disabled revisions" \
+      "No disabled snap revisions to remove."
     return 0
   fi
 
   _sys_dim "May take several minutes if many snap revisions are pending removal."
-  _sys_remove_disabled_snap_revisions "$disabled_snaps"
+  _sys_remove_disabled_snap_revisions "$disabled_snaps" || return $?
+  local REPLY
+  _sys_count_noun "${#${(f)disabled_snaps}}" revision
+  _sys_report_result done "$REPLY removed"
 }
 
 _sys_clean_step_npm_cache() {
   local REPLY
   if ! command -v npm &>/dev/null; then
-    _sys_info "npm not installed, skipping."
+    _sys_report_result skipped "not installed" "npm not installed, skipping."
     return 0
   fi
 
@@ -268,14 +272,14 @@ _sys_clean_step_npm_cache() {
     _sys_error "The confirmed npm cache directory is no longer available."
     return 1
   }
-  _sys_run_logged npm-cache env npm_config_cache="$cache_dir" \
-    npm cache clean --force
+  _sys_run_logged "npm cache clean --force" \
+    env npm_config_cache="$cache_dir" npm cache clean --force
 }
 
 _sys_clean_step_uv_cache() {
   local REPLY
   if ! command -v uv &>/dev/null; then
-    _sys_info "uv not installed, skipping."
+    _sys_report_result skipped "not installed" "uv not installed, skipping."
     return 0
   fi
 
@@ -292,13 +296,13 @@ _sys_clean_step_uv_cache() {
     _sys_error "The confirmed uv cache directory is no longer available."
     return 1
   }
-  _sys_run_logged uv-cache env UV_CACHE_DIR="$cache_dir" uv cache clean
+  _sys_run_logged "uv cache clean" env UV_CACHE_DIR="$cache_dir" uv cache clean
 }
 
 _sys_clean_step_pip_cache() {
   local REPLY
   if ! command -v pip &>/dev/null; then
-    _sys_info "pip not installed, skipping."
+    _sys_report_result skipped "not installed" "pip not installed, skipping."
     return 0
   fi
 
@@ -315,13 +319,14 @@ _sys_clean_step_pip_cache() {
     _sys_error "The confirmed pip cache directory is no longer available."
     return 1
   }
-  _sys_run_logged pip-cache env PIP_CACHE_DIR="$cache_dir" pip cache purge
+  _sys_run_logged "pip cache purge" \
+    env PIP_CACHE_DIR="$cache_dir" pip cache purge
 }
 
 _sys_clean_step_rust_downloads() {
   local REPLY
   if ! command -v rustup &>/dev/null; then
-    _sys_info "rustup not installed, skipping."
+    _sys_report_result skipped "not installed" "rustup not installed, skipping."
     return 0
   fi
 
@@ -332,16 +337,18 @@ _sys_clean_step_rust_downloads() {
       _sys_error "Some rustup download cache entries could not be removed."
       return 1
     }
-    _sys_dim "Cleared rustup download cache"
+    _sys_report_result done "download cache cleared" \
+      "Cleared rustup download cache."
   else
-    _sys_info "No rustup download cache found."
+    _sys_report_result current "nothing to clean" \
+      "No rustup download cache found."
   fi
 }
 
 _sys_clean_step_cargo_cache() {
   local REPLY
   if ! command -v cargo &>/dev/null; then
-    _sys_info "cargo not installed, skipping."
+    _sys_report_result skipped "not installed" "cargo not installed, skipping."
     return 0
   fi
 
@@ -356,16 +363,18 @@ _sys_clean_step_cargo_cache() {
       _sys_error "Some cargo registry cache entries could not be removed."
       return 1
     }
-    _sys_dim "Freed ${cache_size:-some} from cargo registry cache"
+    _sys_report_result done "freed ${cache_size:-some space}" \
+      "Freed ${cache_size:-some space} from cargo registry cache."
   else
-    _sys_info "No cargo registry cache found."
+    _sys_report_result current "nothing to clean" \
+      "No cargo registry cache found."
   fi
 }
 
 _sys_clean_step_go_modcache() {
   local REPLY
   if ! command -v go &>/dev/null; then
-    _sys_info "Go not installed, skipping."
+    _sys_report_result skipped "not installed" "Go not installed, skipping."
     return 0
   fi
 
@@ -389,7 +398,8 @@ _sys_clean_step_go_modcache() {
 _sys_clean_step_journal() {
   local -a reply=()
   if ! _sys_has_systemd; then
-    _sys_dim "Systemd not active — skipping journal vacuum"
+    _sys_report_result skipped "systemd not active" \
+      "Systemd not active — skipping journal vacuum."
     return 0
   fi
 
@@ -407,7 +417,10 @@ _sys_clean_step_journal() {
 _sys_clean_step_thumbnails() {
   local REPLY
   local thumbnails_dir="${1:-}"
-  [[ -d "$thumbnails_dir" ]] || return 0
+  [[ -d "$thumbnails_dir" ]] || {
+    _sys_report_result current "nothing to clean"
+    return 0
+  }
   _sys_clean_validate_user_path "$thumbnails_dir" || return 1
   command rm -rf -- "$REPLY"/*(ND) 2>/dev/null
 }
@@ -415,7 +428,10 @@ _sys_clean_step_thumbnails() {
 _sys_clean_step_temp_files() {
   local REPLY
   local cache_tmp="${1:-}"
-  [[ -d "$cache_tmp" ]] || return 0
+  [[ -d "$cache_tmp" ]] || {
+    _sys_report_result current "nothing to clean"
+    return 0
+  }
   _sys_clean_validate_user_path "$cache_tmp" || return 1
   command rm -rf -- "$REPLY"/*(ND) 2>/dev/null
 }
@@ -492,11 +508,9 @@ _sys_clean_run() {
   local plan_output="${2:-}"
   local REPLY
   local -a reply=()
-  local errors=0
-  local step=0
-  local -a failed_labels=()
-  local start_time=$SECONDS
-  local entry label func step_start rc
+  local -i errors=0 step=0 step_rc=0
+  local -a failed_labels=() summary_records=()
+  local entry label func outcome detail step_seconds remaining
 
   local -a steps_quick=(
     "APT cache;_sys_clean_step_apt_cache"
@@ -564,41 +578,58 @@ _sys_clean_run() {
     return 0
   }
   for entry in "${steps[@]}"; do
-    step=$((step + 1))
+    (( ++step ))
     label="${entry%%;*}"
     func="${entry#*;}"
-    step_start=$SECONDS
+    _sys_step_banner "$step" "$total" "$label"
+    step_rc=0
+    _sys_step_exec "$func" "${planned_scopes[$label]}" || step_rc=$?
+    outcome="${reply[1]:-done}"
+    detail="${reply[2]:-}"
+    step_seconds="${reply[3]:-0}"
+    _sys_step_result "$step" "$total" "$label" "$outcome" "$detail" \
+      "$step_seconds"
+    summary_records+=("$label"$'\t'"$outcome"$'\t'"$step_seconds"$'\t'"$detail")
+    (( step_rc == 0 )) && continue
 
-    _sys_info "Step $step/$total: $label"
-    "$func" "${planned_scopes[$label]}"
-    rc=$?
-
-    _sys_dim "Step time: $(_sys_format_duration $(( SECONDS - step_start )))"
-    if (( rc != 0 )); then
-      errors=$((errors + 1))
-      failed_labels+=("$label")
-      if (( rc == 124 )); then
-        _sys_warn "Timed out while cleaning: $label"
-      else
-        _sys_warn "Finished with issues: $label"
-      fi
+    (( ++errors ))
+    _sys_duration_label "$step_seconds"
+    if [[ -n "$detail" && "$detail" != "status $step_rc" ]]; then
+      failed_labels+=("$label — $detail ($REPLY)")
+    else
+      failed_labels+=("$label ($REPLY)")
+    fi
+    if (( step_rc == 130 || step_rc == 143 )); then
+      # An interruption stops the plan; later targets keep their data.
+      for remaining in "${(@)steps[step+1,-1]}"; do
+        summary_records+=("${remaining%%;*}"$'\tnot-run\t\tcleanup interrupted')
+      done
+      _sys_print_step_summary "Cleanup Summary" "${summary_records[@]}"
+      _sys_error "System cleanup interrupted (status $step_rc): $label"
+      return $step_rc
     fi
   done
 
-  local elapsed=$(( SECONDS - start_time ))
-
-  _sys_blank
-  _sys_dim "Completed in $(_sys_format_duration "$elapsed")"
+  _sys_print_step_summary "Cleanup Summary" "${summary_records[@]}"
+  _sys_count_noun "$total" step
   if (( errors == 0 )); then
-    _sys_success "System cleanup completed successfully! ($total/$total steps)"
-  else
-    _sys_warn "Cleanup completed with $errors issue(s) out of $total steps:"
-    for label in "${failed_labels[@]}"; do
-      _sys_warn "  • $label"
-    done
-    return 1
+    _sys_success "System cleanup completed successfully! ($total/$REPLY)"
+    return 0
   fi
-  return 0
+  if (( errors < total )); then
+    _sys_error \
+      "System cleanup completed with partial failures: $errors of $REPLY failed."
+    typeset -f _zdx_timed_mark_partial &>/dev/null \
+      && _zdx_timed_mark_partial || true
+  elif (( total == 1 )); then
+    _sys_error "System cleanup failed: the only step failed."
+  else
+    _sys_error "System cleanup failed: all $REPLY failed."
+  fi
+  for label in "${failed_labels[@]}"; do
+    _sys_dim "• $label"
+  done
+  return 1
 }
 
 _sys_clean_system_main() {
@@ -632,14 +663,19 @@ _sys_clean_system_main() {
   plan_output=$(_sys_clean_plan "$mode") || return 1
   local -a plan_records=()
   [[ -n "$plan_output" ]] && plan_records=("${(@f)plan_output}")
-  _sys_header "${mode:u} Cleanup Plan"
-  _sys_info "Validated steps: ${#plan_records[@]}"
-  local plan_record plan_label plan_scope
+  _sys_header "${(C)mode} Cleanup Plan"
+  local plan_record plan_scope
+  local -a plan_rows=()
+  local -i plan_index=0
   for plan_record in "${plan_records[@]}"; do
-    plan_label="${plan_record%%|*}"
+    (( ++plan_index ))
     plan_scope="${plan_record#*|}"
-    _sys_dim "$plan_label — $(_sys_display_escape "$plan_scope")"
+    [[ -n "$HOME" && "$HOME" != / && "$plan_scope" == "$HOME"/* ]] \
+      && plan_scope="~/${plan_scope#"$HOME"/}"
+    plan_rows+=("$plan_index"$'\t'"${plan_record%%|*}"$'\t'"${plan_scope//$'\t'/ }")
   done
+  (( ${#plan_rows[@]} > 0 )) \
+    && _sys_table $'#\tStep\tTarget' "${plan_rows[@]}"
   _sys_warn "Shared /tmp content and Docker resources are never removed by this workflow."
 
   if (( dry_run )); then

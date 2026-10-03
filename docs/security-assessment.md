@@ -161,10 +161,18 @@ included in a backup, or exposed through an error log.
   definitions whose names appear sensitive.
 - The telemetry writer validates its five fields, excludes arguments and
   output, enforces owner-only state, and bounds record retention.
-- Audited System commands capture only a configurable byte-bounded tail in a
-  private temporary directory. Failure rendering is line-bounded,
-  control-escaped, and replaces lines containing common credential indicators
-  with a redaction notice.
+- Audited System commands capture output through the core
+  `_zdx_run_captured` service: a configurable byte-bounded tail in an
+  owner-only, identity-checked directory below an owner-private or root-owned
+  sticky `TMPDIR`. Failure replay is line-bounded, color-stripped, and
+  control-escaped, and it replaces lines containing credential indicators,
+  including URL credentials, with a redaction notice. `ZDX_VERBOSE=1` or an
+  aggregate's `--verbose` streams the output live and unredacted as an
+  explicit operator choice.
+- A failed APT index refresh is diagnosed from a 64 KiB in-memory copy of
+  APT's output, which is relayed unchanged as it runs. Displayed sources have
+  URI credentials removed and are escaped, and the diagnosis never downloads
+  or installs keys.
 - APT planning does not inspect generic package-manager process arguments or
   use a process-name scan as a lock oracle. Only the bounded fields required by
   the exact automatic-updater fingerprint are read to authorize a cooperative
@@ -1765,11 +1773,11 @@ memory or CPU during inspection.
   success.
   `HOMEBREW_NO_AUTO_UPDATE=1` prevents mutating phases from starting a second
   metadata refresh but does not remove the internal queue behavior. A Snap
-  preview error or deadline is a visible failure. Aggregate steps report
-  per-step elapsed time and receive `/dev/null` as stdin. Direct APT, Homebrew,
+  preview error or deadline is a visible failure. Aggregate steps report a
+  result line with elapsed time and receive `/dev/null` as stdin. Direct APT, Homebrew,
   native-package, and both outer-wrapper and inner-child DNF calls also receive
-  closed stdin. Commands with privately captured output announce that they are
-  running and receive closed stdin; probe capture plus watchdog marker files
+  closed stdin. Commands with privately captured output announce the readable
+  command as `$ <command>` and receive closed stdin; probe capture plus watchdog marker files
   are created under `umask 077`.
 - Suite-owned clients with a public zero-means-disabled retry control receive
   `npm_config_fetch_retries=0`, `UV_HTTP_RETRIES=0`, `PIP_RETRIES=0`,

@@ -347,11 +347,11 @@ unverifiable upstream installers. It delivers:
 - fixed zero-retry settings for the supported network controls of suite-owned
   npm, uv, pipx/pip, Cargo, and rustup update clients, plus non-interactive pip
   input, without claiming control over Cargo's package-cache lock;
-- visible Snap preview errors and deadlines, an announcement whenever a step
-  runs with privately captured output, closed stdin for every aggregate step
-  and privately captured command, plus closed stdin on direct APT, Homebrew,
-  native-package, and DNF-wrapper execution, and per-step elapsed reporting in
-  the aggregate summary;
+- visible Snap preview errors and deadlines, a `$ <command>` announcement
+  whenever a step runs a privately captured command, closed stdin for every
+  aggregate step and privately captured command, plus closed stdin on direct
+  APT, Homebrew, native-package, and DNF-wrapper execution, and a per-step
+  result with elapsed time in the aggregate summary table;
 - reuse of a valid non-interactive sudo timestamp or one announced `sudo -v`
   after aggregate authorization, followed during the consecutive privileged
   entries by an invocation-owned `sudo -n -v` timestamp refresher every 30
@@ -420,6 +420,38 @@ status `1`; an all-failed plan remains an ordinary failure. A validated nested
 AI result is attributed directly, for example
 `AI assistants — Cursor Agent: authentication required`, instead of losing the
 sub-updater cause behind the aggregate label.
+
+### Aggregate output
+
+`update-system` renders its run as specified in
+[`output-spec.md`](output-spec.md):
+
+- The plan is a numbered `# · Step · Scope` table. The scope column is static
+  text per entry, so planning still evaluates each entry's applicability
+  exactly once. At most two disclosures follow it: how many steps run mutable
+  upstream code, and that one authorization runs every step with sudo
+  requested at most once. APT's zero-wait policy, phased-update eligibility,
+  and the lock path appear only with `--verbose` or `--dry-run`.
+- Each entry prints a `── [n/N] Label ──` banner and one result line. A
+  child's own heading is omitted inside the step; `--verbose` demotes it to a
+  `▸` sub-heading and streams privately captured tool output live.
+- Results follow the change-evidence rule. APT parses its transaction counts;
+  Homebrew lists outdated packages before upgrading; Snap counts its pending
+  refreshes; Git-owned checkouts compare HEAD before and after the pull; uv,
+  Starship, Homebrew-owned AWS CLI, Rust, and Node.js compare versions; pipx
+  compares its application inventory; and the AI step maps the owner's
+  validated result records. A step without such evidence reports `done`, and
+  an entry that hands work to another owner reports `delegated`.
+- The `Update Summary` table lists every entry with its result, time, and
+  detail. The core and optional category lines, the verdict, each failed
+  entry with its cause, and the public commands that retry them follow. The
+  outer timer prints the only total time.
+- APT's own output stays visible while it runs. A failed index refresh is
+  diagnosed from a bounded copy of that output: a `Repository · Problem` table
+  names each failing source, such as a missing or expired signing key, an
+  expired or missing Release file, or a failed fetch. One generic next step
+  and the number of candidates left pending follow. Displayed sources have URI
+  credentials removed, and ZDX never downloads or installs keys.
 
 APT is the first authorized aggregate entry, immediately after authorization
 and the single applicable pre-authentication. Before sending any signal, ZDX
@@ -845,6 +877,15 @@ return non-zero; that includes a cache entry that `rm` could not remove. A
 cache whose directory probe fails or times out, such as `pip cache dir` with
 the cache disabled or a tool that is only a lazy shell function, is omitted
 from the plan with a warning; nothing is removed for it.
+
+The plan is a numbered `# · Step · Target` table with home paths shown as `~`.
+Execution follows the aggregate structure in [`output-spec.md`](output-spec.md):
+a banner and one result line per step, a `Cleanup Summary` table, and a
+verdict that counts failed steps. A step reports `current` when it found
+nothing to clean, `done` with what it freed when it can measure that, and
+`skipped` when its tool is no longer installed. An interrupted step (status
+`130` or `143`) stops the cleanup, lists the remaining steps as not run, and
+preserves that status.
 
 Disabled Snap revisions are treated as dynamic privileged targets. The helper
 authenticates once with `sudo -v`, re-queries each recorded snap and revision,

@@ -1856,7 +1856,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = "stdin:closed:pacman" ]
-  [[ "$output" == *"Native pacman packages updated"* ]]
+  [[ "$output" == *"Native pacman package update completed"* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -2202,7 +2202,7 @@ EOF
   [ "$(cat "$MAINT_MUTATION_LOG")" = "$expected_dispatch" ]
   [ ! -s "$MAINT_PLATFORM_LOG" ]
   [[ "$output" == *"DNF5 candidate rendering is skipped"* ]]
-  [[ "$output" == *"Native dnf packages updated"* ]]
+  [[ "$output" == *"Native dnf package update completed"* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -2259,7 +2259,7 @@ EOF
   [ "$(cat "$MAINT_MUTATION_LOG")" = "$expected_dispatch" ]
   [ ! -s "$MAINT_PLATFORM_LOG" ]
   [[ "$output" == *"pre-5.4 DNF5"* ]]
-  [[ "$output" == *"Native dnf packages updated"* ]]
+  [[ "$output" == *"Native dnf package update completed"* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -2539,7 +2539,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Backend:"*"softwareupdate"* ]]
-  [[ "$output" == *"Native softwareupdate packages updated"* ]]
+  [[ "$output" == *"Native softwareupdate package update completed"* ]]
   [ "$(cat "$MAINT_PLATFORM_LOG")" = \
     $'softwareupdate --list\nsoftwareupdate --install --all' ]
   if (( EUID == 0 )); then
@@ -2613,7 +2613,7 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"Backend:"*"$backend"* ]]
-    [[ "$output" == *"Native $backend packages updated"* ]]
+    [[ "$output" == *"✔ [1/1] Native packages — done: $backend upgrade completed"* ]]
     case "$backend" in
       dnf)
         grep -Fxq -- \
@@ -3363,8 +3363,8 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    $'brew update | curl=0 analytics=1 auto=unset askpass=unset\nbrew upgrade --no-ask | curl=0 analytics=1 auto=1 askpass=unset\nbrew autoremove | curl=0 analytics=1 auto=1 askpass=unset\nbrew cleanup | curl=0 analytics=1 auto=1 askpass=unset' ]
-  [[ "$output" == *"Homebrew updated"* ]]
+    $'brew update | curl=0 analytics=1 auto=unset askpass=unset\nbrew outdated --quiet | curl=0 analytics=1 auto=1 askpass=unset\nbrew upgrade --no-ask | curl=0 analytics=1 auto=1 askpass=unset\nbrew autoremove | curl=0 analytics=1 auto=1 askpass=unset\nbrew cleanup | curl=0 analytics=1 auto=1 askpass=unset' ]
+  [[ "$output" == *"Homebrew is up to date; no outdated formulae or casks were found."* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -3374,6 +3374,15 @@ EOF
 exit 97
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
+  cat <<'EOF' > "$TEST_MOCK_BIN/aws"
+#!/usr/bin/env bash
+if [[ -e "$HOME/awscli-upgraded" ]]; then
+  printf '%s\n' 'aws-cli/2.16.0 Python/3.12.0 Linux/6.8 exe/x86_64'
+else
+  printf '%s\n' 'aws-cli/2.15.0 Python/3.12.0 Linux/6.8 exe/x86_64'
+fi
+EOF
+  chmod +x "$TEST_MOCK_BIN/aws"
 
   run run_maintenance_zsh '
     _sys_brew() {
@@ -3383,7 +3392,9 @@ EOF
         upgrade)
           [[ "${2:-}" == "--no-ask" \
             && ( "${3:-}" == "awscli" || "${3:-}" == "starship" ) \
-            && $# -eq 3 ]]
+            && $# -eq 3 ]] || return 97
+          [[ "${3:-}" == "awscli" ]] && : > "$HOME/awscli-upgraded"
+          return 0
           ;;
         *) return 97 ;;
       esac
@@ -3396,8 +3407,9 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
     $'list awscli\nupgrade --no-ask awscli\nlist starship\nupgrade --no-ask starship' ]
-  [[ "$output" == *"AWS CLI updated through Homebrew"* ]]
-  [[ "$output" == *"Starship updated through Homebrew"* ]]
+  # Version evidence separates a real upgrade from an unchanged formula.
+  [[ "$output" == *"AWS CLI updated through Homebrew: 2.15.0 → 2.16.0."* ]]
+  [[ "$output" == *"Starship is already up to date (1.2.3)."* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -3451,7 +3463,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
     $'user-uv:self update | retries=0\napplicable:user-uv' ]
-  [[ "$output" == *"uv updated to 1.2.3"* ]]
+  [[ "$output" == *"uv is already up to date (1.2.3)."* ]]
   [[ "$output" != *"managed by Homebrew"* ]]
   assert_no_privilege_network_or_signal
 }
@@ -3518,6 +3530,17 @@ if [[ "$tool_name" == "uv" && "${1:-}" == "--version" ]]; then
   printf '%s\n' 'uv 1.2.3'
   exit 0
 fi
+# The pipx inventory is a read-only probe, recorded apart from mutations.
+if [[ "$tool_name" == "pipx" && "$*" == "list --short" ]]; then
+  printf 'pipx %s | pip-input=%s\n' "$*" "${PIP_NO_INPUT-unset}" \
+    >> "$MAINT_PROBE_LOG"
+  if [[ -e "$HOME/pipx-upgraded" ]]; then
+    printf '%s\n' 'black 24.2.0' 'ruff 0.6.0'
+  else
+    printf '%s\n' 'black 24.1.0' 'ruff 0.6.0'
+  fi
+  exit 0
+fi
 {
   printf '%s %s' "$tool_name" "$*"
   printf ' | uv=%s pip-input=%s pip-retries=%s rust=%s\n' \
@@ -3526,10 +3549,20 @@ fi
     "${PIP_RETRIES-unset}" \
     "${RUSTUP_MAX_RETRIES-unset}"
 } >> "$MAINT_MUTATION_LOG"
+: > "$HOME/$tool_name-upgraded"
 exit 0
 EOF
     chmod +x "$TEST_MOCK_BIN/$controlled_tool"
   done
+  cat <<'EOF' > "$TEST_MOCK_BIN/rustc"
+#!/usr/bin/env bash
+if [[ -e "$HOME/rustup-upgraded" ]]; then
+  printf '%s\n' 'rustc 1.81.0 (eeb90cda1 2024-09-04)'
+else
+  printf '%s\n' 'rustc 1.80.0 (051478957 2024-07-21)'
+fi
+EOF
+  chmod +x "$TEST_MOCK_BIN/rustc"
   cat <<'EOF' > "$TEST_MOCK_BIN/brew"
 #!/usr/bin/env bash
 exit 1
@@ -3550,9 +3583,11 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
     $'uv self update | uv=0 pip-input=unset pip-retries=unset rust=unset\npipx upgrade-all | uv=unset pip-input=1 pip-retries=0 rust=unset\nrustup update | uv=unset pip-input=unset pip-retries=unset rust=0' ]
-  [[ "$output" == *"uv updated to 1.2.3"* ]]
-  [[ "$output" == *"pipx packages updated"* ]]
-  [[ "$output" == *"Rust toolchain updated"* ]]
+  [ "$(grep -c '^pipx list --short | pip-input=1$' "$MAINT_PROBE_LOG")" -eq 2 ]
+  [[ "$output" == *"uv is already up to date (1.2.3)."* ]]
+  [[ "$output" == \
+    *"pipx applications updated: 1 of 2 applications (black)."* ]]
+  [[ "$output" == *"Rust (rustc) updated: 1.80.0 → 1.81.0."* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -3790,7 +3825,8 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "omz-pull git -C $omz_repo pull --ff-only origin" ]
+    "git -C ~/.oh-my-zsh pull --ff-only origin git -C $omz_repo pull --ff-only origin" ]
+  [[ "$output" == *"Oh My Zsh is already up to date ("* ]]
   [[ "$output" == *"tools/upgrade.sh will not be executed"* ]]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
@@ -3827,7 +3863,7 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"Refusing an unsafe fzf integration installer"* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "fzf-pull git -C $fzf_repo pull --ff-only origin" ]
+    "git -C ~/.fzf pull --ff-only origin git -C $fzf_repo pull --ff-only origin" ]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
   [ ! -s "$MAINT_SIGNAL_LOG" ]
@@ -3853,9 +3889,9 @@ EOF
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"1 repository failed safety validation"* ]]
-  [[ "$output" == *"1 repository updated; 1 failed"* ]]
+  [[ "$output" == *"Zsh plugins and themes: 1 current · 1 failed."* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "zsh-valid git -C $valid_repo pull --ff-only --quiet origin" ]
+    "git -C ~/.oh-my-zsh/custom/plugins/valid pull --ff-only --quiet origin git -C $valid_repo pull --ff-only --quiet origin" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
   [ ! -s "$MAINT_SHELL_LOG" ]
   [ ! -s "$MAINT_SIGNAL_LOG" ]
@@ -3896,8 +3932,10 @@ EOF
   [[ "$output" == *"1 linked ZDX development checkout skipped"* ]]
   [[ "$output" != *"Excluded unsafe repository: $zdx_link"* ]]
   [[ "$output" != *"failed safety validation"* ]]
+  [[ "$output" == \
+    *"Zsh plugins and themes: 1 current · 1 linked ZDX development checkout skipped."* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "zsh-valid git -C $valid_repo pull --ff-only --quiet origin" ]
+    "git -C ~/.oh-my-zsh/custom/plugins/valid pull --ff-only --quiet origin git -C $valid_repo pull --ff-only --quiet origin" ]
   assert_no_privilege_network_or_signal
 }
 
@@ -4046,9 +4084,11 @@ EOF
     "System update completed with partial failures: 1 of 2 steps failed." \
     "$HOME/update-system.stderr"
   grep -Eq -- \
-    'sys:update-system completed with partial failures in [0-9]+[.][0-9]s \(status 1\)' \
+    'sys:update-system completed with partial failures in ([0-9]+[.][0-9]s|[0-9]+s|[0-9]+m [0-9]{2}s) \(status 1\)' \
     "$HOME/update-system.stderr"
-  grep -Fq -- "Step completed" "$HOME/update-system.stderr"
+  grep -Fq -- "✘ [1/2] AI assistants — failed" "$HOME/update-system.stderr"
+  grep -Fq -- "✔ [2/2] Oh My Zsh — done" "$HOME/update-system.stderr"
+  grep -Fq -- "════ Update Summary ════" "$HOME/update-system.stderr"
   grep -Fq -- "Oh My Zsh" "$HOME/update-system.stderr"
   assert_no_privilege_network_or_signal
 }
@@ -4583,7 +4623,9 @@ EOF
   [ "$status" -eq 1 ]
   [ "$(wc -l < "$MAINT_MUTATION_LOG")" -eq 8 ]
   [ "$(tail -n 1 "$MAINT_MUTATION_LOG")" = "temp" ]
-  [[ "$output" == *"Cleanup completed with 1 issue(s)"* ]]
+  [[ "$output" == \
+    *"System cleanup completed with partial failures: 1 of 8 steps failed."* ]]
+  [[ "$output" == *"✘ [2/8] npm cache — failed: status 41"* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -4629,7 +4671,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
     "temp:$HOME/.cache/tmp" ]
-  [[ "$output" == *"System cleanup completed successfully! (1/1 steps)"* ]]
+  [[ "$output" == *"System cleanup completed successfully! (1/1 step)"* ]]
   assert_no_privilege_network_or_signal
 }
 
@@ -4898,9 +4940,9 @@ EOF_JOURNAL
 
   [ "$status" -eq 0 ]
   [[ "$output" != *"Managed by APT"* ]]
-  [[ "$output" == *"fzf updated to 0.99.0"* ]]
+  [[ "$output" == *"fzf is already up to date (0.99.0, "* ]]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    "fzf-pull git -C $fzf_repo pull --ff-only origin" ]
+    "git -C ~/.fzf pull --ff-only origin git -C $fzf_repo pull --ff-only origin" ]
 
   : > "$MAINT_MUTATION_LOG"
   run run_maintenance_zsh '
@@ -4926,7 +4968,7 @@ EOF_JOURNAL
       print -r -- "git=${+GIT_ASKPASS}[${GIT_ASKPASS-}] ssh=${+SSH_ASKPASS} prompt=${GIT_TERMINAL_PROMPT-}" \
         >> "$MAINT_MUTATION_LOG"
     }
-    _sys_update_git_logged probe -C "$HOME" status
+    _sys_update_git_logged -C "$HOME" status
   '
 
   [ "$status" -eq 0 ]

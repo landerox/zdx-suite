@@ -207,6 +207,131 @@ _sys_update_release_lock() {
   return 0
 }
 
+# REPLY: the static scope shown for one plan entry. It never probes the host,
+# so planning keeps exactly one applicability call per entry.
+_sys_update_step_scope() {
+  local command_name="${1:-}" phased="${2:-0}"
+  case "$command_name" in
+    update-apt)
+      REPLY="APT packages · sudo"
+      [[ "$phased" == 1 ]] && REPLY+=" · phased updates included"
+      ;;
+    _sys_update_platform_packages)
+      local backend=""
+      if _sys_has_capability "os-updates:softwareupdate"; then
+        backend=softwareupdate
+      else
+        backend=$(_sys_capability_value package_manager 2>/dev/null) \
+          || backend="native"
+      fi
+      REPLY="$backend packages · sudo"
+      ;;
+    update-snap)          REPLY="Snap refresh · sudo" ;;
+    update-brew)
+      REPLY="Homebrew formulae and casks"
+      _sys_has_capability "os:darwin" && REPLY+=" · sudo for casks"
+      ;;
+    update-starship)      REPLY="Cargo-installed binary" ;;
+    update-fzf)           REPLY="Git checkout · remote code" ;;
+    update-gcloud)        REPLY="gcloud components" ;;
+    update-awscli)        REPLY="AWS CLI owner" ;;
+    update-uv-system)     REPLY="uv self-update" ;;
+    update-pipx)          REPLY="pipx applications" ;;
+    update-node)          REPLY="Node.js LTS via fnm or nvm" ;;
+    update-rust)          REPLY="rustup toolchains" ;;
+    _sys_update_ai_tools) REPLY="AI CLI self-updaters · remote code" ;;
+    update-repomix)       REPLY="npm global package" ;;
+    update-omz)           REPLY="Git checkout · remote code" ;;
+    update-zsh-plugins)   REPLY="Git checkouts · remote code" ;;
+    *)                    REPLY="" ;;
+  esac
+}
+
+# Returns 0 for entries that run mutable upstream code.
+_sys_update_step_remote_code() {
+  case "${1:-}" in
+    update-fzf|update-omz|update-zsh-plugins|_sys_update_ai_tools) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# REPLY: the public command that retries one failed entry.
+_sys_update_retry_command() {
+  case "${1:-}" in
+    _sys_update_platform_packages) REPLY="sys-menu update-system" ;;
+    _sys_update_ai_tools)          REPLY="ai-menu ai-update" ;;
+    update-*)                      REPLY="sys-menu $1" ;;
+    *)                             REPLY="" ;;
+  esac
+}
+
+# Prints the numbered plan table for the frozen entries.
+# Usage: _sys_update_render_plan <include-phased-updates> <entry>...
+_sys_update_render_plan() {
+  local phased="${1:-0}" entry REPLY
+  shift
+  local -a rows=()
+  local -i index=0
+  for entry in "$@"; do
+    (( ++index ))
+    _sys_update_step_scope "${entry#*;}" "$phased"
+    rows+=("$index"$'\t'"${entry%%;*}"$'\t'"$REPLY")
+  done
+  if (( ${+functions[_zdx_ui_table]} )); then
+    _zdx_ui_table $'#\tStep\tScope' "${rows[@]}"
+  else
+    local row
+    for row in "${rows[@]}"; do
+      _sys_dim "${row//$'\t'/  }"
+    done
+  fi
+}
+
+# Prints at most two disclosure lines before authorization.
+# Usage: _sys_update_render_disclosures <dry-run> <entry>...
+_sys_update_render_disclosures() {
+  local dry_run="${1:-0}" entry REPLY
+  shift
+  local -i total=$# remote=0 privileged=0
+  for entry in "$@"; do
+    _sys_update_step_remote_code "${entry#*;}" && (( ++remote ))
+    _sys_update_step_requires_privilege "${entry#*;}" && (( ++privileged ))
+  done
+  if (( remote > 0 )); then
+    _sys_count_noun "$remote" step
+    if (( dry_run )); then
+      _sys_warn "$REPLY run mutable upstream code (marked remote code)."
+    else
+      _sys_warn "$REPLY run mutable upstream code (marked remote code); review them first with --dry-run."
+    fi
+  fi
+  (( dry_run )) && return 0
+  local scope="all $total steps"
+  (( total == 1 )) && scope="this step"
+  if (( privileged > 0 && EUID != 0 )); then
+    _sys_warn "One authorization runs $scope without further prompts; sudo is requested at most once."
+  else
+    _sys_warn "One authorization runs $scope without further prompts."
+  fi
+}
+
+# Prints the static plan policy, shown only with --verbose or --dry-run.
+# Usage: _sys_update_render_policy <apt-planned> <phased> <lock-path>
+_sys_update_render_policy() {
+  local apt_planned="${1:-0}" phased="${2:-0}" lock_path="${3:-}"
+  _sys_dim "Package candidates are advisory; each package manager resolves its final transaction at execution."
+  if (( apt_planned )); then
+    if (( phased )); then
+      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0; phased updates are explicitly included."
+    else
+      _sys_dim "APT runs once, first, with lock timeout 0 and network retries 0; phased-update eligibility remains in effect."
+    fi
+    _sys_dim "No other package process is signaled, no lock file is deleted, and SIGKILL is never used."
+  fi
+  [[ -n "$lock_path" ]] && _sys_dim \
+    "Execution lock: $(_sys_display_escape "$lock_path") (per user, non-blocking; --dry-run does not take it)."
+}
+
 _sys_run_update_step() {
   local command_name="$1"
   local assume_yes="${2:-0}"
@@ -277,15 +402,17 @@ _sys_update_run() {
   [[ "$include_phased_updates" == 0 \
     || "$include_phased_updates" == 1 ]] || return 2
   [[ "$verbose" == 0 || "$verbose" == 1 ]] || return 2
+  local REPLY
+  local -a reply=()
   local errors=0
   local step=0
-  local -a failed_labels=()
+  local -a failed_labels=() summary_records=() retry_commands=()
   local -a _SYS_UPDATE_STEP_FAILURE_DETAILS=()
   local -a applicable=("$@")
-  local start_time=$SECONDS
-  local -i step_started=0 step_elapsed=0
   local -i _SYS_PRIVILEGE_NONINTERACTIVE=1
-  local entry label cmd
+  local entry label cmd outcome detail step_seconds duration_label category
+  local nested_failure remaining stop_detail retry_command
+  local -i step_rc=0
   local -i privileged_entries_remaining=0
   local -i core_total=0 core_succeeded=0 core_failed=0
   local -i optional_total=0 optional_succeeded=0 optional_failed=0
@@ -312,15 +439,16 @@ _sys_update_run() {
     step=$((step + 1))
     label="${entry%%;*}"
     cmd="${entry#*;}"
-    _sys_info "Step $step/$total: $label"
+    _sys_step_banner "$step" "$total" "$label"
 
-    step_started=$SECONDS
-    local step_rc=0
     _SYS_UPDATE_STEP_FAILURE_DETAILS=()
-    _sys_run_update_step \
+    step_rc=0
+    _sys_step_exec _sys_run_update_step \
       "$cmd" "$assume_yes" "$include_phased_updates" "$verbose" </dev/null \
       || step_rc=$?
-    step_elapsed=$(( SECONDS - step_started ))
+    outcome="${reply[1]:-done}"
+    detail="${reply[2]:-}"
+    step_seconds="${reply[3]:-0}"
     if _sys_update_step_requires_privilege "$cmd"; then
       (( --privileged_entries_remaining ))
       if (( privileged_entries_remaining == 0 )) \
@@ -331,105 +459,155 @@ _sys_update_run() {
         _SYS_UPDATE_SUDO_KEEPALIVE_HANDLE=""
       fi
     fi
-    if (( step_rc != 0 )); then
-      errors=$((errors + 1))
-      local failure_duration="$(_sys_format_duration "$step_elapsed")"
-      if (( ${#_SYS_UPDATE_STEP_FAILURE_DETAILS[@]} > 0 )); then
-        local nested_failure
-        for nested_failure in "${_SYS_UPDATE_STEP_FAILURE_DETAILS[@]}"; do
-          failed_labels+=(
-            "$label — $nested_failure ($failure_duration)"
-          )
-        done
-      else
-        failed_labels+=("$label ($failure_duration)")
-      fi
-      _sys_update_step_category "$cmd"
-      if [[ "$REPLY" == "core" ]]; then
-        (( ++core_failed ))
-      else
-        (( ++optional_failed ))
-      fi
-      _sys_warn \
-        "Step failed after $failure_duration: $label"
-      if (( fail_fast || step_rc == 130 || step_rc == 143 )); then
-        local elapsed=$(( SECONDS - start_time ))
-        local mins=$(( elapsed / 60 ))
-        local secs=$(( elapsed % 60 ))
-        local step_noun="steps"
-        (( total == 1 )) && step_noun="step"
-        _sys_blank
-        if (( step_rc == 130 || step_rc == 143 )); then
-          _sys_error "System update interrupted (status $step_rc): $label"
-        elif (( ${#_SYS_UPDATE_STEP_FAILURE_DETAILS[@]} == 1 )); then
-          _sys_error \
-            "Aborting after first failure (--fail-fast): $label — ${_SYS_UPDATE_STEP_FAILURE_DETAILS[1]}"
-        else
-          _sys_error "Aborting after first failure (--fail-fast): $label"
-        fi
-        _sys_dim \
-          "Stopped at $step of $total $step_noun, ${mins}m ${secs}s elapsed"
-        _sys_update_print_category_summary \
-          "Core package steps" "$core_succeeded" "$core_total" \
-          "$core_failed" \
-          "$(( core_total - core_succeeded - core_failed ))"
-        _sys_update_print_category_summary \
-          "Optional tool steps" "$optional_succeeded" "$optional_total" \
-          "$optional_failed" \
-          "$(( optional_total - optional_succeeded - optional_failed ))"
-        (( step_rc == 130 || step_rc == 143 )) && return $step_rc
-        return 1
-      fi
-    else
-      _sys_update_step_category "$cmd"
-      if [[ "$REPLY" == "core" ]]; then
+    _sys_step_result "$step" "$total" "$label" "$outcome" "$detail" \
+      "$step_seconds"
+    summary_records+=("$label"$'\t'"$outcome"$'\t'"$step_seconds"$'\t'"$detail")
+    _sys_update_step_category "$cmd"
+    category="$REPLY"
+    if (( step_rc == 0 )); then
+      if [[ "$category" == "core" ]]; then
         (( ++core_succeeded ))
       else
         (( ++optional_succeeded ))
       fi
-      _sys_dim \
-        "Step completed in $(_sys_format_duration "$step_elapsed"): $label"
+      continue
+    fi
+
+    errors=$((errors + 1))
+    if [[ "$category" == "core" ]]; then
+      (( ++core_failed ))
+    else
+      (( ++optional_failed ))
+    fi
+    _sys_duration_label "$step_seconds"
+    duration_label="$REPLY"
+    if (( ${#_SYS_UPDATE_STEP_FAILURE_DETAILS[@]} > 0 )); then
+      for nested_failure in "${_SYS_UPDATE_STEP_FAILURE_DETAILS[@]}"; do
+        failed_labels+=("$label — $nested_failure ($duration_label)")
+      done
+    elif [[ -n "$detail" && "$detail" != "status $step_rc" ]]; then
+      failed_labels+=("$label — $detail ($duration_label)")
+    else
+      failed_labels+=("$label ($duration_label)")
+    fi
+    _sys_update_retry_command "$cmd"
+    [[ -n "$REPLY" ]] && retry_commands+=("$REPLY")
+
+    if (( fail_fast || step_rc == 130 || step_rc == 143 )); then
+      stop_detail="stopped by --fail-fast"
+      (( step_rc == 130 || step_rc == 143 )) && stop_detail="update interrupted"
+      for remaining in "${(@)applicable[step+1,-1]}"; do
+        summary_records+=("${remaining%%;*}"$'\tnot-run\t\t'"$stop_detail")
+      done
+      _sys_print_step_summary "Update Summary" "${summary_records[@]}"
+      if (( step_rc == 130 || step_rc == 143 )); then
+        _sys_error "System update interrupted (status $step_rc): $label"
+      elif (( ${#_SYS_UPDATE_STEP_FAILURE_DETAILS[@]} == 1 )); then
+        _sys_error \
+          "Aborting after first failure (--fail-fast): $label — ${_SYS_UPDATE_STEP_FAILURE_DETAILS[1]}"
+      else
+        _sys_error "Aborting after first failure (--fail-fast): $label"
+      fi
+      _sys_count_noun "$total" step
+      _sys_dim "Stopped at $step of $REPLY."
+      _sys_update_print_category_summary \
+        "Core package steps" "$core_succeeded" "$core_total" \
+        "$core_failed" \
+        "$(( core_total - core_succeeded - core_failed ))"
+      _sys_update_print_category_summary \
+        "Optional tool steps" "$optional_succeeded" "$optional_total" \
+        "$optional_failed" \
+        "$(( optional_total - optional_succeeded - optional_failed ))"
+      (( step_rc == 130 || step_rc == 143 )) && return $step_rc
+      return 1
     fi
   done
 
-  local elapsed=$(( SECONDS - start_time ))
-  local mins=$(( elapsed / 60 ))
-  local secs=$(( elapsed % 60 ))
-
-  _sys_blank
-  _sys_dim "Completed in ${mins}m ${secs}s"
+  _sys_print_step_summary "Update Summary" "${summary_records[@]}"
   _sys_update_print_category_summary \
     "Core package steps" "$core_succeeded" "$core_total" \
     "$core_failed" 0
   _sys_update_print_category_summary \
     "Optional tool steps" "$optional_succeeded" "$optional_total" \
     "$optional_failed" 0
+  _sys_count_noun "$total" step
   if (( errors == 0 )); then
-    local success_step_noun="steps"
-    (( total == 1 )) && success_step_noun="step"
-    _sys_success \
-      "System update completed successfully! ($total/$total $success_step_noun)"
+    _sys_success "System update completed successfully! ($total/$REPLY)"
+    return 0
+  fi
+  if (( errors < total )); then
+    _sys_error \
+      "System update completed with partial failures: $errors of $REPLY failed."
+    typeset -f _zdx_timed_mark_partial &>/dev/null \
+      && _zdx_timed_mark_partial || true
+  elif (( total == 1 )); then
+    _sys_error "System update failed: the only step failed."
   else
-    local final_step_noun="steps"
-    (( total == 1 )) && final_step_noun="step"
-    if (( errors < total )); then
-      _sys_error \
-        "System update completed with partial failures: $errors of $total $final_step_noun failed."
-      typeset -f _zdx_timed_mark_partial &>/dev/null \
-        && _zdx_timed_mark_partial || true
-    else
-      if (( total == 1 )); then
-        _sys_error "System update failed: the only step failed."
-      else
-        _sys_error "System update failed: all $total $final_step_noun failed."
-      fi
-    fi
-    local fl
-    for fl in "${failed_labels[@]}"; do
-      _sys_error "  • $fl"
-    done
+    _sys_error "System update failed: all $REPLY failed."
+  fi
+  local failed_label
+  for failed_label in "${failed_labels[@]}"; do
+    _sys_dim "• $failed_label"
+  done
+  _sys_info "Retry only the failed steps after resolving the errors above:"
+  for retry_command in "${(@u)retry_commands}"; do
+    _sys_dim "  $retry_command"
+  done
+  return 1
+}
+
+# Runs the read-only previews of a dry run as numbered steps.
+# Usage: _sys_update_run_previews <assume-yes> <phased> <verbose> <entry>...
+_sys_update_run_previews() {
+  local assume_yes="${1:-0}" phased="${2:-0}" verbose="${3:-0}"
+  shift 3 2>/dev/null || return 2
+  local REPLY entry label command_name outcome detail seconds
+  local -a reply=() previews=() preview_args=()
+  local -i preview_failures=0 index=0 preview_rc=0
+  for entry in "$@"; do
+    case "${entry#*;}" in
+      update-apt|update-snap|update-fzf|update-omz|update-zsh-plugins|\
+      _sys_update_ai_tools)
+        previews+=("$entry")
+        ;;
+      _sys_update_platform_packages)
+        _sys_dim \
+          "Native package candidates are queried immediately before execution."
+        ;;
+    esac
+  done
+  for entry in "${previews[@]}"; do
+    (( ++index ))
+    label="${entry%%;*}"
+    command_name="${entry#*;}"
+    preview_args=(--dry-run)
+    case "$command_name" in
+      update-apt)
+        (( phased )) && preview_args+=(--include-phased-updates)
+        (( verbose )) && preview_args+=(--verbose)
+        ;;
+      _sys_update_ai_tools)
+        (( assume_yes )) && preview_args+=(--yes)
+        ;;
+    esac
+    _sys_step_banner "$index" "${#previews[@]}" "Detailed preview: $label"
+    preview_rc=0
+    _sys_step_exec "$command_name" "${preview_args[@]}" </dev/null \
+      || preview_rc=$?
+    outcome="${reply[1]:-done}"
+    detail="${reply[2]:-}"
+    seconds="${reply[3]:-}"
+    [[ "$outcome" == done ]] && outcome=planned
+    _sys_step_result "$index" "${#previews[@]}" "$label" "$outcome" \
+      "$detail" "$seconds"
+    (( preview_rc == 0 )) || (( ++preview_failures ))
+  done
+  if (( preview_failures > 0 )); then
+    _sys_count_noun "$preview_failures" "detailed preview"
+    _sys_error "$REPLY failed."
     return 1
   fi
+  _sys_info "Dry run complete; no mutating update command was executed."
 }
 
 update-system() {
@@ -523,6 +701,9 @@ EOF
   done
 
   _sys_capabilities_refresh_for_command || return 1
+  # --verbose also streams captured step output for this run only.
+  local ZDX_VERBOSE="${ZDX_VERBOSE:-}"
+  (( verbose )) && ZDX_VERBOSE=1
 
   local -a plan_steps=(
     "APT;update-apt"
@@ -548,9 +729,7 @@ EOF
     label="${entry%%;*}"
     command_name="${entry#*;}"
     if (( ! include_remote_code )) \
-      && [[ "$command_name" == "update-fzf" || "$command_name" == "update-omz" \
-        || "$command_name" == "update-zsh-plugins" \
-        || "$command_name" == "_sys_update_ai_tools" ]]; then
+      && _sys_update_step_remote_code "$command_name"; then
       continue
     fi
     if _sys_step_applies "$command_name"; then
@@ -564,26 +743,12 @@ EOF
   }
 
   _sys_header "System Update Plan"
-  _sys_info "Applicable steps: ${#applicable_labels[@]}"
-  for label in "${applicable_labels[@]}"; do
-    _sys_dim "$label"
-  done
-  _sys_warn "Package candidate lists are advisory snapshots."
-  _sys_dim "Each package manager resolves its final dynamic transaction at execution."
+  _sys_update_render_plan "$include_phased_updates" "${applicable_entries[@]}"
   local apt_plan_entry="APT;update-apt"
   local apt_fingerprint=""
-  if (( ${applicable_entries[(Ie)$apt_plan_entry]} > 0 )); then
-    _sys_dim \
-      "APT policy: run once first with lock timeout 0 and network retries 0."
-    if (( include_phased_updates )); then
-      _sys_warn \
-        "APT phased updates are explicitly included in this authorized plan."
-    else
-      _sys_dim \
-        "APT phased-update eligibility remains enabled by default."
-    fi
-    _sys_dim \
-      "No other package process is signaled, no lock is deleted, and SIGKILL is never used."
+  local -i apt_planned=0
+  (( ${applicable_entries[(Ie)$apt_plan_entry]} > 0 )) && apt_planned=1
+  if (( apt_planned )); then
     _sys_apt_plan_blocker || return $?
     apt_fingerprint="$REPLY"
   fi
@@ -591,62 +756,13 @@ EOF
   local _SYS_APT_AUTHORIZED_FINGERPRINT="$apt_fingerprint"
   _sys_update_lock_path || return $?
   local update_lock_path="$REPLY"
-  _sys_dim \
-    "Execution lock: $(_sys_display_escape "$update_lock_path") (non-blocking, per user)."
-  (( include_remote_code )) \
-    && _sys_warn \
-      "The plan includes mutable Git origins and AI CLI self-updaters."
-  _sys_warn \
-    "One aggregate authorization runs every applicable step without further prompts."
-  if (( include_remote_code )); then
-    _sys_dim \
-      "It pre-authorizes every mutable origin and self-updater in the plan."
-    (( dry_run )) || _sys_dim \
-      "Run this command with --dry-run first to review update targets."
-  fi
+  _sys_update_render_disclosures "$dry_run" "${applicable_entries[@]}"
+  (( dry_run || verbose )) && _sys_update_render_policy \
+    "$apt_planned" "$include_phased_updates" "$update_lock_path"
   if (( dry_run )); then
-    local -i preview_failures=0
-    for entry in "${applicable_entries[@]}"; do
-      label="${entry%%;*}"
-      command_name="${entry#*;}"
-      case "$command_name" in
-        update-apt)
-          _sys_blank
-          _sys_info "Detailed preview: $label"
-          local -a apt_preview_args=(--dry-run)
-          (( include_phased_updates )) \
-            && apt_preview_args+=(--include-phased-updates)
-          (( verbose )) && apt_preview_args+=(--verbose)
-          "$command_name" "${apt_preview_args[@]}" \
-            || (( preview_failures++ ))
-          ;;
-        update-snap|update-fzf|update-omz|update-zsh-plugins)
-          _sys_blank
-          _sys_info "Detailed preview: $label"
-          "$command_name" --dry-run || (( preview_failures++ ))
-          ;;
-        _sys_update_ai_tools)
-          _sys_blank
-          _sys_info "Detailed preview: $label"
-          local -a ai_preview_args=(--dry-run)
-          (( assume_yes )) && ai_preview_args+=(--yes)
-          "$command_name" "${ai_preview_args[@]}" \
-            || (( preview_failures++ ))
-          ;;
-        _sys_update_platform_packages)
-          _sys_dim \
-            "Native package candidates are queried immediately before execution."
-          ;;
-      esac
-    done
-    (( preview_failures == 0 )) || {
-      local preview_noun="previews"
-      (( preview_failures == 1 )) && preview_noun="preview"
-      _sys_error "$preview_failures detailed $preview_noun failed."
-      return 1
-    }
-    _sys_info "Dry run complete; no mutating update command was executed."
-    return 0
+    _sys_update_run_previews "$assume_yes" "$include_phased_updates" \
+      "$verbose" "${applicable_entries[@]}"
+    return $?
   fi
   if (( ! assume_yes )); then
     if [[ ! -t 0 || ! -t 2 ]]; then
@@ -676,7 +792,7 @@ EOF
     _sys_update_acquire_lock "$update_lock_path" || update_rc=$?
     if (( update_rc == 0 )); then
       update_lock_fd="$REPLY"
-      _sys_dim "Exclusive update-system execution lock acquired."
+      _sys_verbose_dim "Exclusive update-system execution lock acquired."
       REPLY=0
       _sys_update_preauthenticate "${applicable_entries[@]}"
       sudo_authenticated="$REPLY"

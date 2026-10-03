@@ -24,10 +24,17 @@ write_fnm() {
 #!/usr/bin/env zsh
 print -r -- "fnm:$*" >> "$TOOLCHAIN_LOG"
 case "$*" in
-  'install --lts') exit "${NODE_INSTALL_STATUS:-0}" ;;
+  'install --lts')
+    : > "$HOME/node-installed"
+    exit "${NODE_INSTALL_STATUS:-0}"
+    ;;
   'use lts-latest') exit "${NODE_USE_STATUS:-0}" ;;
   'default lts-latest') exit "${NODE_DEFAULT_STATUS:-0}" ;;
   current)
+    if [[ -n "${NODE_BEFORE_VERSION:-}" && ! -e "$HOME/node-installed" ]]; then
+      print -r -- "$NODE_BEFORE_VERSION"
+      exit 0
+    fi
     print -r -- "${NODE_CURRENT_VERSION-v22.1.0}"
     exit "${NODE_CURRENT_STATUS:-0}"
     ;;
@@ -48,14 +55,23 @@ run_nvm_update() {
     nvm() {
       print -r -- "nvm:$*" >> "$TOOLCHAIN_LOG"
       case "$*" in
-        "install --lts") return "${NODE_INSTALL_STATUS:-0}" ;;
+        "install --lts")
+          : > "$HOME/node-installed"
+          return "${NODE_INSTALL_STATUS:-0}"
+          ;;
         "version lts/*")
           print -r -- "${NODE_CURRENT_VERSION-v22.1.0}"
           return "${NODE_CURRENT_STATUS:-0}"
           ;;
         "alias default v22.1.0") return "${NODE_DEFAULT_STATUS:-0}" ;;
         "use v22.1.0") return "${NODE_USE_STATUS:-0}" ;;
-        current) print -r -- "${NODE_ACTIVE_VERSION-v22.1.0}" ;;
+        current)
+          if [[ -n "${NODE_BEFORE_VERSION:-}" && ! -e "$HOME/node-installed" ]]; then
+            print -r -- "$NODE_BEFORE_VERSION"
+          else
+            print -r -- "${NODE_ACTIVE_VERSION-v22.1.0}"
+          fi
+          ;;
         *) return 97 ;;
       esac
     }
@@ -146,7 +162,15 @@ EOF
   grep -qx 'fnm:use lts-latest' "$TOOLCHAIN_LOG"
   grep -qx 'fnm:default lts-latest' "$TOOLCHAIN_LOG"
   [[ "$(cat "$TOOLCHAIN_LOG")" != *unexpected-fnm-function* ]]
-  [[ "$output" == *"Node.js LTS (v22.1.0) installed and set as default"* ]]
+  [[ "$output" == \
+    *"Node.js LTS (v22.1.0) is already installed and active as the default."* ]]
+
+  rm -f "$HOME/node-installed"
+  export NODE_BEFORE_VERSION=v20.11.0
+  run run_zsh 'update-node'
+  [ "$status" -eq 0 ]
+  [[ "$output" == \
+    *"Node.js LTS (v22.1.0) installed and set as default (was v20.11.0)."* ]]
 }
 
 @test "sys toolchain: nvm default failure does not discard successful activation" {
@@ -182,7 +206,17 @@ EOF
 @test "sys toolchain: nvm verifies activation and reports successful completion" {
   run run_nvm_update
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Node.js LTS (v22.1.0) installed and set as default"* ]]
+  [[ "$output" == \
+    *"Node.js LTS (v22.1.0) is already installed and active as the default."* ]]
+  # nvm's own alias and activation output stays captured on success.
+  [[ "$output" == *'$ nvm use v22.1.0  (output shown on failure)'* ]]
+
+  rm -f "$HOME/node-installed"
+  export NODE_BEFORE_VERSION=v20.11.0
+  run run_nvm_update
+  [ "$status" -eq 0 ]
+  [[ "$output" == \
+    *"Node.js LTS (v22.1.0) installed and set as default (was v20.11.0)."* ]]
 
   export NODE_ACTIVE_VERSION=v20.0.0
   run run_nvm_update
@@ -200,7 +234,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$TOOLCHAIN_LOG")" = \
     'brew:upgrade --no-ask uv|auto=1|analytics=1|retries=0' ]
-  [[ "$output" == *"uv updated through Homebrew"* ]]
+  [[ "$output" == *"uv is already up to date (1.2.3)."* ]]
 }
 
 @test "sys toolchain: Homebrew uv failure never falls through to self-update" {
@@ -224,7 +258,7 @@ EOF
   chmod +x "$UV_RELINK_TARGET"
   run run_zsh 'PATH="$TOOLCHAIN_BREW_PREFIX/bin:$PATH"; update-uv-system'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"uv updated through Homebrew to 1.2.4"* ]]
+  [[ "$output" == *"uv updated through Homebrew: 1.2.3 → 1.2.4."* ]]
 }
 
 @test "sys toolchain: uv self-update requires a successful version probe" {

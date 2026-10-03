@@ -11,6 +11,58 @@ if [[ -n "${_SYS_UPDATE_TOOLS_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# REPLY: the first dotted version printed by a bounded version command. The
+# program resolves to its external path, so no shell function can stand in.
+# Usage: _sys_update_probe_version <seconds> <program> [arguments...]
+_sys_update_probe_version() {
+  local seconds="${1:-3}" program="${2:-}" output="" line=""
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  REPLY=""
+  shift 2 2>/dev/null || return 2
+  program=$(builtin whence -p -- "$program" 2>/dev/null) || return 1
+  output=$(_sys_run_bounded_probe "$seconds" 65536 "$program" "$@" \
+    </dev/null 2>/dev/null) || return 1
+  line="${output%%$'\n'*}"
+  [[ "$line" != *[[:cntrl:]]* \
+    && "$line" =~ '[0-9]+([.][0-9]+)+([-+][0-9A-Za-z.]+)?' ]] || return 1
+  REPLY="$MATCH"
+}
+
+# Reports a version comparison as the step result: equal versions are
+# current, different ones updated, and a missing version leaves only done.
+# Usage: _sys_update_report_version <subject> <before> <after> [owner]
+_sys_update_report_version() {
+  local subject="${1:-}" before="${2:-}" after="${3:-}" owner="${4:-}"
+  local via="${owner:+ through $owner}"
+  if [[ -z "$after" ]]; then
+    _sys_report_result done "" "$subject update completed$via."
+  elif [[ -z "$before" ]]; then
+    _sys_report_result done "now $after" \
+      "$subject update completed$via (now $after)."
+  elif [[ "$before" == "$after" ]]; then
+    _sys_report_result current "$after" \
+      "$subject is already up to date ($after)."
+  else
+    _sys_report_result updated "$before → $after" \
+      "$subject updated$via: $before → $after."
+  fi
+}
+
+# Prints "name<TAB>version" records for installed pipx applications.
+_sys_update_pipx_inventory() {
+  local output="" line env_program="" MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  env_program=$(builtin whence -p env 2>/dev/null) || return 1
+  output=$(_sys_run_bounded_probe 30 262144 \
+    "$env_program" PIP_NO_INPUT=1 pipx list --short </dev/null 2>/dev/null) \
+    || return 1
+  for line in "${(@f)output}"; do
+    [[ "$line" =~ '^([A-Za-z0-9._-]+) ([^[:space:]]+)$' ]] || continue
+    print -r -- "${match[1]}"$'\t'"${match[2]}"
+  done
+}
+
 update-gcloud() {
   local REPLY
   _sys_update_parse_no_args update-gcloud "$@" || return $?
@@ -18,25 +70,32 @@ update-gcloud() {
   _sys_header "Updating Google Cloud SDK"
 
   if ! command -v gcloud &>/dev/null; then
-    _sys_info "gcloud not installed, skipping."
+    _sys_report_result skipped "not installed" "gcloud not installed, skipping."
     return 0
   fi
 
   if command -v dpkg &>/dev/null \
     && dpkg -s google-cloud-cli &>/dev/null; then
-    _sys_warn "Managed by APT — use update-apt instead."
+    _sys_report_result delegated "APT → sys-menu update-apt" \
+      "Managed by APT — use update-apt instead."
     return 0
   fi
   if command -v brew &>/dev/null \
     && { _sys_brew list --formula google-cloud-sdk &>/dev/null \
       || _sys_brew list --cask google-cloud-sdk &>/dev/null; }; then
-    _sys_warn "Managed by Homebrew — use update-brew instead."
+    _sys_report_result delegated "Homebrew → sys-menu update-brew" \
+      "Managed by Homebrew — use update-brew instead."
     return 0
   fi
 
+  local gcloud_before="" gcloud_after=""
+  _sys_update_probe_version 15 gcloud version && gcloud_before="$REPLY"
   _sys_info "Updating components..."
-  if command gcloud components update --quiet >&2; then
-    _sys_success "Google Cloud SDK updated."
+  if command gcloud components update --quiet </dev/null >&2; then
+    _sys_update_probe_version 15 gcloud version \
+      && gcloud_after="$REPLY"
+    _sys_update_report_version "Google Cloud SDK" \
+      "$gcloud_before" "$gcloud_after"
   else
     _sys_error "Google Cloud SDK update failed."
     return 1
@@ -51,19 +110,23 @@ update-awscli() {
 
   if command -v brew &>/dev/null \
     && _sys_brew list awscli &>/dev/null 2>&1; then
+    local aws_before="" aws_after=""
+    _sys_update_probe_version 5 aws --version && aws_before="$REPLY"
     _sys_info "AWS CLI is managed by Homebrew; upgrading that formula."
     HOMEBREW_NO_AUTO_UPDATE=1 _sys_brew upgrade --no-ask awscli \
       </dev/null >&2 || {
       _sys_error "Homebrew failed to update AWS CLI."
       return 1
     }
-    _sys_success "AWS CLI updated through Homebrew."
+    _sys_update_probe_version 5 aws --version && aws_after="$REPLY"
+    _sys_update_report_version "AWS CLI" "$aws_before" "$aws_after" Homebrew
     return 0
   fi
 
   if command -v snap &>/dev/null \
     && command snap list aws-cli &>/dev/null 2>&1; then
-    _sys_warn "AWS CLI is managed by Snap; run update-snap instead."
+    _sys_report_result delegated "Snap → sys-menu update-snap" \
+      "AWS CLI is managed by Snap; run update-snap instead."
     return 0
   fi
 
@@ -75,6 +138,7 @@ update-awscli() {
   _sys_dim "AWS publishes detached signatures rather than a pinned checksum."
   _sys_dim "Follow the official verification procedure before installing:"
   _sys_dim "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+  _sys_report_result blocked "manual installation required"
   return 1
 }
 
@@ -167,7 +231,8 @@ update-repomix() {
   local -i resolve_rc=0
   _sys_repomix_program || resolve_rc=$?
   if (( resolve_rc == 1 )); then
-    _sys_info "No external Repomix executable is installed, skipping."
+    _sys_report_result skipped "not installed" \
+      "No external Repomix executable is installed, skipping."
     return 0
   elif (( resolve_rc != 0 )); then
     _sys_error "The active Repomix executable could not be resolved safely."
@@ -175,7 +240,8 @@ update-repomix() {
   fi
   local current_binary="$REPLY"
   if _sys_repomix_homebrew_managed "$current_binary"; then
-    _sys_warn "Managed by Homebrew — use update-brew instead."
+    _sys_report_result delegated "Homebrew → sys-menu update-brew" \
+      "Managed by Homebrew — use update-brew instead."
     return 0
   fi
 
@@ -246,9 +312,11 @@ update-repomix() {
   }
   local new_version="$REPLY"
   if [[ "$current_version" == "$new_version" ]]; then
-    _sys_success "Repomix already at latest ($new_version)."
+    _sys_report_result current "$new_version" \
+      "Repomix already at latest ($new_version)."
   else
-    _sys_success "Repomix updated to $new_version."
+    _sys_report_result updated "$current_version → $new_version" \
+      "Repomix updated to $new_version."
   fi
   _sys_info "Binary: $new_binary"
 }
@@ -260,9 +328,12 @@ update-starship() {
   _sys_header "Updating Starship"
 
   if ! command -v starship &>/dev/null; then
-    _sys_info "Starship not installed, skipping."
+    _sys_report_result skipped "not installed" "Starship not installed, skipping."
     return 0
   fi
+  local starship_before="" starship_after=""
+  _sys_update_probe_version 3 starship --version \
+    && starship_before="$REPLY"
 
   if command -v brew &>/dev/null \
     && _sys_brew list starship &>/dev/null 2>&1; then
@@ -272,7 +343,10 @@ update-starship() {
       _sys_error "Homebrew failed to update Starship."
       return 1
     }
-    _sys_success "Starship updated through Homebrew."
+    _sys_update_probe_version 3 starship --version \
+      && starship_after="$REPLY"
+    _sys_update_report_version Starship "$starship_before" "$starship_after" \
+      Homebrew
     return 0
   fi
 
@@ -285,13 +359,17 @@ update-starship() {
       _sys_error "Cargo failed to update Starship."
       return 1
     }
-    _sys_success "Starship updated through Cargo."
+    _sys_update_probe_version 3 starship --version \
+      && starship_after="$REPLY"
+    _sys_update_report_version Starship "$starship_before" "$starship_after" \
+      Cargo
     return 0
   fi
 
   _sys_error "Starship's installation owner could not be verified."
   _sys_dim "Update it with its original package manager."
   _sys_dim "Official options: https://starship.rs/installing/"
+  _sys_report_result blocked "installation owner unknown"
   return 1
 }
 
@@ -346,13 +424,14 @@ update-uv-system() {
   local -i resolve_rc=0
   _sys_uv_resolved_program || resolve_rc=$?
   if (( resolve_rc == 1 )); then
-    _sys_info "uv not installed, skipping."
+    _sys_report_result skipped "not installed" "uv not installed, skipping."
     return 0
   elif (( resolve_rc != 0 )); then
     _sys_error "The active uv executable did not resolve to a regular executable path."
     return 1
   fi
-  local uv_program="$REPLY"
+  local uv_program="$REPLY" uv_before=""
+  _sys_uv_updated_version "$uv_program" && uv_before="$REPLY"
 
   if _sys_uv_homebrew_managed "$uv_program"; then
     _sys_info "The active uv executable is managed by Homebrew; upgrading the uv formula."
@@ -383,17 +462,17 @@ update-uv-system() {
       _sys_error "Homebrew completed, but could not verify the updated uv version."
       return 1
     }
-    _sys_success "uv updated through Homebrew to $REPLY."
+    _sys_update_report_version uv "$uv_before" "$REPLY" Homebrew
     return 0
   fi
 
-  if _sys_run_logged uv command env UV_HTTP_RETRIES=0 \
+  if _sys_run_logged "uv self update" command env UV_HTTP_RETRIES=0 \
     "$uv_program" self update; then
     _sys_uv_updated_version "$uv_program" || {
       _sys_error "The uv self-update completed, but could not verify its version."
       return 1
     }
-    _sys_success "uv updated to $REPLY."
+    _sys_update_report_version uv "$uv_before" "$REPLY"
   else
     _sys_error "uv self-update failed or is managed externally."
     return 1
@@ -407,17 +486,65 @@ update-pipx() {
   _sys_header "Updating pipx & its packages"
 
   if ! command -v pipx &>/dev/null; then
-    _sys_info "pipx not installed, skipping."
+    _sys_report_result skipped "not installed" "pipx not installed, skipping."
     return 0
   fi
 
+  local inventory_before="" inventory_after=""
+  local -i inventory_known=0
+  inventory_before=$(_sys_update_pipx_inventory) && inventory_known=1
   _sys_info "Upgrading all pipx packages..."
-  if _sys_run_logged pipx command env PIP_NO_INPUT=1 PIP_RETRIES=0 \
+  if _sys_run_logged "pipx upgrade-all" command env PIP_NO_INPUT=1 PIP_RETRIES=0 \
     pipx upgrade-all; then
-    _sys_success "pipx packages updated."
+    if (( inventory_known )) \
+      && inventory_after=$(_sys_update_pipx_inventory); then
+      local -A versions_before=()
+      local -a changed=() installed=()
+      local record
+      for record in "${(@f)inventory_before}"; do
+        [[ -n "$record" ]] && versions_before[${record%%$'\t'*}]="${record#*$'\t'}"
+      done
+      for record in "${(@f)inventory_after}"; do
+        [[ -n "$record" ]] || continue
+        installed+=("${record%%$'\t'*}")
+        [[ "${versions_before[${record%%$'\t'*}]:-}" == "${record#*$'\t'}" ]] \
+          || changed+=("${record%%$'\t'*}")
+      done
+      _sys_count_noun "${#installed}" application
+      local installed_label="$REPLY"
+      if (( ${#installed} == 0 )); then
+        _sys_report_result current "no applications installed" \
+          "No pipx applications are installed."
+      elif (( ${#changed} == 0 )); then
+        _sys_report_result current "$installed_label" \
+          "pipx applications are already up to date ($installed_label)."
+      else
+        _sys_report_result updated \
+          "${#changed} of $installed_label upgraded (${(j:, :)changed[1,5]})" \
+          "pipx applications updated: ${#changed} of $installed_label (${(j:, :)changed[1,5]})."
+      fi
+    else
+      _sys_report_result done "upgrade-all completed" \
+        "pipx upgrade-all completed."
+    fi
   else
     _sys_error "pipx upgrade-all failed."
     return 1
+  fi
+}
+
+# Reports the Node.js LTS result from the versions before and after.
+_sys_update_report_node() {
+  local before="${1:-}" after="${2:-}"
+  if [[ -n "$before" && "$before" == "$after" ]]; then
+    _sys_report_result current "$after (default)" \
+      "Node.js LTS ($after) is already installed and active as the default."
+  elif [[ -n "$before" ]]; then
+    _sys_report_result updated "$before → $after (default)" \
+      "Node.js LTS ($after) installed and set as default (was $before)."
+  else
+    _sys_report_result updated "$after (default)" \
+      "Node.js LTS ($after) installed and set as default."
   fi
 }
 
@@ -441,8 +568,13 @@ update-node() {
       _sys_info "fnm itself is managed by Homebrew — updating Node.js LTS only."
     fi
 
+    local fnm_before=""
+    fnm_before=$(
+      _sys_run_bounded_probe 3 65536 "$fnm_program" current 2>/dev/null
+    ) || fnm_before=""
+    [[ "$fnm_before" == v<->.<->.<-> ]] || fnm_before=""
     _sys_info "Installing latest Node.js LTS via fnm..."
-    if _sys_run_logged fnm-install command "$fnm_program" install --lts; then
+    if _sys_run_logged "fnm install --lts" command "$fnm_program" install --lts; then
       local -i phase_failures=0
       if ! command "$fnm_program" use lts-latest </dev/null >&2; then
         _sys_error "Node.js LTS was installed, but activation failed."
@@ -465,7 +597,7 @@ update-node() {
         _sys_error "Node.js LTS was installed, but could not verify fnm's active version."
         return 1
       }
-      _sys_success "Node.js LTS ($lts_version) installed and set as default."
+      _sys_update_report_node "$fnm_before" "$lts_version"
     else
       _sys_error "fnm failed to install Node.js LTS."
       return 1
@@ -483,8 +615,11 @@ update-node() {
       return 1
     fi
 
+    local nvm_before=""
+    nvm_before=$(nvm current </dev/null 2>/dev/null) || nvm_before=""
+    [[ "$nvm_before" == v<->.<->.<-> ]] || nvm_before=""
     _sys_info "Installing latest Node.js LTS via nvm..."
-    if _sys_run_logged nvm-install nvm install --lts; then
+    if _sys_run_logged "nvm install --lts" nvm install --lts; then
       local lts_version
       lts_version=$(nvm version "lts/*" 2>/dev/null) || lts_version=""
 
@@ -493,14 +628,16 @@ update-node() {
         return 1
       }
       local -i phase_failures=0
-      if ! nvm alias default "$lts_version" </dev/null >&2; then
+      if ! _sys_run_logged_here "nvm alias default $lts_version" \
+        nvm alias default "$lts_version"; then
         _sys_error "Node.js LTS was installed, but default selection failed."
         _sys_dim "Retry the default selection: nvm alias default $lts_version"
         phase_failures=$(( phase_failures + 1 ))
       fi
       # Keep activation in the invoking shell: output capture through a pipeline
       # would discard nvm's PATH/session changes even when it returned success.
-      if ! nvm use "$lts_version" </dev/null >&2; then
+      if ! _sys_run_logged_here "nvm use $lts_version" \
+        nvm use "$lts_version"; then
         _sys_error "Node.js LTS was installed, but activation failed."
         _sys_dim "Retry activation: nvm use $lts_version"
         phase_failures=$(( phase_failures + 1 ))
@@ -512,14 +649,15 @@ update-node() {
         _sys_error "Node.js LTS was installed, but could not verify nvm's active version."
         return 1
       }
-      _sys_success "Node.js LTS ($lts_version) installed and set as default."
+      _sys_update_report_node "$nvm_before" "$lts_version"
     else
       _sys_error "nvm failed to install Node.js LTS."
       return 1
     fi
 
   else
-    _sys_info "Neither fnm nor nvm detected, skipping."
+    _sys_report_result skipped "fnm and nvm not detected" \
+      "Neither fnm nor nvm detected, skipping."
     return 0
   fi
 }
@@ -531,13 +669,16 @@ update-rust() {
   _sys_header "Updating Rust Toolchain"
 
   if ! command -v rustup &>/dev/null; then
-    _sys_info "rustup not installed, skipping."
+    _sys_report_result skipped "not installed" "rustup not installed, skipping."
     return 0
   fi
 
+  local rustc_before="" rustc_after=""
+  _sys_update_probe_version 5 rustc --version && rustc_before="$REPLY"
   _sys_info "Updating rustup and toolchains..."
-  if _sys_run_logged rust command env RUSTUP_MAX_RETRIES=0 rustup update; then
-    _sys_success "Rust toolchain updated."
+  if _sys_run_logged "rustup update" command env RUSTUP_MAX_RETRIES=0 rustup update; then
+    _sys_update_probe_version 5 rustc --version && rustc_after="$REPLY"
+    _sys_update_report_version "Rust (rustc)" "$rustc_before" "$rustc_after"
   else
     _sys_error "Rust update failed."
     return 1
@@ -666,10 +807,54 @@ _sys_update_ai_parse_results() {
   done
 }
 
+# REPLY: the aggregate outcome; reply=(detail) built only from the validated
+# records' canonical labels and fixed outcomes.
+# Usage: _sys_update_ai_result_summary <report> <dry-run>
+_sys_update_ai_result_summary() {
+  local report="${1:-}" dry_run="${2:-0}" line outcome label
+  local -a fields=() updated_labels=() parts=()
+  local -i updated=0 current=0 failed=0 skipped=0 planned=0 not_run=0
+  for line in "${(@f)report}"; do
+    fields=("${(@ps:	:)line}")
+    label="${fields[3]:-}"
+    outcome="${fields[4]:-}"
+    case "$outcome" in
+      updated)         (( ++updated )); updated_labels+=("$label") ;;
+      already-current) (( ++current )) ;;
+      failed)          (( ++failed )) ;;
+      skipped)         (( ++skipped )) ;;
+      planned)         (( ++planned )) ;;
+      not-run)         (( ++not_run )) ;;
+    esac
+  done
+  if (( dry_run )); then
+    (( planned )) && parts+=("$planned planned")
+  else
+    (( updated )) && parts+=("$updated updated (${(j:, :)updated_labels})")
+    (( current )) && parts+=("$current current")
+  fi
+  (( failed )) && parts+=("$failed failed")
+  (( skipped )) && parts+=("$skipped skipped")
+  (( not_run )) && parts+=("$not_run not run")
+  reply=("${(j: · :)parts}")
+  if (( failed )); then
+    REPLY=failed
+  elif (( dry_run )); then
+    REPLY=planned
+  elif (( updated )); then
+    REPLY=updated
+  elif (( current )); then
+    REPLY=current
+  else
+    REPLY=skipped
+  fi
+}
+
 # Private aggregate adapter. AI lifecycle and updater validation remain owned
 # by the public AI suite; System forwards aggregate authorization flags and
 # consumes only the owner's versioned result records.
 _sys_update_ai_tools() {
+  local REPLY
   local -a reply=()
   _sys_update_ai_load_owner || return 1
   local result_report=""
@@ -678,7 +863,9 @@ _sys_update_ai_tools() {
     --result-tsv "$@") || ai_rc=$?
 
   local -a failure_details=()
+  local -i report_valid=0
   if _sys_update_ai_parse_results "$result_report"; then
+    report_valid=1
     failure_details=("${reply[@]}")
   else
     _sys_error "The AI updater returned an invalid result report."
@@ -696,6 +883,14 @@ _sys_update_ai_tools() {
   fi
   if (( ${+_SYS_UPDATE_STEP_FAILURE_DETAILS} )); then
     _SYS_UPDATE_STEP_FAILURE_DETAILS=("${failure_details[@]}")
+  fi
+  if (( report_valid )); then
+    local -i ai_dry_run=0
+    (( ${@[(Ie)--dry-run]} )) && ai_dry_run=1
+    _sys_update_ai_result_summary "$result_report" "$ai_dry_run"
+    _sys_report_result "$REPLY" "${reply[1]}"
+  else
+    _sys_report_result failed "result report is invalid"
   fi
   return $ai_rc
 }

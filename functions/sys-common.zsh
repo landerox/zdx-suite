@@ -18,6 +18,10 @@ _sys_color_enabled() {
 }
 
 _sys_header()  {
+  if (( ${+functions[_zdx_ui_heading]} )); then
+    _zdx_ui_heading "$1"
+    return
+  fi
   if _sys_color_enabled; then
     printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
   else
@@ -131,13 +135,6 @@ _sys_confirm() {
 }
 
 # --- Time and string helpers -----------------------------------------------
-
-_sys_format_duration() {
-  local elapsed="${1:-0}"
-  local mins=$(( elapsed / 60 ))
-  local secs=$(( elapsed % 60 ))
-  printf "%dm %02ds" "$mins" "$secs"
-}
 
 _sys_timed() {
   local label="$1"
@@ -461,84 +458,186 @@ _sys_npm_install_g() {
 
   local -a prefix_arguments=()
   [[ -n "$expected_prefix" ]] && prefix_arguments=(--prefix "$expected_prefix")
-  _sys_run_logged npm-global command env npm_config_fetch_retries=0 \
+  _sys_run_logged "npm install -g $pkg" \
+    command env npm_config_fetch_retries=0 \
     "$npm_program" install -g "${prefix_arguments[@]}" -- "$pkg"
 }
 
-# --- Output capture helper --------------------------------------------------
+# --- Command output services -------------------------------------------------
+# docs/output-spec.md owns the vocabulary and rendering. Each wrapper checks
+# the core service at call time and keeps a plain fallback, so a standalone
+# source of this suite still works without functions.zsh.
 
-# Run "$@" with all output captured in a private temp directory and surface a
-# bounded, visibly escaped tail on failure. Returns the command's exit code.
-# Usage: _sys_run_logged <label> <cmd> [args...]
-_sys_run_logged() {
-  setopt LOCAL_OPTIONS PIPE_FAIL
-  local label="${1:-cmd}"; shift
-  (( $# > 0 )) || return 2
-  local max_capture_bytes="${SYS_COMMAND_CAPTURE_MAX_BYTES:-262144}"
-  [[ "$max_capture_bytes" =~ '^[0-9]+$' \
-    && ${#max_capture_bytes} -le 8 ]] \
-    && (( max_capture_bytes >= 4096 && max_capture_bytes <= 16777216 )) \
-    || {
-      _sys_error "SYS_COMMAND_CAPTURE_MAX_BYTES must be between 4096 and 16777216."
-      return 2
-    }
-  local temp_root="${TMPDIR:-/tmp}"
-  local capture_dir
-  capture_dir=$(command mktemp -d "$temp_root/zdx-sys-command.XXXXXX") \
-    || return 1
-  [[ -d "$capture_dir" && ! -L "$capture_dir" \
-    && "${capture_dir:h:A}" == "${temp_root:A}" \
-    && "${capture_dir:t}" == zdx-sys-command.* ]] || {
-      [[ -d "$capture_dir" && ! -L "$capture_dir" ]] \
-        && command rm -rf "$capture_dir" 2>/dev/null
-      return 1
-    }
-  local capture_log="$capture_dir/output.log"
-  local -i command_rc=0
-  local previous_umask
-  previous_umask=$(umask)
+# REPLY: "<count> <noun>". Usage: _sys_count_noun <count> <singular> [plural]
+_sys_count_noun() {
+  if (( ${+functions[_zdx_count_noun]} )); then
+    _zdx_count_noun "$@"
+    return
+  fi
+  local count="${1:-}" singular="${2:-}" plural="${3:-${2:-}s}"
+  [[ "$count" == <-> && -n "$singular" ]] || return 2
+  if (( count == 1 )); then REPLY="1 $singular"; else REPLY="$count $plural"; fi
+}
 
-  {
-    umask 077
-    command chmod 700 "$capture_dir" 2>/dev/null || return 1
-    # A long silent step is indistinguishable from a hang, so announce that
-    # this command runs with its output captured privately.
-    _sys_dim \
-      "Running $(_sys_display_escape "$label"); output is captured and shown only on failure."
-    # The private umask protects only the capture; the command keeps the
-    # caller's umask so tool-owned files receive their usual modes.
-    { umask "$previous_umask"; "$@" } </dev/null 2>&1 \
-      | command tail -c "$max_capture_bytes" >"$capture_log"
-    local -a pipeline_status=("${pipestatus[@]}")
-    command_rc="${pipeline_status[1]:-1}"
-    (( command_rc == 0 && ${pipeline_status[2]:-1} != 0 )) \
-      && command_rc="${pipeline_status[2]}"
-    if (( command_rc != 0 )) && [[ -s "$capture_log" ]]; then
-      _sys_dim "Error details for $(_sys_display_escape "$label"):"
-      local captured_line normalized_line
-      while IFS= read -r captured_line || [[ -n "$captured_line" ]]; do
-        normalized_line="${captured_line:l}"
-        if [[ "$normalized_line" == *password* \
-          || "$normalized_line" == *token* \
-          || "$normalized_line" == *secret* \
-          || "$normalized_line" == *authorization* \
-          || "$normalized_line" == *credential* \
-          || "$normalized_line" == *api-key* \
-          || "$normalized_line" == *api_key* \
-          || "$normalized_line" == *apikey* \
-          || "$normalized_line" == *signature* \
-          || "$normalized_line" == *cookie* ]]; then
-          _sys_dim "  [redacted potentially sensitive output]"
-        else
-          _sys_dim "  $(_sys_display_escape "$captured_line")"
-        fi
-      done < <(command tail -n 80 "$capture_log" 2>/dev/null)
+# REPLY: one display duration. Usage: _sys_duration_label <seconds>
+_sys_duration_label() {
+  if (( ${+functions[_zdx_format_duration]} )); then
+    _zdx_format_duration "${1:-0}"
+    return
+  fi
+  local -i seconds="${${1:-0}%%.*}"
+  REPLY="${seconds}s"
+}
+
+# Aligned columns from TAB-separated rows; plain lines when a row is rejected.
+# Usage: _sys_table [--outcome-column N] <header-tsv> [row-tsv...]
+_sys_table() {
+  if (( ${+functions[_zdx_ui_table]} )); then
+    _zdx_ui_table "$@" && return 0
+  fi
+  [[ "${1:-}" == --outcome-column ]] && shift 2
+  local table_row
+  for table_row in "$@"; do
+    _sys_dim "${table_row//$'\t'/  }"
+  done
+}
+
+# Usage: _sys_step_banner <index> <total> <label>
+_sys_step_banner() {
+  if (( ${+functions[_zdx_ui_step_banner]} )); then
+    _zdx_ui_step_banner "$@"
+    return
+  fi
+  _sys_info "Step ${1:-?}/${2:-?}: ${3:-}"
+}
+
+# Usage: _sys_step_result <index> <total> <label> <outcome> <detail> <seconds>
+_sys_step_result() {
+  if (( ${+functions[_zdx_ui_step_result]} )); then
+    _zdx_ui_step_result "$@"
+    return
+  fi
+  local REPLY
+  _sys_duration_label "${6:-0}"
+  _sys_dim "${3:-}: ${4:-done}${5:+ — $5} ($REPLY)"
+}
+
+# Runs one step in the current shell; reply=(outcome detail seconds). It never
+# redirects the step's input or output.
+_sys_step_exec() {
+  if (( ${+functions[_zdx_step_exec]} )); then
+    _zdx_step_exec "$@"
+    return
+  fi
+  local -i _sys_step_started=$SECONDS _sys_step_rc=0
+  "$@" || _sys_step_rc=$?
+  local _sys_step_outcome=done
+  case $_sys_step_rc in
+    0) ;;
+    124) _sys_step_outcome=timed-out ;;
+    130|143) _sys_step_outcome=interrupted ;;
+    *) _sys_step_outcome=failed ;;
+  esac
+  reply=("$_sys_step_outcome" "" "$(( SECONDS - _sys_step_started ))")
+  return $_sys_step_rc
+}
+
+# Records a terminal outcome for an enclosing aggregate step, or prints the
+# standalone message when there is none. Failure paths normally pass no
+# message because the step already printed its diagnostics.
+# Usage: _sys_report_result <outcome> <detail> [standalone-message]
+_sys_report_result() {
+  local outcome="${1:-}" detail="${2:-}" message="${3:-}"
+  if (( ${+functions[_zdx_step_report]} )); then
+    local -i report_rc=0
+    _zdx_step_report "$outcome" "$detail" || report_rc=$?
+    (( report_rc == 0 )) && return 0
+    (( report_rc == 1 )) || return 2
+  fi
+  [[ -n "$message" ]] || return 0
+  case "$outcome" in
+    updated|current|done|passed) _sys_success "$message" ;;
+    failed|blocked|interrupted|timed-out) _sys_error "$message" ;;
+    *) _sys_info "$message" ;;
+  esac
+}
+
+# True when the active step slot in this shell already holds a report.
+_sys_step_reported() {
+  (( ${+functions[_zdx_step_reported]} )) && _zdx_step_reported
+}
+
+# Prints a dim detail line only when ZDX_VERBOSE=1.
+_sys_verbose_dim() {
+  [[ "${ZDX_VERBOSE:-0}" == 1 ]] || return 0
+  _sys_dim "${1:-}"
+}
+
+# Renders an aggregate summary from "label<TAB>outcome<TAB>seconds<TAB>detail"
+# records; seconds may be empty. Usage: _sys_print_step_summary <title> <record>...
+_sys_print_step_summary() {
+  local title="${1:-Summary}"
+  shift
+  local REPLY record time_label
+  local -a fields=() rows=()
+  for record in "$@"; do
+    fields=("${(@ps:\t:)record}")
+    time_label=""
+    if [[ -n "${fields[3]:-}" ]]; then
+      _sys_duration_label "${fields[3]}"
+      time_label="$REPLY"
     fi
-  } always {
-    command rm -rf "$capture_dir" 2>/dev/null
-    umask "$previous_umask"
-  }
-  return $command_rc
+    rows+=("${fields[1]:-}"$'\t'"${fields[2]:-done}"$'\t'"$time_label"$'\t'"${fields[4]:-}")
+  done
+  _sys_header "$title"
+  _sys_table --outcome-column 2 $'Step\tResult\tTime\tDetail' "${rows[@]}"
+}
+
+# REPLY: the validated SYS_COMMAND_CAPTURE_MAX_BYTES limit.
+_sys_capture_max_bytes() {
+  local max_capture_bytes="${SYS_COMMAND_CAPTURE_MAX_BYTES:-262144}"
+  if [[ ! "$max_capture_bytes" =~ '^[0-9]{4,8}$' ]] \
+    || (( 10#$max_capture_bytes < 4096 \
+      || 10#$max_capture_bytes > 16777216 )); then
+    _sys_error "SYS_COMMAND_CAPTURE_MAX_BYTES must be between 4096 and 16777216."
+    return 2
+  fi
+  REPLY="$(( 10#$max_capture_bytes ))"
+}
+
+# Runs "$@" with closed stdin and its output captured privately. Only a failure
+# replays a bounded, escaped, credential-redacted tail; ZDX_VERBOSE=1 streams
+# the output live instead. <display> is the readable command announced before
+# it runs, never an internal identifier. Returns the command's status.
+# Usage: _sys_run_logged <display> <cmd> [args...]
+_sys_run_logged() {
+  local display="${1:-}" REPLY
+  shift
+  [[ -n "$display" ]] && (( $# > 0 )) || return 2
+  _sys_capture_max_bytes || return 2
+  if (( ${+functions[_zdx_run_captured]} )); then
+    _zdx_run_captured "$display" "$REPLY" 80 "$@"
+    return
+  fi
+  # Standalone fallback without the core: announce and stream the command.
+  _sys_dim "\$ $display"
+  ( "$@" ) </dev/null >&2
+}
+
+# Like _sys_run_logged, but runs in the current shell so a shell function such
+# as nvm can change it. Use it only for commands with small output.
+# Usage: _sys_run_logged_here <display> <cmd> [args...]
+_sys_run_logged_here() {
+  local display="${1:-}" REPLY
+  shift
+  [[ -n "$display" ]] && (( $# > 0 )) || return 2
+  _sys_capture_max_bytes || return 2
+  if (( ${+functions[_zdx_run_captured_here]} )); then
+    _zdx_run_captured_here "$display" "$REPLY" 80 "$@"
+    return
+  fi
+  _sys_dim "\$ $display"
+  "$@" </dev/null >&2
 }
 
 # Keep Homebrew's detached analytics transport out of suite-owned probes and
@@ -901,7 +1000,7 @@ _sys_update_start_sudo_keepalive() {
     return 1
   }
   REPLY="$keepalive_handle"
-  _sys_dim \
+  _sys_verbose_dim \
     "Sudo timestamp refresh is active only for the authorized package entries." \
     || true
   REPLY="$keepalive_handle"
