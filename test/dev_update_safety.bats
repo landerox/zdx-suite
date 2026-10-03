@@ -109,8 +109,10 @@ EOF
 @test "dev update safety: repository hook revisions are frozen objects" {
   local config="$TEST_SUITE_ROOT/.pre-commit-config.yaml"
   [ "$(grep -Ec '^[[:space:]]+rev:' "$config")" -eq 7 ]
+  # pre-commit autoupdate --freeze writes two spaces before its provenance
+  # comment, so the separator width is not part of the frozen-object policy.
   [ "$(grep -Ec \
-    '^[[:space:]]+rev: [0-9a-f]{40} # frozen: [^[:space:]#]+$' \
+    '^[[:space:]]+rev: [0-9a-f]{40}[[:space:]]+# frozen: [^[:space:]#]+$' \
     "$config")" -eq 7 ]
 }
 
