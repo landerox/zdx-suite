@@ -25,9 +25,9 @@ flowchart TD
     modules --> tests["test/*.bats"]
 ```
 
-The core runtime owns configuration loading, shared theme, lazy registration,
-timing/telemetry, plugin discovery, and user overrides. It does not own
-suite-specific business logic.
+The core runtime owns configuration loading, shared theme, command-output
+services, lazy registration, timing/telemetry, plugin discovery, and user
+overrides. It does not own suite-specific business logic.
 
 Suite-owned picker wrappers use the optional core theme at invocation time
 and retain a standalone fallback. The master groups destinations for discovery;
@@ -147,6 +147,16 @@ bounded retention, owner-only state, locking, and atomic replacement.
 `sys-telemetry` provides the System-oriented viewer and hardened clear
 operation for that core data. A suite may label its timed commands, but it MUST
 NOT implement a second telemetry writer or schema.
+
+### Command output
+
+The core runtime owns the command-output vocabulary and renderers defined in
+[`output-spec.md`](output-spec.md): headings, step banners and results,
+summary tables, durations, counted nouns, step result slots, and captured
+child-tool output. Suites call them through thin `_<prefix>_*` wrappers with a
+standalone fallback. A suite MUST NOT introduce a second outcome vocabulary,
+duration format, or failure-capture service. Suite machine protocols, such as
+`ai-update-result-v1`, stay suite-owned and are mapped by their consumer.
 
 ### Dependency installation
 

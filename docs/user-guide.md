@@ -72,6 +72,30 @@ Responsive previews require fzf 0.31 or newer. Native macOS Terminal.app and
 iTerm2 light/dark appearance still need manual validation; the rendering
 changes do not expand any suite's operating-system command support.
 
+### Command output and verbosity
+
+Long-running commands that run several steps, such as `update-system` and
+`dev-update-all`, show a numbered plan, a `── [n/N] Step ──` banner and one
+result line per step, a summary table, and a final verdict. Results use one
+vocabulary: `updated` and `current` only when the command compared the state
+before and after, `done` when a step succeeded without that evidence, plus
+`delegated`, `planned`, `skipped`, `not run`, `failed`, `blocked`,
+`interrupted`, and `timed out`.
+
+Chatty tool output, such as `uv`, `git pull`, or `pre-commit`, is captured
+privately: you see the command as `$ <command>  (output shown on failure)`,
+and only a failure replays its final lines, with potential credentials
+redacted. Package-manager transactions (APT, Homebrew, Snap) always stream
+live, and AI vendor updater output is never shown. To watch every tool live,
+set `ZDX_VERBOSE=1` in `~/.config/zdx/config.zsh` or pass an aggregate's
+`--verbose` flag for one run; verbose output is not redacted.
+
+The final `<suite>:<command> completed in …` line appears once, for the
+command you started. Commands it delegates to, and the steps inside an
+aggregate, do not print their own timing lines; opt-in telemetry still records
+each of them. Durations read `0.4s`, `24s`, `1m 18s`, or `1h 02m`.
+See [`output-spec.md`](output-spec.md) for the full contract.
+
 ### Master catalog
 
 | Group | Destinations |

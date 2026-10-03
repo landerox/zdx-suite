@@ -34,6 +34,7 @@ test/
 ├── test_helper.bash       shared sandbox and process launcher
 ├── sandbox_isolation.bats shared-sandbox isolation from inherited Git state
 ├── lazy_loading.bats      core lazy/eager loading parity
+├── output.bats            core command-output services
 ├── sys_contract.bats      frozen System public-surface parity
 ├── sys_capabilities.bats  System loader and host decision matrix
 ├── sys_diagnostics.bats   portable System diagnostics and stream safety
@@ -84,6 +85,12 @@ test/
 Use a focused file when an area has its own mocks or safety model, such as Git
 identity, System ports, plugin management, or the dependency doctor. Do not
 create a separate test file merely because a production file exists.
+
+### Current core output coverage
+
+| File | Covered boundary |
+| --- | --- |
+| `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; exact step banners and result lines; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; and the outermost-only timing footer with per-level telemetry |
 
 ### Current System refactor coverage
 

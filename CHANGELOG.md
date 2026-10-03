@@ -6,8 +6,26 @@ behavior, verification, and remaining limitations.
 
 ## [Unreleased]
 
+### Added
+
+- A command output contract, [`docs/output-spec.md`](docs/output-spec.md),
+  and shared core services that implement it: one outcome vocabulary with a
+  change-evidence rule, headings, step banners and result lines, summary
+  tables, a single duration format, counted nouns, step result slots, and
+  private capture of child-tool output that replays a bounded, redacted tail
+  only on failure.
+- `ZDX_VERBOSE=1` streams captured tool output live and shows nested headings.
+
+### Changed
+
+- Only the outermost `<suite>:<command>` timing line is printed. Commands
+  delegated to another suite and steps inside an aggregate no longer print
+  their own timing lines; opt-in telemetry still records each of them.
+- Timing lines use the shared duration format, such as `24s` or `1m 18s`.
+
 ### Fixed
 
+- Timing lines keep a decimal point under decimal-comma locales.
 - Menus keep their borders, info separator, scrollbar, and preview frame with
   fzf releases before 0.66, such as Ubuntu 24.04's packaged 0.44.1, which drew
   them in ANSI black and the match counter in white. The shared theme now pins
