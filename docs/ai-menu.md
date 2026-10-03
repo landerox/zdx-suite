@@ -166,10 +166,12 @@ external executable whose version probe failed are reported separately from a
 genuinely absent command.
 
 Hermes is probed with its official `--version` flag and child-local
-`PYTHONUNBUFFERED=1`. A complete first-line `Hermes Agent vX.Y.Z` banner,
-optionally followed by whitespace and vendor detail, is accepted after status
-`0` or a status-`124` deadline reached by its subsequent upstream-status lookup.
-Other nonzero statuses, malformed banners, and oversized output fail closed.
+`PYTHONUNBUFFERED=1`. A complete first-line `Hermes Agent vX.Y.Z` banner, or
+the `Hermes Agent vgit.<commit>[.dirty]` banner of a Git installation (a 7- to
+40-digit lowercase hexadecimal commit), optionally followed by whitespace and
+vendor detail, is accepted after status `0` or a status-`124` deadline reached
+by its subsequent upstream-status lookup. Other nonzero statuses, malformed
+banners, and oversized output fail closed.
 This establishes the installed version only. All CLI version probes receive
 closed stdin, independently cap stdout and stderr at 64 KiB, and use a
 five-second process-group deadline with a one-second termination grace period.
@@ -209,10 +211,25 @@ An ordinary sink failure remains an output-integrity failure. Later eligible
 targets retain ledger entries as `not-run` with reason `interrupted` and the
 same status; already completed and initially skipped or failed entries remain
 unchanged. A cancellation remains successful only
-when planning found no failure before the prompt. After a successful self-updater, ZDX
-compares the bounded pre/post version and validated executable fingerprint. A
-changed version or changed executable counts as `updated`; `already current`
-requires both values to remain unchanged. Every invocation ends with an
+when planning found no failure before the prompt. After a successful
+self-updater, ZDX compares the release identity and the executable content.
+
+- **Release identity:** the version token of the bounded probe line, which is
+  displayed in the plan and result. It is the first dotted version with an
+  optional `-` or `+` suffix, so vendor decorations such as a relative release
+  age (`4h ago`) never count as a change. Hermes uses its banner field instead
+  (`vX.Y.Z` or `vgit.<commit>[.dirty]`), so its build date cannot replace the
+  release. A line without a version is compared verbatim.
+- **Executable content:** the canonical target path and its checksum, plus the
+  exact NVM interpreter when one applies. A launcher symlink that the vendor
+  re-creates for the same release is not a content change; the strict
+  fingerprint, including launcher metadata, still guards the review-to-execution
+  window.
+
+A changed release identity or changed content counts as `updated`;
+`already current` requires both to remain unchanged. A Git installation with
+local changes is noted in the plan; its own updater decides how to treat them.
+Every invocation ends with an
 `AI updater results` ledger containing exactly one terminal human-readable line
 for every requested assistant, including missing, skipped, planned, cancelled,
 and failed targets. Execution summaries keep updated, already-current, failed,

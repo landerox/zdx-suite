@@ -23,6 +23,9 @@ typeset -ga _AI_UPDATE_ARGS=()
 typeset -g _AI_UPDATE_BINARY=""
 typeset -g _AI_UPDATE_CANONICAL=""
 typeset -g _AI_UPDATE_FINGERPRINT=""
+# Canonical target, content checksum, and an NVM interpreter when present.
+# Launcher metadata, such as a re-created symlink, is not part of it.
+typeset -g _AI_UPDATE_CONTENT_ID=""
 typeset -g _AI_UPDATE_PATH_PREFIX=""
 typeset -g _AI_UPDATE_REASON=""
 typeset -g _AI_UPDATE_FAILURE_KIND=""
@@ -156,6 +159,7 @@ _ai_update_capture_binary() {
   _AI_UPDATE_BINARY=""
   _AI_UPDATE_CANONICAL=""
   _AI_UPDATE_FINGERPRINT=""
+  _AI_UPDATE_CONTENT_ID=""
   _AI_UPDATE_PATH_PREFIX=""
   _AI_UPDATE_REASON=""
 
@@ -267,6 +271,8 @@ _ai_update_capture_binary() {
 "${node_state[size]}:${node_state[mtime]}:${node_state[ctime]}:"\
 "${node_checksum_fields[1]}:${node_checksum_fields[2]}:${node_canonical}"
   fi
+  local node_content=""
+  [[ -n "$node_fingerprint" ]] && node_content=":${node_canonical}:${node_checksum_fields[1]}:${node_checksum_fields[2]}"
 
   _AI_UPDATE_BINARY="$launch_path"
   _AI_UPDATE_CANONICAL="$canonical_path"
@@ -278,6 +284,7 @@ _ai_update_capture_binary() {
 "${target_state[uid]}:${target_state[nlink]}:${target_state[size]}:"\
 "${target_state[mtime]}:${target_state[ctime]}:${checksum_fields[1]}:"\
 "${checksum_fields[2]}:${canonical_path}${node_fingerprint}"
+  _AI_UPDATE_CONTENT_ID="${canonical_path}:${checksum_fields[1]}:${checksum_fields[2]}${node_content}"
 }
 
 _ai_update_homebrew_managed() {
@@ -293,6 +300,26 @@ _ai_update_action_label() {
     action+=" ${(q)argument}"
   done
   print -r -- "$action"
+}
+
+# REPLY: the release identity used to compare and display versions.
+# Vendor decorations such as relative release ages or upstream-status
+# suffixes are ignored. Hermes uses its banner field (vX.Y.Z or a Git
+# vgit.<commit>[.dirty] build); other CLIs use the first dotted version with
+# an optional -/+ suffix. A line without one is kept verbatim (status 1).
+_ai_update_version_token() {
+  emulate -L zsh
+  local id="${1:-}" line="${2:-}" MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  REPLY="$line"
+  if [[ "$id" == hermes ]]; then
+    [[ "$line" =~ '^Hermes Agent (v[0-9]+[.][0-9]+[.][0-9]+|vgit[.][0-9a-f]{7,40}([.]dirty)?)([[:space:]]|$)' ]] \
+      || return 1
+    REPLY="${match[1]}"
+    return 0
+  fi
+  [[ "$line" =~ '[0-9]+([.][0-9]+)+([-+][0-9A-Za-z.-]+)?' ]] || return 1
+  REPLY="$MATCH"
 }
 
 _ai_update_classify_output() {
@@ -590,9 +617,9 @@ _ai_update_execute() {
   local -A result_labels=() result_outcomes=() result_reasons=() result_rcs=()
   local id="" label="" cli="" binary="" fingerprint="" version="" action=""
   local path_prefix=""
-  local new_version="" post_fingerprint=""
+  local new_version="" post_fingerprint="" pre_content="" post_content=""
   local -i state_rc=0 failures=0 skipped=0 updated=0 already_current=0
-  local -i planned=0 not_run=0 publication_failed=0
+  local -i planned=0 not_run=0 publication_failed=0 content_changed=0
   local -i authorization_rc=0 final_rc=0 cancelled=0
 
   _ai_header "$title"
@@ -636,12 +663,16 @@ _ai_update_execute() {
           result_rcs[$id]="$state_rc"
           continue
         fi
+        _ai_update_version_token "$id" "$version"
+        version="$REPLY"
         action=$(_ai_update_action_label \
           "$binary" "${_AI_UPDATE_ARGS[@]}")
         _ai_info "$label"
         _ai_label "Binary" "$binary"
         _ai_label "Current" "$version"
         _ai_label "Action" "$action"
+        [[ "$version" == vgit.*.dirty ]] && _ai_dim \
+          "$label: the Git checkout has local changes; its updater decides how to handle them."
         plan_ids+=("$id")
         plan_binaries+=("$binary")
         plan_fingerprints+=("$fingerprint")
@@ -728,6 +759,7 @@ _ai_update_execute() {
           continue
         fi
 
+        pre_content="$_AI_UPDATE_CONTENT_ID"
         _ai_info "Updating $label to the latest version..."
         _ai_update_run_captured \
           "$binary" "$path_prefix" "$id" "${_AI_UPDATE_ARGS[@]}"
@@ -754,8 +786,18 @@ _ai_update_execute() {
             continue
           fi
           post_fingerprint="$_AI_UPDATE_FINGERPRINT"
-          if [[ "$new_version" == "$version" \
-            && "$post_fingerprint" == "$fingerprint" ]]; then
+          post_content="$_AI_UPDATE_CONTENT_ID"
+          _ai_update_version_token "$id" "$new_version"
+          new_version="$REPLY"
+          # Only the canonical target or its bytes count as a changed
+          # executable; a launcher re-created for the same release does not.
+          content_changed=0
+          if [[ -n "$pre_content" && -n "$post_content" ]]; then
+            [[ "$post_content" == "$pre_content" ]] || content_changed=1
+          else
+            [[ "$post_fingerprint" == "$fingerprint" ]] || content_changed=1
+          fi
+          if [[ "$new_version" == "$version" ]] && (( ! content_changed )); then
             _ai_success \
               "$label is already at the latest reported version ($version)."
             result_outcomes[$id]="already-current"

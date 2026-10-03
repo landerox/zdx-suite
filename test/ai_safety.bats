@@ -550,7 +550,7 @@ EOF
   run run_zsh 'ai-update-hermes --yes'
   [ "$status" -eq 0 ]
   [ "$(cat "$HOME/hermes-updated")" = "update --backup --yes" ]
-  [[ "$output" == *"Hermes Agent v0.20.6 -> Hermes Agent v0.20.7"* ]]
+  [[ "$output" == *"Hermes Agent updated: v0.20.6 -> v0.20.7"* ]]
 }
 
 @test "ai safety: updater rejects a group-writable executable target" {

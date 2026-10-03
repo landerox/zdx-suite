@@ -71,6 +71,30 @@ teardown() {
   [[ "$output" == *"version probe failed"* ]]
 }
 
+@test "ai probe recovery: a Hermes Git build header is a complete version" {
+  export HERMES_HEADER='Hermes Agent vgit.ddc0e65.dirty (2026.9.24) · upstream ddc0e659'
+  run run_zsh '_ai_probe_cli hermes'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HERMES_HEADER" ]
+
+  export HERMES_PROBE_RC=124
+  run run_zsh '_ai_probe_cli hermes'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HERMES_HEADER" ]
+}
+
+@test "ai probe recovery: malformed Hermes Git build headers fail closed" {
+  local header probe_rc
+  for probe_rc in 0 124; do
+    for header in 'Hermes Agent vgit.XYZ' 'Hermes Agent vgit.' \
+      'Hermes Agent vgit.ddc0e6' 'Hermes Agent vgit.ddc0e65.clean'; do
+      export HERMES_PROBE_RC="$probe_rc" HERMES_HEADER="$header"
+      run run_zsh '_ai_probe_cli hermes'
+      [ "$status" -ne 0 ]
+    done
+  done
+}
+
 @test "ai probe recovery: Hermes runtime failure is not accepted as a trailing timeout" {
   export HERMES_PROBE_RC=9
   run run_zsh 'ai-update-hermes --yes'
