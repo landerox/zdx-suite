@@ -628,9 +628,10 @@ command-specific interface; do not assume the aggregate flags apply to every
 updater. The structured result channel is captured internally; AI progress and
 the final one-line result for every assistant remain visible on stderr, while
 `update-system` itself emits no stdout data. The report must contain all eight
-canonical targets or the AI step fails closed. The AI-owned summary counts a successful version or validated-binary
-fingerprint change as `updated`. `Already current` requires both version and
-fingerprint to remain unchanged; failed and skipped counts stay independent.
+canonical targets or the AI step fails closed. The AI-owned summary counts a
+changed release version or changed executable content as `updated`.
+`Already current` requires both to remain unchanged; failed and skipped counts
+stay independent.
 
 APT operation announcements are compact by default (`sudo -n apt-get update`,
 `full-upgrade -y`, and `autoremove -y`). During an actual execution, add
@@ -1952,14 +1953,20 @@ assistant state. Failed updaters suppress potentially sensitive vendor output
 while distinguishing authentication, other vendor preconditions, and generic
 updater failures. ZDX suggests an explicit next step but never logs in or
 reinstalls a CLI automatically. After a successful self-updater, ZDX compares
-the bounded pre/post version and validated executable fingerprint. A changed
-version or executable counts as `updated`; `already current` requires both to
+the release version and the executable content. The version is the release
+token of the probe line, so a vendor decoration such as `(released …, 4h ago)`
+is ignored; the content is the canonical executable and its checksum, so a
+launcher symlink re-created for the same release is not an update. A changed
+version or content counts as `updated`; `already current` requires both to
 remain unchanged. The final AI summary reports updated, already-current,
 failed, and skipped tools separately.
 
-Hermes version discovery uses `--version`. If its later update-status lookup
-times out after printing a valid installed-version banner, that version remains
-usable for the update plan. The vendor version command may fetch update
+Hermes version discovery uses `--version`. A Git installation reports a
+`vgit.<commit>` build, with `.dirty` when the checkout has local changes; ZDX
+accepts it, notes local changes in the plan, and leaves their handling to the
+Hermes updater. If its later update-status lookup times out after printing a
+valid installed-version banner, that version remains usable for the update
+plan. The vendor version command may fetch update
 metadata and write its own `.update_check` cache, including during a dry run.
 The probe keeps its deadline and output limits and never starts the updater.
 OpenCode's known `Upgrade failed` result is treated as failure even when its

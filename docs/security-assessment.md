@@ -954,11 +954,16 @@ in a compromised release channel and then installed, potentially as root.
   aggregate excludes the AI step under `--safe-only` and passes
   `--skip-homebrew-managed` after its Homebrew step. An NVM-resolved plan also
   freezes and revalidates the exact Node interpreter's metadata and checksum.
-  After a successful self-updater, the bounded pre/post version and validated
-  executable fingerprint determine whether the result is `updated` or
-  `already current`; the latter requires both to remain unchanged. Failed and
-  skipped targets remain separate summary outcomes. A zero exit status alone
-  therefore cannot overstate an unchanged CLI as updated. With `--result-tsv`,
+  After a successful self-updater, the normalized release token of the bounded
+  version probe and the canonical executable content (target path and
+  checksum, plus any NVM interpreter) determine whether the result is
+  `updated` or `already current`; the latter requires both to remain
+  unchanged. Vendor decorations such as relative release ages and launcher
+  symlinks re-created for the same release cannot report an update, while the
+  strict launcher fingerprint still guards the review-to-execution window. A
+  Hermes Git build is accepted only as a complete `vgit.<commit>[.dirty]`
+  banner. Failed and skipped targets remain separate summary outcomes. A zero
+  exit status alone therefore cannot overstate an unchanged CLI as updated. With `--result-tsv`,
   the AI owner emits one versioned, bounded record for every requested target.
   System captures only that stdout protocol, requires all eight canonical IDs
   and labels once and in order, validates fixed outcomes, reasons, and statuses,

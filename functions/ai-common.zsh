@@ -18,6 +18,10 @@ _ai_color_enabled() {
 }
 
 _ai_header() {
+  if (( ${+functions[_zdx_ui_heading]} )); then
+    _zdx_ui_heading "$1"
+    return
+  fi
   if _ai_color_enabled; then
     printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
   else
@@ -779,11 +783,12 @@ _ai_probe_cli() {
     output="${output%%$'\n'*}"
     if [[ "$cmd" == hermes ]]; then
       # Only Hermes' complete, typed version header can survive a timeout of
-      # its subsequent update-status lookup. Other failures remain failures;
+      # its subsequent update-status lookup. A Git installation reports its
+      # build as vgit.<commit>[.dirty]. Other failures remain failures;
       # neither that lookup nor this probe certifies the latest release.
       if (( probe_rc == 0 || probe_rc == 124 )) \
         && [[ "$output" != *[[:cntrl:]]* \
-          && "$output" =~ '^Hermes Agent v[0-9]+[.][0-9]+[.][0-9]+([[:space:]].*)?$' ]]; then
+          && "$output" =~ '^Hermes Agent v([0-9]+[.][0-9]+[.][0-9]+|git[.][0-9a-f]{7,40}([.]dirty)?)([[:space:]].*)?$' ]]; then
         operation_rc=0
       else
         operation_rc=2

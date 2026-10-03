@@ -26,6 +26,12 @@ behavior, verification, and remaining limitations.
 ### Fixed
 
 - Timing lines keep a decimal point under decimal-comma locales.
+- AI updates compare the release version instead of the whole version line, so
+  a vendor's relative release age, such as Amp's `(released …, 4h ago)`, no
+  longer reports an update. A launcher symlink that a vendor re-creates for the
+  same release, as Codex does, is now `already current`; only a changed
+  canonical executable counts as an update. Hermes Git installations, which
+  report `vgit.<commit>[.dirty]`, pass the version probe instead of failing.
 - Menus keep their borders, info separator, scrollbar, and preview frame with
   fzf releases before 0.66, such as Ubuntu 24.04's packaged 0.44.1, which drew
   them in ANSI black and the match counter in white. The shared theme now pins

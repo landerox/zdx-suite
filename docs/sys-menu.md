@@ -782,10 +782,12 @@ statuses. Missing, duplicate, reordered, mislabeled, or malformed records fail
 closed without being interpolated into UI. It never calls an `_ai_*` private
 helper or reimplements assistant detection, executable validation, update
 arguments, or human-output parsing. The AI owner compares each successful
-self-updater's bounded pre/post version and executable fingerprint. A changed
-version or changed validated executable counts as `updated`; `already current`
-requires both to remain unchanged. Independent `failed` and `skipped` counts
-complete its own summary, and every target receives a terminal ledger entry.
+self-updater's normalized release identity and canonical executable content,
+as specified in [`ai-menu.md`](ai-menu.md). A changed release or changed
+content counts as `updated`; `already current` requires both to remain
+unchanged, so a vendor's relative release age or re-created launcher symlink
+is not an update. Independent `failed` and `skipped` counts complete its own
+summary, and every target receives a terminal ledger entry.
 
 `update-hermes` remains only as a frozen compatibility command. It forwards
 all arguments to the public `ai-menu ai-update-hermes` owner and preserves that
