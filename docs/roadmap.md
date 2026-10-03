@@ -355,6 +355,23 @@ release-quality gate:
 No new suite should copy a legacy pattern merely to match current code. See
 [`menus.md`](menus.md) for the audit findings and staged migration notes.
 
+### Presentation and output conformance (in progress)
+
+[`output-spec.md`](output-spec.md) and the shared-presentation rules in
+[`menu-spec.md`](menu-spec.md) define one look for every suite. System and
+Developer are migrated first. Each remaining suite receives its own pass that
+also applies the output-spec adoption checklist:
+
+| Suite | Pending menu presentation items |
+| --- | --- |
+| Git | `○` mark for unavailable rows; `_git_label` through `_zdx_ui_label` |
+| Workspace | `○` mark for unavailable rows; `_ws_label` follows Git |
+| VPN | keyed state facts within 76 columns; `_vpn_label` through `_zdx_ui_label` |
+| AI | context facts instead of the `Local AI assistants` title; `_ai_label` through `_zdx_ui_label` |
+| File | `~`-abbreviated directory scope instead of the base name |
+| CI, Environment, ZDX master control | `~`-abbreviated directory scope |
+| Hugging Face, GPU, Network | label helpers through `_zdx_ui_label` |
+
 ### 🧠 Phase 2: AI Execution, APIs & Database Dashboards (v0.2.0 - Next Milestone)
 
 *Focus: Bringing LLMs, REST/gRPC clients, and local databases directly to the command line to boost backend and data development workflows.*

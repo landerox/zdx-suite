@@ -514,7 +514,7 @@ _dev_interactive() {
 
   if (( fzf_status != 0 )); then
     _dev_fzf_rc_is_cancel "$fzf_status" && return 0
-    _dev_error "Unable to open the interactive Dev menu."
+    _dev_error "Unable to open the interactive Dev menu (status $fzf_status)."
     return 1
   fi
 

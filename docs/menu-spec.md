@@ -40,6 +40,27 @@ dashboards may use a data format suited to their records. The canonical
 7. **Accessibility is semantic.** Meaning cannot depend only on color, glyphs,
    alignment, or terminal width.
 
+## Shared presentation
+
+Every top-level command menu renders the same frame, so suites look alike and
+differ only where their task differs:
+
+- **Shared:** the `fzf` preset (height, layout, border, pointer, delimiter,
+  visible field, preview program and window, and theme), the prompt pattern
+  `<suite> >`, the keyboard legend, section rows, entry indentation,
+  unavailable-action marks, the context-block grammar, and the selection,
+  snapshot, and cancellation flow.
+- **Suite-owned:** the prompt name, sections and rows, the facts in the context
+  block, and capability behavior that the suite contract documents, such as
+  Dev's multi-select and the App and VPN record exceptions.
+
+A suite whose actions target a location therefore shows one more header line
+than a host-wide suite: Dev names its project and Git its repository, while
+System has no scope line. That difference is intended. Content browsers, such
+as branch or service pickers, keep the layout their content needs under
+[Preview layout](#preview-layout). `test/menu_presentation.bats` enforces the
+shared frame across suites.
+
 ## Command menu record format
 
 Each row sent to `fzf` is one newline-terminated record:
@@ -160,10 +181,32 @@ _<prefix>_menu_entry() {
 Arguments appear in the same order as output fields. The helpers emit data to
 stdout and diagnostics to stderr.
 
-Dependency-aware suites MAY decorate a label, for example
-`○ Create Pull Request (missing: gh)`. The missing dependency MUST be written
-in text; a glyph or color alone is insufficient. Decoration MUST NOT change the
-command field.
+### Unavailable actions
+
+An action whose requirement or context is absent stays listed and keeps its
+command field. A suite that checks availability MUST decorate the label in
+exactly this form:
+
+```text
+  ○ Create Pull Request (missing: gh)
+  ○ Run Tests With Coverage (missing: pytest in .venv, pytest-cov or coverage in .venv)
+  ○ Show Branch Graph (unavailable: repository)
+```
+
+- A `○` follows the two-space entry indent. It keeps a marked row identifiable
+  when a narrow terminal truncates the end of a long label.
+- The parenthesized suffix carries the meaning in text. `missing:` names absent
+  requirements; `unavailable:` names absent context. Several facts share one
+  pair of parentheses, separated by `;` and a space.
+- A requirement is a command or package name. A short qualifier without
+  parentheses is allowed when the bare name would mislead, such as
+  `pytest in .venv` or `loaded nvm`. Alternatives use `or`, and several
+  requirements are separated by `,` and a space.
+- Do not nest parentheses or put remediation in a label. The dispatcher's
+  focused error and the suite contract explain how to satisfy a requirement;
+  an opt-in that changes availability belongs in the header's state line.
+- A glyph or color alone is never sufficient, and decoration MUST NOT change
+  the command field.
 
 ## Explicit dispatcher
 
@@ -379,18 +422,39 @@ wrapper also used by content browsers unless every invocation supports them.
 
 The top-level prompt identifies the suite: `git >`, `env >`. A content browser
 may identify its current activity: `git branches >`, `sys services >`.
-The header separates useful context from keyboard help:
+The header separates useful context from keyboard help, in this order:
 
-1. optional current context, such as repository, branch, host, or authentication state;
+1. an optional context block of at most two lines:
+   - a **scope line** naming the location the actions affect, such as
+     `Repository: zdx-suite` or `Project: zdx-suite`. Suites whose actions
+     target a repository, project, workspace, or directory show it. A
+     host-wide suite such as System omits it, because the host is implicit;
+   - a **state line** of facts that change what the actions can do, such as
+     identity, backends, environments, and opt-ins;
 2. an accurate keyboard legend for bindings active in that exact `fzf` call;
 3. additional multi-selection keys, only when enabled.
 
-Example:
+Examples:
 
 ```text
-Repository: zdx-suite | Branch: main | Identity: configured
+OS: linux | Environment: wsl | Packages: apt | Services: systemd
 Type to filter | Enter run | Esc cancel | Ctrl-/ details
 ```
+
+```text
+Project: zdx-suite
+Stack: python | .venv: present | Ephemeral runners: disabled
+Type to filter | Enter run | Esc cancel | Ctrl-/ details
+```
+
+Context lines are `Key: value` facts joined by ` | `. Values are short tokens
+or names, such as `present`, `missing`, `disabled`, or `apt`, never sentences
+or titles. A repository or project scope shows its name; a directory scope
+shows its path with `HOME` abbreviated to `~`. Put the most decision-relevant
+fact first: `fzf` truncates a line wider than its window instead of wrapping
+it, so keep typical lines within 76 display columns, which fit an 80-column
+terminal inside the border. A suite without decision-relevant context omits
+the block. Detailed state belongs in a report action, not in the header.
 
 Rules:
 
@@ -618,6 +682,10 @@ Before declaring a menu conforming:
 - [ ] `fzf` options are built at invocation time.
 - [ ] The core theme is optional during standalone suite sourcing.
 - [ ] Headers and prompts contain no raw ANSI and advertise only active keys.
+- [ ] The context block has at most a scope line and a state line of
+      `Key: value` facts.
+- [ ] Unavailable rows use `○ <label> (missing: …)` or `(unavailable: …)`
+      without nested parentheses or remediation text.
 - [ ] Previews are read-only, masked, responsive, and non-duplicative.
 - [ ] Esc and declined confirmations return `0` without mutation.
 - [ ] Direct invocation repeats dependency and capability checks.

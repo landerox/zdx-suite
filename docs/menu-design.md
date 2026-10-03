@@ -301,3 +301,34 @@ yellow counter, and the
 The gutter glyph has no equivalent before 0.66.0, so identical rendering on an
 older host still requires a newer fzf; that remains the user's installation
 choice rather than a raised minimum.
+
+## Cross-suite consistency review
+
+A side-by-side review of the System and Developer menus, captured with real
+fzf 0.74.4 in an isolated 120 by 40 tmux session and through the
+presentation tests' recording fzf for every command menu, compared what each
+suite shares and where they differ.
+
+The frame was already shared: both menus emitted byte-identical chrome
+sequences for the border, prompt, counter, separator, legend, section rows,
+and preview, because both use the contract preset. The differences were in
+content that the specification had left open:
+
+| Area | Observed | Decision |
+| --- | --- | --- |
+| Context lines | Dev and Git show a scope line (`Project:`, `Repository:`) above a state line; System shows one state line; VPN puts unkeyed tokens on a 100-column line; AI shows a title | Intended for scope versus host suites, now specified as an optional scope line plus a state line of `Key: value` facts |
+| Unavailable actions | AI used `○` with text as the specification example did; System, Workspace, and Git used text only; Dev nested remediation in parentheses, such as `(missing: pytest (installed in .venv))` | One canonical form, `○ <label> (missing: …)`, with short requirement tokens and no nested parentheses |
+| Key-value lines | Key widths of 16 to 28 columns, with and without indentation or colons, several in forced bright white or other fixed colors | One core service, `_zdx_ui_label`: 18-column keys with one colon, bold in the terminal's own foreground |
+| Open failure | Dev omitted the fzf status that System reports | Dev reports the status |
+
+The scope line is a deliberate difference. Dev and Git actions modify the
+current project or repository, so naming it on its own line reduces
+wrong-directory mistakes; System acts on the host, which needs no scope line.
+The leading `○` keeps an unavailable row identifiable when a narrow terminal
+truncates the end of its label, while the text keeps the meaning without the
+glyph. Remediation, such as Dev's ephemeral-runner opt-in, stays in the
+header's state line, the command's focused error, and the suite contract.
+
+`test/menu_presentation.bats` now checks the context-block grammar for every
+command menu and the availability marks for the migrated suites. The
+remaining suites are listed in the roadmap until their presentation pass.

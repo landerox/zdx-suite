@@ -958,7 +958,7 @@ _ai_menu_entry() {
     local dep
     for dep in ${(s:,:)deps}; do
       if ! command -v "$dep" &>/dev/null; then
-        missing="${missing:+$missing,}$dep"
+        missing="${missing:+$missing, }$dep"
       fi
     done
   fi

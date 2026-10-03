@@ -124,3 +124,45 @@ for path in sorted(root.glob("*.argv")):
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "menu presentation: context blocks and availability marks share one grammar" {
+  # Without a project environment, Dev must exercise its availability marks.
+  : > "$HOME/project/pyproject.toml"
+  capture_command_menus
+
+  run python3 - "$MENU_UI_DIR" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+# Suites whose unavailable rows use the canonical mark. Git and Workspace keep
+# their earlier text-only form until their presentation pass (docs/roadmap.md).
+canonical = {"ai", "dev", "sys"}
+fact = r"(?:missing|unavailable): [^();]+"
+mark = re.compile(r"^  ○ \S.* \(" + fact + r"(?:; " + fact + r")*\)$")
+marked = {}
+for suite in "dev file git ws sys py ai docker env ci net gpu hf zdx".split():
+    args = (root / (suite + ".argv")).read_bytes().decode().split("\0")[:-1]
+    header = [arg.partition("=")[2] for arg in args if arg.startswith("--header=")][-1]
+    lines = header.splitlines()
+    legend = next(i for i, line in enumerate(lines) if line.startswith("Type to filter | "))
+    context = lines[:legend]
+    assert len(context) <= 2, (suite, context)
+    assert all(line and line == line.strip() for line in context), (suite, context)
+    count = 0
+    for row in (root / (suite + ".rows")).read_text().splitlines():
+        label = row.split("|")[0]
+        flagged = "(missing: " in label or "(unavailable: " in label
+        count += flagged
+        if suite not in canonical:
+            continue
+        assert ("○" in label) == flagged, (suite, label)
+        if flagged:
+            assert mark.match(label), (suite, label)
+            assert not re.search(r",\S", label), (suite, label)
+    marked[suite] = count
+assert marked["dev"] > 0, marked
+PY
+  [ "$status" -eq 0 ]
+}

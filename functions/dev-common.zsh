@@ -90,11 +90,17 @@ _dev_dim() {
   fi
 }
 
+# Key-value line; the core service owns its layout (docs/output-spec.md).
 _dev_label() {
+  if (( ${+functions[_zdx_ui_label]} )); then
+    _zdx_ui_label "${1-}" "${2-}"
+    return
+  fi
+  local key="${1%:}:"
   if _dev_color_enabled; then
-    printf '\033[1;37m  %-28s\033[0m %s\n' "${(V)1}" "${(V)2}" >&2
+    printf '  \033[1m%-18s\033[0m %s\n' "${(V)key}" "${(V)2}" >&2
   else
-    printf '  %-28s %s\n' "${(V)1}" "${(V)2}" >&2
+    printf '  %-18s %s\n' "${(V)key}" "${(V)2}" >&2
   fi
 }
 
@@ -1499,11 +1505,14 @@ _dev_menu_python_tool_available_shallow() {
 }
 
 # Human-readable, comma-separated list of shallow unmet requirements for a
-# command. Advisory probes inspect commands and bounded paths only; each public
-# command performs authoritative metadata and environment checks after its
-# argument parser accepts the invocation. The optional `reply` mode sets REPLY
-# instead of writing the list, avoiding a per-row subshell while preserving the
-# default stdout API.
+# command. Each requirement is a tool name, qualified with "in .venv" when only
+# the project environment can satisfy it; how to provide a tool, including the
+# ephemeral-runner opt-in, is explained by the command itself and the header's
+# state line (docs/menu-spec.md). Advisory probes inspect commands and bounded
+# paths only; each public command performs authoritative metadata and
+# environment checks after its argument parser accepts the invocation. The
+# optional `reply` mode sets REPLY instead of writing the list, avoiding a
+# per-row subshell while preserving the default stdout API.
 _dev_menu_missing_requirements() {
   local command_name="$1"
   local output_mode="${2:-stdout}"
@@ -1523,51 +1532,51 @@ _dev_menu_missing_requirements() {
       local tool_name="${command_name#dev-run-}"
       if ! _dev_menu_cached_probe \
         "node-tool:${tool_name}" _dev_node_tool_available "$tool_name"; then
-        missing+=("$tool_name (project/local or ephemeral opt-in)")
+        missing+=("$tool_name")
       fi
       ;;
     dev-run-ty|dev-run-pyright)
       local tool_name="${command_name#dev-run-}"
       if ! _dev_menu_python_tool_available_shallow "$tool_name"; then
-        missing+=("$tool_name (project/local or ephemeral opt-in)")
+        missing+=("$tool_name")
       fi
       ;;
     dev-run-ruff|dev-run-ruff-format)
       if ! _dev_menu_python_tool_available_shallow ruff; then
-        missing+=("ruff (project/local or ephemeral opt-in)")
+        missing+=("ruff")
       fi
       ;;
     dev-check-licenses)
       if ! _dev_menu_project_executable_available pip-licenses; then
-        missing+=("pip-licenses (installed in .venv)")
+        missing+=("pip-licenses in .venv")
       fi
       ;;
     dev-run-audit)
       if ! _dev_menu_project_executable_available pip-audit; then
-        missing+=("pip-audit (installed in .venv)")
+        missing+=("pip-audit in .venv")
       fi
       ;;
     dev-run-bandit)
       if ! _dev_menu_python_tool_available_shallow bandit; then
-        missing+=("bandit (project/local or ephemeral opt-in)")
+        missing+=("bandit")
       fi
       ;;
     dev-run-hooks)
       if ! _dev_menu_project_executable_available pre-commit; then
-        missing+=("pre-commit (installed in .venv)")
+        missing+=("pre-commit in .venv")
       fi
       ;;
     dev-run-tests)
       if ! _dev_menu_project_executable_available pytest; then
-        missing+=("pytest (installed in .venv)")
+        missing+=("pytest in .venv")
       fi
       ;;
     dev-run-coverage)
       if ! _dev_menu_project_executable_available pytest; then
-        missing+=("pytest (installed in .venv)")
+        missing+=("pytest in .venv")
       fi
       if ! _dev_menu_project_executable_available coverage; then
-        missing+=("pytest-cov or coverage (installed in .venv)")
+        missing+=("pytest-cov or coverage in .venv")
       fi
       ;;
     dev-build-package)
@@ -1674,8 +1683,10 @@ _dev_menu_entry() {
   _dev_menu_missing_requirements "$command_name" reply || return $?
   local missing="$REPLY"
 
+  # docs/menu-spec.md: an unavailable action keeps its command field and is
+  # marked by a leading circle plus the requirement written in text.
   if [[ -n "$missing" ]]; then
-    printf "  %s (missing: %s)|%s|%s\n" \
+    printf "  ○ %s (missing: %s)|%s|%s\n" \
       "$label" "$missing" "$command_name" "$description"
   else
     printf "  %s|%s|%s\n" "$label" "$command_name" "$description"
