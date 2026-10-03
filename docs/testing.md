@@ -90,7 +90,7 @@ create a separate test file merely because a production file exists.
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, exact APT-owner discovery separated from native zero-timeout lock arbitration, Homebrew false-lock and analytics regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, closed-stdin bounded/redacted command capture that keeps the caller's umask, backslash-safe SHA-256 paths, color policy, advisory menu dependency annotations, and npm safety |
-| `sys_contract.bats` | The frozen 34-command fixture, public-surface parity, and Nerd Font family completion parity |
+| `sys_contract.bats` | The frozen 34-command fixture with update commands mapped to their `sys-update*.zsh` step and orchestrator modules, public-surface parity, and Nerd Font family completion parity |
 | `sys_capabilities.bats` | Standalone loader, one source-derived module root, lazy capability registry, and mocked Linux, WSL, and Darwin routing |
 | `sys_diagnostics.bats` | Portable collectors, Homebrew counts through GNU timeout, stream separation, bounded probes, plugin-count startup hints, symbol privacy, and telemetry readers |
 | `sys_interface.bats` | Stderr help, invalid status `2`, exact argument forwarding, validated menu rows, local `fzf`, cancellation, foreground private capture for every nested picker with snapshot-checked rows, `--expect` key routing, an action key on an empty filter treated as cancellation, preserved caller `REPLY`, and lazy/eager parity |

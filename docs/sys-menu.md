@@ -1107,7 +1107,11 @@ functions/
 ├── sys-common.zsh
 └── sys/
     ├── sys-capabilities.zsh
-    ├── sys-update.zsh
+    ├── sys-update-apt.zsh       dpkg audits, unattended-upgrade yield, update-apt
+    ├── sys-update-packages.zsh  Homebrew, Snap, native backends, DNF5 guard
+    ├── sys-update-git.zsh       owned Git checkouts: fzf, Oh My Zsh, Zsh plugins
+    ├── sys-update-tools.zsh     SDK, runtime, and CLI updaters, AI adapter
+    ├── sys-update.zsh           update-system plan, lock, and step runner
     ├── sys-clean.zsh
     ├── sys-diag.zsh
     ├── sys-shell-diag.zsh
@@ -1124,8 +1128,23 @@ functions/
         └── sys-macos.zsh
 ```
 
-Later phases may split package and backend execution further. The invariants
-are:
+The update modules are split by backend and safety model. The step modules
+load before the `sys-update.zsh` orchestrator and expose a fixed step protocol:
+
+1. Step commands are the public `update-*` functions plus the private
+   `_sys_update_platform_packages` and `_sys_update_ai_tools` entries. The
+   aggregate invokes them only through `_sys_run_update_step`.
+2. Each step module defines a `_sys_update_<step>_applies` predicate beside its
+   command. The orchestrator reaches them only through the `_sys_step_applies`
+   dispatcher, exactly once per plan entry.
+3. APT planning uses `_sys_apt_plan_blocker`, with the authorized fingerprint
+   handed over through dynamic scope.
+4. Step modules never call the orchestrator or each other.
+
+Update primitives used by more than one of these files live in
+`sys-common.zsh`: the shared argument grammars, the trusted-program,
+owner-bound path, and askpass validators, and the privileged update session
+(sudo pre-authentication and its owned keepalive). The invariants are:
 
 - capability detection is read-only and separately testable;
 - feature orchestration does not embed platform command construction;
