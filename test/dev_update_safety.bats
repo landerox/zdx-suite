@@ -263,7 +263,7 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Maintenance plan:"* ]]
+  [[ "$output" == *"#  Step"*"Action"* ]]
   [[ "$output" == *"STEP:toolchain"* ]]
   [[ "$output" == *"STEP:deps:--yes"* ]]
   [[ "$output" == *"STEP:clean:--yes"* ]]
@@ -307,15 +307,15 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == \
-    *"2. Plan, back up, and update eligible dependency specifiers."* ]]
-  [[ "$output" == \
-    *"3. Refresh uv.lock to the newest compatible versions and sync."* ]]
-  [[ "$output" == \
-    *"4. Update and validate the configured pre-commit hooks."* ]]
-  [[ "$output" == \
-    *"5. Inspect Terraform ownership and its update workflow."* ]]
-  [[ "$output" != *"Report the owning TFLint update workflow."* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  2  Dependency specifiers  Plan, back up, and bump eligible specifiers[.]$'
+  printf '%s\n' "$output" | grep -Eq \
+    '^  3  Lockfile refresh +Upgrade uv[.]lock and sync the environment[.]$'
+  printf '%s\n' "$output" | grep -Eq \
+    '^  4  Pre-commit hooks +Update, validate, and install frozen hook revisions[.]$'
+  printf '%s\n' "$output" | grep -Eq \
+    "^  5  Terraform ownership +Report Terraform's owner and update workflow[.]$"
+  [[ "$output" != *"Report TFLint's owner and update workflow."* ]]
   [[ "$output" == *"STEP:terraform"* ]]
   [[ "$output" != *"STEP:tflint"* ]]
   [[ "$output" == *"PROBES:terraform=1:tflint=1"* ]]
@@ -353,9 +353,10 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Inspect Terraform ownership"* ]]
-  [[ "$output" == *"5. Report the owning TFLint update workflow."* ]]
-  [[ "$output" != *"6. Report the owning TFLint update workflow."* ]]
+  [[ "$output" != *"Report Terraform's owner"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    "^  5  TFLint ownership +Report TFLint's owner and update workflow[.]$"
+  [[ "$output" != *"6  TFLint ownership"* ]]
   [[ "$output" != *"STEP:terraform"* ]]
   [[ "$output" == *"STEP:tflint"* ]]
   [[ "$output" == *"PROBES:terraform=1:tflint=1"* ]]
@@ -380,12 +381,14 @@ EOF
   [[ "$output" == *"STEP:toolchain"* ]]
   [[ "$output" == *"STEP:clean"* ]]
   [[ "$output" != *"MUTATION:"* ]]
-  [[ "$output" == \
-    *"Not applicable: dependency and pre-commit updates need pyproject.toml."* ]]
-  [[ "$output" == *"Not applicable: the lockfile refresh needs uv.lock."* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  ⊘  Dependency specifiers  not applicable [(]no pyproject[.]toml[)]$'
+  printf '%s\n' "$output" | grep -Eq \
+    '^  ⊘  Lockfile refresh +not applicable [(]no uv[.]lock[)]$'
   [[ "$output" == *"Maintenance Summary"* ]]
-  [[ "$output" == *"skipped (no pyproject.toml)"* ]]
-  [[ "$output" == *"skipped (no uv.lock)"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  Dependency specifiers  ⊘ skipped +no pyproject[.]toml$'
+  printf '%s\n' "$output" | grep -Eq '^  Lockfile refresh +⊘ skipped +no uv[.]lock$'
   [[ "$output" == *"Full maintenance completed"* ]]
 
   printf '[project]\nname = "demo"\n' > "$DEV_PROJECT/pyproject.toml"
@@ -407,9 +410,10 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"STEP:deps"* ]]
   [[ "$output" != *"MUTATION:"* ]]
-  [[ "$output" == \
-    *"Not applicable: the pre-commit update needs .pre-commit-config.yaml."* ]]
-  [[ "$output" == *"skipped (no .pre-commit-config.yaml)"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  ⊘  Pre-commit hooks +not applicable [(]no [.]pre-commit-config[.]yaml[)]$'
+  printf '%s\n' "$output" | grep -Eq \
+    '^  Pre-commit hooks +⊘ skipped +no [.]pre-commit-config[.]yaml$'
 }
 
 @test "dev update safety: full maintenance keeps pre-commit after a non-publishing dependency failure" {
@@ -437,9 +441,11 @@ EOF
   [[ "$output" == *"STEP:precommit"* ]]
   [[ "$output" == *"STEP:clean"* ]]
   [[ "$output" != *"lockfile may be stale"* ]]
-  [[ "$output" == *"Dependency specifiers"*"failed (status 1)"* ]]
-  [[ "$output" == *"Pre-commit hooks"*"completed"* ]]
-  [[ "$output" == *"1 step(s) had issues"* ]]
+  [[ "$output" == *"Dependency specifiers — failed: status 1"* ]]
+  [[ "$output" == *"Pre-commit hooks — done"* ]]
+  [[ "$output" == \
+    *"Full maintenance completed with partial failures: 1 of "*" steps failed."* ]]
+  [[ "$output" == *"dev-menu dev-update-deps"* ]]
 }
 
 @test "dev update safety: full maintenance skips pre-commit only for an inconsistent lockfile" {
@@ -465,7 +471,7 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" != *"MUTATION:"* ]]
   [[ "$output" == *"dependency publication left the lockfile stale"* ]]
-  [[ "$output" == *"skipped (lockfile may be stale)"* ]]
+  [[ "$output" == *"Pre-commit hooks — skipped: lockfile may be stale"* ]]
 
   printf 'version = 1\n' > "$DEV_PROJECT/uv.lock"
 
@@ -540,7 +546,7 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"Cannot reach PyPI"* ]]
   [[ "$output" == *"specifier queries are blocked"* ]]
-  [[ "$output" != *"2. Plan, back up"* ]]
+  [[ "$output" != *"Plan, back up, and bump eligible specifiers."* ]]
   [ "$(printf '%s\n' "$output" | grep -c '^CONFIRM_CALLED$')" -eq 1 ]
   [[ "$output" == *"STEP:toolchain"* ]]
   [[ "$output" == *"STEP:clean"* ]]
@@ -548,7 +554,10 @@ EOF
   [[ "$output" == *"STEP:precommit"* ]]
   [[ "$output" != *"MUTATION:"* ]]
   [ "$(printf '%s\n' "$output" | grep -c 'blocked (PyPI unreachable)')" -eq 1 ]
-  [[ "$output" == *"1 step(s) had issues"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  Dependency specifiers  ✘ blocked +PyPI unreachable$'
+  [[ "$output" == \
+    *"Full maintenance completed with partial failures: 1 of "*" steps failed."* ]]
 }
 
 @test "dev update safety: unavailable PyPI does not replace the exact project runner requirement" {
@@ -639,7 +648,8 @@ EOF
   [ "$status" -eq 0 ]
   grep -q 'demo>=2.0.0' "$DEV_PROJECT/pyproject.toml"
   [[ "$output" == *"BACKUP_READY"* ]]
-  [[ "$output" == *"Applied 1 dependency update(s)"* ]]
+  [[ "$output" == \
+    *"Applied 1 dependency update and synchronized the environment."* ]]
   [[ "$output" == *"DEPS_OUTCOME:applied"* ]]
 }
 
@@ -1787,8 +1797,12 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TOOL_UI:sync --all-groups"* ]]
-  [[ "$output" == *"PRECOMMIT_UI:autoupdate"* ]]
+  # Tool output is captured privately; only the hook run stays live.
+  [[ "$output" == *'$ uv sync --all-groups  (output shown on failure)'* ]]
+  [[ "$output" == \
+    *'$ pre-commit autoupdate --freeze  (output shown on failure)'* ]]
+  [[ "$output" != *"TOOL_UI:"* ]]
+  [[ "$output" == *"PRECOMMIT_UI:run --all-files"* ]]
   [[ "$output" == *"CAPTURED_STDOUT=<>"* ]]
 }
 
@@ -2256,8 +2270,8 @@ MOCK
   cat > "$TEST_MOCK_BIN/uv" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == lock ]]; then
-  kill -INT "$PPID"
-  exit 1
+  kill -INT "$ZDX_TEST_SHELL_PID"
+  exit 130
 fi
 printf 'UV_SHOULD_NOT_RUN:%s\n' "$*" >&2
 MOCK
@@ -2280,6 +2294,7 @@ MOCK
     _dev_restore_pyproject() {
       command cp -- "$1" pyproject.toml
     }
+    export ZDX_TEST_SHELL_PID=$$
     dev-update-deps --yes
   '
 
@@ -2299,8 +2314,9 @@ MOCK
 
   [ "$status" -eq 130 ]
   [[ "$output" != *"CLEANUP_RAN"* ]]
-  [[ "$output" == *"interrupted (status 130)"* ]]
-  [[ "$output" == *"not run (interrupted)"* ]]
+  [[ "$output" == *"Host toolchain — interrupted: status 130"* ]]
+  printf '%s\n' "$output" | grep -Eq \
+    '^  Project cleanup +– not run +maintenance interrupted$'
   [[ "$output" == *"Full maintenance was interrupted"* ]]
 }
 

@@ -638,7 +638,8 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"ran:dev-run-ruff"* ]]
   [[ "$output" == *"ran:dev-run-tests"* ]]
-  [[ "$output" == *"All 2 task(s) completed"* ]]
+  [[ "$output" == *"✔ [1/2] dev-run-ruff — passed"* ]]
+  [[ "$output" == *"All 2 tasks completed successfully."* ]]
 }
 
 @test "dev interface: multi-select reports a partial failure with non-zero status" {
@@ -661,7 +662,9 @@ teardown() {
   '
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"1 of 2 task(s) failed"* ]]
+  [[ "$output" == *"✘ [2/2] dev-run-tests — failed: status 3"* ]]
+  [[ "$output" == *"1 of 2 tasks failed."* ]]
+  [[ "$output" == *"dev-menu dev-run-tests"* ]]
 }
 
 @test "dev interface: multi-select skips a batch-eligible row outside the snapshot" {

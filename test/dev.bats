@@ -105,8 +105,8 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-run-shellcheck'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Analyzing 1 shell file(s) with ShellCheck..."* ]]
-  [[ "$output" == *"Parsing 1 Zsh file(s) with zsh -n..."* ]]
+  [[ "$output" == *"Analyzing 1 shell file with ShellCheck..."* ]]
+  [[ "$output" == *"Parsing 1 Zsh file with zsh -n..."* ]]
   [[ "$output" == *"ShellCheck: no issues found."* ]]
 }
 

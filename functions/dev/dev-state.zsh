@@ -590,9 +590,11 @@ dev-backup-pyproject() {
         fi
         pruned=$(( pruned + 1 ))
       done
-      _dev_debug "Pruned $pruned old backup(s)."
+      _dev_count_noun "$pruned" "old backup"
+      _dev_debug "Pruned $REPLY."
+      _dev_count_noun "$retained" "retained backup"
       (( retained == 0 )) || _dev_info \
-        "Review $retained retained backup(s) manually under: $backup_dir"
+        "Review $REPLY manually under: $backup_dir"
     fi
 
     _dev_state_assert_directory_identity \

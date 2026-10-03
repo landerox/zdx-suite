@@ -1332,7 +1332,7 @@ classifies only `License` and refuses a malformed schema.
 
 ### 🧼 Linters, Formatters & Quality Gates
 
-- **All Checks (`dev-run-all-checks`)**: Detect the project's stack and run every applicable gate, then print a consolidated pass/fail table with timings. Add `--verbose` to see each tool's own output instead of just the summary.
+- **All Checks (`dev-run-all-checks`)**: Detect the project's stack and run every applicable gate as a numbered step, then print a `Check Results` table. A failing gate shows the last lines of its output right away; add `--verbose` to see each tool's complete output as it runs.
 - **Pre-commit Hooks (`dev-run-hooks`)**: Run the configured file-stage hooks across all files by default, or forward an explicit pre-commit selection. Hooks rewrite files by design. The runner must already be installed in the exact project `.venv`; a global pre-commit executable is never used.
 - **Type Checkers (`dev-check-types`)**: Detect and run whichever of `ty` and `pyright` the project configures, and fail if either does.
 - **Ruff (`dev-run-ruff` / `dev-run-ruff-format`)**: Fast linting, and separately, in-place formatting. Lint mode rejects writing flags and removes inherited `RUFF_OUTPUT_FILE`.
@@ -1479,7 +1479,11 @@ mutation when it exceeds the configured number of unique targets. `build/`,
 
 For `dev-update-all`, dry-run invokes only the dependency-update and cleanup
 previews, skipping the dependency preview without `pyproject.toml`; no
-toolchain, hook, Terraform, or TFLint workflow is started. A normal
+toolchain, hook, Terraform, or TFLint workflow is started. A real run shows a
+numbered plan, one result line per step, and a `Maintenance Summary`: the
+lockfile step lists the packages whose locked versions changed, and the
+pre-commit step shows each hook repository's revision as current, updated, or
+kept. Add `--verbose` to stream every tool's output. A normal
 interactive run first confirms its frozen aggregate scope. If cleanup later
 finds targets, it shows the exact set and asks again immediately before removal.
 `--yes` explicitly bypasses both prompts while preserving all planning and

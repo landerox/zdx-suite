@@ -111,6 +111,10 @@ output has this order:
    interrupted-before-start steps. Hints MUST NOT add `--yes`; they keep
    `--dry-run` for a dry run and are deduplicated.
 
+A read-only gate, such as `dev-run-all-checks`, or a batch the user selected,
+such as `dev-menu --multi`, needs no plan, disclosures, or authorization. It
+starts with its steps and keeps the summary, verdict, and retry hints.
+
 A step returning `130` or `143` stops the aggregate. Later steps are listed as
 `not run`, and that status is returned. `--fail-fast` lists later steps as
 `not run` with the detail `stopped by --fail-fast`. Any failed step makes the
@@ -232,6 +236,9 @@ defined in `development.md` and does not change.
   off) streams captured tool output live and shows demoted child headings.
 - An aggregate's `--verbose` flag sets `ZDX_VERBOSE=1` for that run only. It
   MAY also show plan policy lines and complete invocations.
+- A child's explanatory notes that the aggregate plan already states, and
+  detail that its result line already conveys, are printed in a standalone run
+  but omitted inside a step unless `ZDX_VERBOSE=1`.
 - Verbosity never changes stdout data, exit statuses, prompts, telemetry, or
   `replay_lines 0` outputs. Verbose streaming is raw: it is not filtered by the
   credential redaction, which is an explicit operator choice.

@@ -207,10 +207,15 @@ inventory in batches of at most 64 paths, never a `**/*.md` glob, so `--fix`
 cannot rewrite files in `node_modules`, vendored or generated trees, or nested
 repositories.
 
-`dev-run-all-checks` accepts `--verbose`. Without it, each gate's output is
-suppressed and only the result table is shown. A gate that returns `130` or
-`143` stops the aggregate: later gates are listed as not run and that status
-is returned. `dev-check-types` preserves it the same way.
+`dev-run-all-checks` runs each applicable gate as a step of the shared
+aggregate structure in [`output-spec.md`](output-spec.md): a banner, the
+gate's output captured privately, and one result line. A failing gate replays
+its bounded, redacted tail under its step, the `Check Results` table lists
+every gate, and the verdict names the commands that rerun the failing gates.
+`--verbose` streams each gate's output instead. A read-only gate needs no plan
+or authorization. A gate that returns `130` or `143` stops the aggregate:
+later gates are listed as not run and that status is returned.
+`dev-check-types` preserves it the same way.
 
 `dev-run-tflint` runs `tflint --recursive` without initializing plugins.
 Plugin initialization is a separate remote-code action selected with `--init`;
@@ -347,6 +352,34 @@ regular file, and accepted only when every stored token is batch-eligible.
 `dev-clean-py`, `dev-clean-repo`, `dev-clean-terraform`, `dev-clean-all`, and
 `dev-update-all`.
 
+### Aggregate output
+
+`dev-update-all [--yes] [--dry-run] [--verbose]` follows
+[`output-spec.md`](output-spec.md). Its plan is a numbered `# · Step · Action`
+table of the steps that will start; an inapplicable step is listed without a
+number as `⊘ not applicable (<reason>)` and a blocked one as
+`✘ blocked (<reason>)`. Each step prints a banner and one result line; a
+child's own heading and the policy notes that the plan already states appear
+only with `--verbose`, which also streams captured tool output. Each child
+reports its result with evidence:
+
+| Step | Result |
+| --- | --- |
+| Host toolchain | The System owner's uv result, such as `current: 0.12.22` |
+| Dependency specifiers | `updated` with the bumped specifiers, or `current` |
+| Lockfile refresh | A `Package · Previous · Locked` table of changed versions read from `uv.lock` before and after, or `current`; without Python 3.11 or a readable lockfile, `done` |
+| Pre-commit hooks | A `Hook repository · Revision · Result · Detail` table from the revision guard, with `current`, `updated`, and kept revisions shown as skipped with the rejected proposal |
+| Terraform and TFLint ownership | `delegated` to their owner, such as `Homebrew → sys-menu update-brew`; a manual Terraform is skipped, and an unverified TFLint is blocked |
+| Project cleanup | `current: nothing to clean`, `planned` in a dry run, `done` with the removed count, or `skipped` when cancelled |
+
+Chatty backends such as `uv lock`, `uv sync`, and the pre-commit autoupdate,
+validation, and installation phases run with their output captured privately
+and replayed only on failure. The pre-commit hook run stays visible because
+its findings are the project's results. `dev-menu --multi` and
+`dev-profile-run` share one batch runner: a banner and one result line per
+task, a `Task Summary` table, and a verdict. A failing task does not stop the
+batch; an interruption does.
+
 ## Update transactions and aggregate authorization
 
 `dev-update-all` freezes its applicable scope once, shows that aggregate
@@ -389,10 +422,12 @@ planning, identity checks, or validation. `--dry-run` invokes only the
 dependency and cleanup previews, skipping the dependency preview when
 `pyproject.toml` is absent.
 
-The aggregate continues after independent failures, prints a per-step summary
-(completed, failed with status, blocked, or skipped with its reason), lists
-direct `dev-menu` commands to retry pending steps, and returns `1` when any
-step failed. Retry commands preserve dry-run previews and require normal
+The aggregate continues after independent failures and prints one result line
+per step, a `Maintenance Summary` table with the result, time, and detail of
+every step (including blocked, skipped, and not-run rows), a verdict with
+counted steps, each failed step with its cause, and the direct `dev-menu`
+commands that retry them. It returns `1` when any step failed or was
+blocked. Retry commands preserve dry-run previews and require normal
 confirmation for mutations. When other steps completed or were inapplicable, the core timing
 message identifies partial failures while preserving the failure status.
 It skips the pre-commit update only when the dependency

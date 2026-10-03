@@ -527,7 +527,9 @@ _dev_clean_show_plan() {
   local -a records=("$@")
   local -i target_count=$(( ${#records[@]} / 4 ))
 
-  _dev_info "Removal plan ($target_count target(s)) under $root:"
+  local REPLY
+  _dev_count_noun "$target_count" target
+  _dev_info "Removal plan ($REPLY) under $root:"
 
   local -i shown=0
   local relative device inode object_type
@@ -647,12 +649,17 @@ _dev_clean_apply() {
     }
   done
 
+  local REPLY
+  _dev_count_noun "$removed" target
+  local removed_label="$REPLY"
   if (( failed > 0 )); then
-    _dev_error "Removed $removed target(s); $failed failed, $skipped skipped."
+    _dev_error "Removed $removed_label; $failed failed, $skipped skipped."
+    _dev_report_result failed "removed $removed_label; $failed failed"
     return 1
   fi
 
-  _dev_success "Removed $removed target(s) ($skipped already absent)."
+  _dev_report_result done "removed $removed_label" \
+    "Removed $removed_label ($skipped already absent)."
   return 0
 }
 
@@ -672,6 +679,7 @@ _dev_clean_workflow() {
   _dev_validate_clean_depth || return 1
   _dev_validate_clean_limit || return 1
 
+  local REPLY
   local -a reply=()
   _dev_clean_capture_root || return 1
   local root="${reply[1]}"
@@ -693,10 +701,12 @@ _dev_clean_workflow() {
     reply=()
     _dev_clean_collect "$root" "$category" || return $?
     if (( ${#reply[@]} > 0 )); then
-      _dev_info "$(_dev_clean_category_label "$category"): ${#reply[@]} target(s)"
+      _dev_count_noun "${#reply[@]}" target
+      _dev_info "$(_dev_clean_category_label "$category"): $REPLY"
       targets+=("${reply[@]}")
     else
-      _dev_dim "$(_dev_clean_category_label "$category"): nothing to remove"
+      _dev_step_quiet \
+        || _dev_dim "$(_dev_clean_category_label "$category"): nothing to remove"
     fi
   done
 
@@ -711,14 +721,18 @@ _dev_clean_workflow() {
 
   local -i target_count=$(( ${#plan[@]} / 4 ))
   if (( target_count == 0 )); then
-    _dev_success "Nothing to clean under $root."
+    _dev_report_result current "nothing to clean" \
+      "Nothing to clean under $root."
     return 0
   fi
 
   _dev_clean_show_plan "$root" "${plan[@]}" || return 1
 
+  _dev_count_noun "$target_count" target
+  local target_label="$REPLY"
   if (( dry_run )); then
     _dev_warn "DRY-RUN — no files were removed."
+    _dev_report_result planned "$target_label"
     return 0
   fi
 
@@ -727,7 +741,7 @@ _dev_clean_workflow() {
   {
     (( auto_yes )) && _DEV_AUTO_YES=1
     outcome=$(_dev_confirm_outcome \
-      "Remove $target_count target(s) under $root?")
+      "Remove $target_label under $root?")
   } always {
     _DEV_AUTO_YES=$previous_auto_yes
   }
@@ -742,7 +756,8 @@ _dev_clean_workflow() {
       return 1
       ;;
     *)
-      _dev_info "Cancelled. Nothing was removed."
+      _dev_report_result skipped "cancelled; nothing removed" \
+        "Cancelled. Nothing was removed."
       return 0
       ;;
   esac

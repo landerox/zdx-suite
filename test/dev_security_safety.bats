@@ -165,7 +165,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$BANDIT_STDOUT")" = "bandit-backend-report" ]
-  grep -q "Scanning 2 Python file(s)" "$BANDIT_STDERR"
+  grep -q "Scanning 2 Python files" "$BANDIT_STDERR"
   grep -Fxq -- '-lll' "$BANDIT_LOG"
   grep -Fxq -- '-iii' "$BANDIT_LOG"
   grep -Fxq -- '--format' "$BANDIT_LOG"
@@ -267,7 +267,7 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  grep -q "Scanning 3 Python file(s)" "$BANDIT_STDERR"
+  grep -q "Scanning 3 Python files" "$BANDIT_STDERR"
   grep -Fxq -- './src/mypkg/api/views.py' "$BANDIT_LOG"
   grep -Fxq -- './src/mypkg/api/v1/deep.py' "$BANDIT_LOG"
   ! grep -q 'excluded.py' "$BANDIT_LOG"

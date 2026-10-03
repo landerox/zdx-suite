@@ -472,7 +472,7 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"Backup saved:"* ]]
   [[ "$output" == *"Left an unverified stale backup in place:"* ]]
-  [[ "$output" == *"Review 1 retained backup(s) manually under:"* ]]
+  [[ "$output" == *"Review 1 retained backup manually under:"* ]]
   [ -f "$backup_dir/pyproject.toml.20260101_000000.bak" ]
   [ "$(cat "$DEV_PROJECT/second-name")" = "linked" ]
   [ ! -e "$backup_dir/pyproject.toml.20260102_000000.bak" ]
@@ -1019,9 +1019,9 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-run-shellcheck'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Analyzing 2 shell file(s)"* ]]
+  [[ "$output" == *"Analyzing 2 shell files"* ]]
   [[ "$output" == *"shellcheck received 2 file(s)"* ]]
-  [[ "$output" == *"Parsing 1 Zsh file(s)"* ]]
+  [[ "$output" == *"Parsing 1 Zsh file"* ]]
 }
 
 @test "dev checks: a Zsh parse failure fails the shell gate" {
@@ -1050,7 +1050,8 @@ EOF
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"pyproject.toml not found"* ]]
-  [[ "$output" == *"issue(s) found"* ]]
+  [[ "$output" == *"Project health: "*" found — review the output above."* ]]
+  [[ "$output" != *"issue(s)"* ]]
 }
 
 @test "dev checks: health check has no dead dependency-graph probe" {

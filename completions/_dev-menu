@@ -288,7 +288,8 @@ case "$subcommand" in
     _arguments \
       '(- *)'{-h,--help}'[Show command usage]' \
       '(-h --help)--dry-run[Preview dependency and cleanup plans]' \
-      '(-h --help)'{-y,--yes}'[Authorize aggregate and exact child plans]'
+      '(-h --help)'{-y,--yes}'[Authorize aggregate and exact child plans]' \
+      '(-h --help)'{-v,--verbose}'[Stream tool output and show policy notes]'
     ;;
   venv-create)
     _arguments \

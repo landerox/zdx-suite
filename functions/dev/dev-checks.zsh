@@ -64,6 +64,7 @@ _dev_check_parse_options() {
 dev-check-outdated() {
   emulate -L zsh
 
+  local REPLY
   local -i _dev_check_opt_report=0 _dev_check_opt_strict=0
   local -i parse_status=0
   _dev_check_parse_options dev-check-outdated 0 "$@" || parse_status=$?
@@ -90,7 +91,8 @@ dev-check-outdated() {
     return 0
   fi
 
-  _dev_info "Comparing ${#direct_deps[@]} direct dependency(ies)..."
+  _dev_count_noun "${#direct_deps[@]}" "direct dependency" "direct dependencies"
+  _dev_info "Comparing $REPLY..."
 
   local project_python="${PWD:A}/.venv/bin/python"
   if [[ ! -x "$project_python" ]]; then
@@ -155,11 +157,13 @@ dev-check-outdated() {
     (( _dev_check_opt_report )) \
       && _dev_report_line "_All direct dependencies are up to date._"
   else
-    _dev_info "$found direct dependency(ies) have newer versions available."
+    local found_label="direct dependencies have"
+    (( found == 1 )) && found_label="direct dependency has"
+    _dev_info "$found $found_label newer versions available."
     (( _dev_check_opt_report )) && {
       _dev_report_line ""
       _dev_report_line \
-        "**$found** direct dependency(ies) have newer versions available."
+        "**$found** $found_label newer versions available."
     }
   fi
 
@@ -272,6 +276,7 @@ _dev_health_python_pin_matches() {
 dev-check-health() {
   emulate -L zsh
   setopt LOCAL_OPTIONS EXTENDED_GLOB
+  local REPLY
 
   local -i _dev_check_opt_report=0 _dev_check_opt_strict=0
   local -i parse_status=0
@@ -588,8 +593,10 @@ PY_SPEC
     return 0
   fi
 
-  _dev_warn "Project health: $issues issue(s) found — review the output above."
-  (( _dev_check_opt_report )) && _dev_report_status warn "$issues issue(s) found"
+  _dev_count_noun "$issues" issue
+  local issues_label="$REPLY"
+  _dev_warn "Project health: $issues_label found — review the output above."
+  (( _dev_check_opt_report )) && _dev_report_status warn "$issues_label found"
   if (( _dev_check_opt_report )); then
     _dev_report_save "health.md" || return 1
   fi
@@ -1419,7 +1426,8 @@ dev-run-shellcheck() {
 
   if (( ${#posix_files[@]} > 0 )); then
     _dev_require_command shellcheck || return 1
-    _dev_info "Analyzing ${#posix_files[@]} shell file(s) with ShellCheck..."
+    _dev_count_noun "${#posix_files[@]}" "shell file"
+    _dev_info "Analyzing $REPLY with ShellCheck..."
     local -i offset=1
     local -a batch=()
     while (( offset <= ${#posix_files[@]} )); do
@@ -1430,7 +1438,8 @@ dev-run-shellcheck() {
   fi
 
   if (( ${#zsh_files[@]} > 0 )); then
-    _dev_info "Parsing ${#zsh_files[@]} Zsh file(s) with zsh -n..."
+    _dev_count_noun "${#zsh_files[@]}" "Zsh file"
+    _dev_info "Parsing $REPLY with zsh -n..."
     for candidate in "${zsh_files[@]}"; do
       _dev_debug "zsh -n $candidate"
       command zsh -n -- "$candidate" >&2 || parse_status=1
@@ -1803,85 +1812,48 @@ dev-run-coverage() {
 
 # --- Consolidated quality gate ----------------------------------------------
 
-# Records one "name|result|seconds" row per executed check.
-typeset -ga _DEV_CHECK_RESULTS=()
-typeset -gi _DEV_CHECK_FAILURES=0
-typeset -gi _DEV_CHECK_VERBOSE=0
-
+# Runs one check as a gate step: a banner, its output captured privately and
+# replayed only when the check fails, and one result line. It records the
+# caller's dynamically scoped check_index, check_total, summary_records,
+# failed_checks, and interrupted_status.
+# Usage: _dev_run_check <label> <command> [arguments...]
 _dev_run_check() {
-  local name="$1"
+  local label="$1"
   shift
+  (( ++check_index ))
 
   # After an interrupted gate no later gate starts; it is listed as not run.
-  if (( ${_DEV_CHECK_INTERRUPTED:-0} )); then
-    _DEV_CHECK_RESULTS+=("${name}|not run|—")
+  if (( interrupted_status )); then
+    summary_records+=("$label"$'\tnot-run\t\tchecks interrupted')
     return 0
   fi
 
-  local start
-  start=$(_dev_now)
-
-  if (( _DEV_CHECK_VERBOSE )); then
-    "$@" >&2
+  _dev_step_banner "$check_index" "$check_total" "$label"
+  local -a reply=()
+  local -i check_status=0
+  _dev_step_exec _dev_run_captured "$*" "$@" || check_status=$?
+  local outcome="${reply[1]:-done}" detail="${reply[2]:-}"
+  local seconds="${reply[3]:-}"
+  # A gate that finishes without its own result has passed.
+  [[ "$outcome" == done ]] && outcome=passed
+  _dev_step_result "$check_index" "$check_total" "$label" "$outcome" \
+    "$detail" "$seconds"
+  summary_records+=("$label"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
+  (( check_status == 0 )) && return 0
+  if (( check_status == 130 || check_status == 143 )); then
+    interrupted_status=$check_status
   else
-    "$@" >/dev/null 2>&1
-  fi
-  local -i exit_code=$?
-
-  local elapsed
-  elapsed=$(_dev_elapsed "$start")
-
-  if (( exit_code == 130 || exit_code == 143 )); then
-    (( ${+_DEV_CHECK_INTERRUPTED} )) && _DEV_CHECK_INTERRUPTED=$exit_code
-    _DEV_CHECK_RESULTS+=("${name}|interrupted|${elapsed}s")
-    _DEV_CHECK_FAILURES=$(( _DEV_CHECK_FAILURES + 1 ))
-  elif (( exit_code == 0 )); then
-    _DEV_CHECK_RESULTS+=("${name}|passed|${elapsed}s")
-  else
-    _DEV_CHECK_RESULTS+=("${name}|failed|${elapsed}s")
-    _DEV_CHECK_FAILURES=$(( _DEV_CHECK_FAILURES + 1 ))
+    failed_checks+=("$*")
   fi
   return 0
 }
 
-_dev_check_print_results() {
-  local -a rows=("$@")
-  (( ${#rows[@]} > 0 )) || return 0
-
-  _dev_header "Check Results"
-
-  if _dev_color_enabled; then
-    printf '  \033[1;37m%-30s %-10s %s\033[0m\n' "Check" "Result" "Time" >&2
-  else
-    printf '  %-30s %-10s %s\n' "Check" "Result" "Time" >&2
-  fi
-
-  local row name rest result elapsed
-  for row in "${rows[@]}"; do
-    name="${row%%|*}"
-    rest="${row#*|}"
-    result="${rest%%|*}"
-    elapsed="${rest#*|}"
-
-    if _dev_color_enabled; then
-      if [[ "$result" == "passed" ]]; then
-        printf '  %-30s \033[1;32m%-10s\033[0m %s\n' \
-          "${(V)name}" "✔ $result" "$elapsed" >&2
-      else
-        printf '  %-30s \033[1;31m%-10s\033[0m %s\n' \
-          "${(V)name}" "✘ $result" "$elapsed" >&2
-      fi
-    else
-      printf '  %-30s %-10s %s\n' "${(V)name}" "$result" "$elapsed" >&2
-    fi
-  done
-}
-
 # dev-run-all-checks
 #   Arguments: --verbose | --help
-#   stdout:    none. The summary table is UI and goes to stderr.
+#   stdout:    none. Step results and the summary table go to stderr.
 #   Effects:   read-only except for hooks and formatters the project configures.
-#   Status:    0 when every executed check passed, 1 otherwise.
+#   Status:    0 when every executed check passed, 1 otherwise, or the status
+#              of an interrupted check.
 dev-run-all-checks() {
   emulate -L zsh
 
@@ -1892,7 +1864,7 @@ dev-run-all-checks() {
       -h|--help)
         print -u2 -r -- "Usage: dev-run-all-checks [--verbose]"
         print -u2 -r -- \
-          "  --verbose   Show each check's output instead of only the summary."
+          "  --verbose   Stream each check's output instead of showing it only on failure."
         return 0
         ;;
       --verbose) verbose=1 ;;
@@ -1907,120 +1879,100 @@ dev-run-all-checks() {
   _dev_header "Running All Checks (Lint, Types, Security, Tests)"
   _dev_validate_scan_depth || return 1
 
-  local total_start
-  total_start=$(_dev_now)
+  # --verbose streams each check's output for this run only.
+  local ZDX_VERBOSE="${ZDX_VERBOSE:-}"
+  (( verbose )) && ZDX_VERBOSE=1
 
-  local -i previous_verbose=$_DEV_CHECK_VERBOSE
-  local -a results=()
-  local -i failures=0
-  local -i _DEV_CHECK_INTERRUPTED=0 interrupted_status=0
+  # The applicable checks are frozen first, so every banner shows its position.
+  local -a checks=()
+  local -i project_probe_status=0
+  _dev_project_has_files '*.py' || project_probe_status=$?
+  (( project_probe_status == 2 )) && return 1
+  if (( project_probe_status == 0 )); then
+    checks+=($'Ruff (lint)\tdev-run-ruff')
 
-  {
-    _DEV_CHECK_RESULTS=()
-    _DEV_CHECK_FAILURES=0
-    _DEV_CHECK_VERBOSE=$verbose
-
-    local -i project_probe_status=0
-    _dev_project_has_files '*.py' || project_probe_status=$?
-    (( project_probe_status == 2 )) && return 1
-    if (( project_probe_status == 0 )); then
-      _dev_info "Python project detected."
-      _dev_run_check "Ruff (lint)" dev-run-ruff
-
-      local -i type_dependency_status=0
-      _dev_pyproject_has_dep "ty" || type_dependency_status=$?
+    local -i type_dependency_status=0
+    _dev_pyproject_has_dep "ty" || type_dependency_status=$?
+    (( type_dependency_status == 2 )) && return 1
+    if (( type_dependency_status == 1 )); then
+      type_dependency_status=0
+      _dev_pyproject_has_dep "pyright" || type_dependency_status=$?
       (( type_dependency_status == 2 )) && return 1
-      if (( type_dependency_status == 1 )); then
-        type_dependency_status=0
-        _dev_pyproject_has_dep "pyright" || type_dependency_status=$?
-        (( type_dependency_status == 2 )) && return 1
-      fi
-      if (( type_dependency_status == 0 )); then
-        _dev_run_check "Type checker" dev-check-types
-      fi
-
-      if [[ -d ".venv" ]]; then
-        _dev_run_check "pip-audit (CVE)" dev-run-audit
-      fi
-      _dev_run_check "Bandit (SAST)" dev-run-bandit
     fi
+    (( type_dependency_status == 0 )) \
+      && checks+=($'Type checker\tdev-check-types')
 
-    local -i test_probe_status=0
-    _dev_has_tests || test_probe_status=$?
-    (( test_probe_status == 2 )) && return 1
-    if (( test_probe_status == 0 )); then
-      _dev_run_check "Tests (pytest)" dev-run-tests
-    fi
+    [[ -d ".venv" ]] && checks+=($'pip-audit (CVE)\tdev-run-audit')
+    checks+=($'Bandit (SAST)\tdev-run-bandit')
+  fi
 
-    if [[ -f ".pre-commit-config.yaml" ]]; then
-      _dev_run_check "Pre-commit hooks" dev-run-hooks
-    fi
+  local -i test_probe_status=0
+  _dev_has_tests || test_probe_status=$?
+  (( test_probe_status == 2 )) && return 1
+  (( test_probe_status == 0 )) && checks+=($'Tests (pytest)\tdev-run-tests')
 
-    project_probe_status=0
-    _dev_project_has_files '*.tf' || project_probe_status=$?
-    (( project_probe_status == 2 )) && return 1
-    if (( project_probe_status == 0 )); then
-      _dev_run_check "TFLint" dev-run-tflint
-    fi
+  [[ -f ".pre-commit-config.yaml" ]] \
+    && checks+=($'Pre-commit hooks\tdev-run-hooks')
 
-    if [[ -f "package.json" ]]; then
-      _dev_run_check "ESLint" dev-run-eslint
-      _dev_run_check "Prettier" dev-run-prettier
-    fi
+  project_probe_status=0
+  _dev_project_has_files '*.tf' || project_probe_status=$?
+  (( project_probe_status == 2 )) && return 1
+  (( project_probe_status == 0 )) && checks+=($'TFLint\tdev-run-tflint')
 
-    if [[ -f "Cargo.toml" ]]; then
-      _dev_run_check "Cargo Clippy" dev-run-clippy
-    fi
+  if [[ -f "package.json" ]]; then
+    checks+=($'ESLint\tdev-run-eslint' $'Prettier\tdev-run-prettier')
+  fi
 
-    project_probe_status=0
-    _dev_project_has_files '*.sh' '*.bash' '*.zsh' \
-      || project_probe_status=$?
-    (( project_probe_status == 2 )) && return 1
-    if (( project_probe_status == 0 )); then
-      _dev_run_check "ShellCheck" dev-run-shellcheck
-    fi
+  [[ -f "Cargo.toml" ]] && checks+=($'Cargo Clippy\tdev-run-clippy')
 
-    project_probe_status=0
-    _dev_project_has_files '*.md' || project_probe_status=$?
-    (( project_probe_status == 2 )) && return 1
-    if (( project_probe_status == 0 )); then
-      _dev_run_check "Markdownlint" dev-run-markdownlint
-    fi
+  project_probe_status=0
+  _dev_project_has_files '*.sh' '*.bash' '*.zsh' \
+    || project_probe_status=$?
+  (( project_probe_status == 2 )) && return 1
+  (( project_probe_status == 0 )) && checks+=($'ShellCheck\tdev-run-shellcheck')
 
-    results=("${_DEV_CHECK_RESULTS[@]}")
-    failures=$_DEV_CHECK_FAILURES
-    interrupted_status=$_DEV_CHECK_INTERRUPTED
-  } always {
-    _DEV_CHECK_VERBOSE=$previous_verbose
-    _DEV_CHECK_RESULTS=()
-    _DEV_CHECK_FAILURES=0
-  }
+  project_probe_status=0
+  _dev_project_has_files '*.md' || project_probe_status=$?
+  (( project_probe_status == 2 )) && return 1
+  (( project_probe_status == 0 )) \
+    && checks+=($'Markdownlint\tdev-run-markdownlint')
 
-  if (( ${#results[@]} == 0 )); then
+  if (( ${#checks[@]} == 0 )); then
     _dev_info "No applicable checks for this project."
     return 0
   fi
 
-  _dev_check_print_results "${results[@]}"
+  local -i check_index=0 check_total=${#checks[@]} interrupted_status=0
+  local -a summary_records=() failed_checks=()
+  local check
+  for check in "${checks[@]}"; do
+    _dev_run_check "${check%%$'\t'*}" "${check#*$'\t'}"
+  done
 
-  local total_elapsed
-  total_elapsed=$(_dev_elapsed "$total_start")
+  _dev_print_step_summary "Check Results" "${summary_records[@]}"
 
-  _dev_blank
+  local REPLY
+  _dev_count_noun "$check_total" check
   if (( interrupted_status )); then
     _dev_error \
       "Checks were interrupted (status $interrupted_status); later checks did not run."
     return $interrupted_status
   fi
-  if (( failures == 0 )); then
-    _dev_success "All ${#results[@]} check(s) passed in ${total_elapsed}s."
+  if (( ${#failed_checks[@]} == 0 )); then
+    if (( check_total == 1 )); then
+      _dev_success "The only check passed."
+    else
+      _dev_success "All $REPLY passed."
+    fi
     return 0
   fi
 
-  _dev_warn \
-    "$failures of ${#results[@]} check(s) failed (${total_elapsed}s total)."
-  (( verbose )) || _dev_info \
-    "Re-run with --verbose, or run the failing check directly, to see details."
+  _dev_error "${#failed_checks[@]} of $REPLY failed."
+  _dev_info "Run a failing check directly for its complete output:"
+  local failed_check
+  for failed_check in "${(@u)failed_checks}"; do
+    _dev_dim "dev-menu $failed_check"
+  done
   return 1
 }
 

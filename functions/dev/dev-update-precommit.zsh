@@ -19,8 +19,11 @@ fi
 # object, and an already immutable revision is retained when the proposed tag
 # is older, incomparable, or was moved to a different object.
 #
-# stdout: tab-separated `repo, previous tag, proposed tag, reason` records for
-#         revisions retained by the guard.
+# stdout: one tab-separated `outcome, repo, previous, final, detail` record
+#         for every remote revision. The outcome is `current` for an untouched
+#         revision, `updated` for an accepted change, or `kept` when the guard
+#         retained the previous revision; a kept record's detail is
+#         `<proposed>: <reason>`. Other details are `-`.
 _dev_precommit_sanitize_plan() {
   local original_config="$1"
   local planned_config="$2"
@@ -232,7 +235,7 @@ try:
         if original_line != planned_line and index not in revision_indexes:
             raise ValueError
 
-    retained = []
+    results = []
     for original_record, planned_record in zip(
         original_records,
         planned_records,
@@ -291,15 +294,31 @@ try:
         ):
             reason = "version metadata changed without an object change"
 
+        previous_display = previous_label or original_revision
         if reason:
             planned_lines[planned_index] = original_lines[original_index]
-            retained.append(
+            results.append(
                 (
+                    "kept",
                     original_repo,
-                    previous_label or original_revision,
-                    proposed_label or planned_revision,
-                    reason,
+                    previous_display,
+                    previous_display,
+                    f"{proposed_label or planned_revision}: {reason}",
                 )
+            )
+        elif changed_object:
+            results.append(
+                (
+                    "updated",
+                    original_repo,
+                    previous_display,
+                    proposed_label or planned_revision,
+                    "-",
+                )
+            )
+        else:
+            results.append(
+                ("current", original_repo, previous_display, previous_display, "-")
             )
 
     sanitized = "".join(planned_lines).encode("utf-8")
@@ -344,7 +363,9 @@ try:
     ):
         raise ValueError
 
-    for record in retained:
+    for record in results:
+        if any(not field or "\t" in field or "\n" in field for field in record):
+            raise ValueError
         print("\t".join(record))
 except (OSError, UnicodeError, ValueError):
     raise SystemExit(1)
@@ -352,6 +373,27 @@ finally:
     if planned_fd >= 0:
         os.close(planned_fd)
 PY_PRECOMMIT_GUARD
+}
+
+# REPLY: the Git hook types that `pre-commit install` installs for a config:
+# pre-commit's own default, a flow-style default_install_hook_types list, or
+# empty when another form makes the list unknown.
+_dev_precommit_hook_types() {
+  local config_file="${1:-}" line="" MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=() hook_types=()
+  REPLY="pre-commit"
+  [[ -f "$config_file" && ! -L "$config_file" ]] || return 0
+  for line in "${(@f)$(command head -c 262144 -- "$config_file" 2>/dev/null)}"; do
+    [[ "$line" == default_install_hook_types:* ]] || continue
+    REPLY=""
+    [[ "$line" =~ '^default_install_hook_types:[[:space:]]*\[([-a-z, ]*)\][[:space:]]*(#.*)?$' ]] \
+      || return 0
+    hook_types=(${(s:,:)match[1]})
+    hook_types=("${(@)hook_types//[[:space:]]/}")
+    hook_types=("${(@)hook_types:#}")
+    REPLY="${(j:, :)hook_types}"
+    return 0
+  done
 }
 
 _dev_precommit_live_config_matches() {
@@ -534,18 +576,18 @@ dev-update-precommit() {
 
     case "$specifier_status" in
       updated)
-        _dev_info "  pre-commit specifier: $specifier_old -> $specifier_new"
+        _dev_info "pre-commit specifier: $specifier_old → $specifier_new"
         ;;
       latest)
-        _dev_dim "  pre-commit specifier already at latest ($specifier_old)"
+        _dev_dim "pre-commit specifier already at latest ($specifier_old)"
         ;;
       failed)
         _dev_warn \
-          "  PyPI query failed for pre-commit; continuing with the lockfile."
+          "PyPI query failed for pre-commit; continuing with the lockfile."
         ;;
       skipped)
         _dev_dim \
-          "  pre-commit specifier not bumped (${specifier_note:-no >= specifier})"
+          "pre-commit specifier not bumped (${specifier_note:-no >= specifier})"
         ;;
     esac
 
@@ -605,8 +647,8 @@ dev-update-precommit() {
         "pre-commit specifier applied to pyproject.toml after its backup."
       _dev_show_diff pyproject.toml
 
-      _dev_info "Re-locking pre-commit..."
-      if ! command uv lock --upgrade-package pre-commit >&2; then
+      if ! _dev_run_captured "uv lock --upgrade-package pre-commit" \
+        command uv lock --upgrade-package pre-commit; then
         _dev_error \
           "Lock failed — attempting an exact pyproject.toml rollback."
         if ! _dev_update_rollback_pyproject \
@@ -614,17 +656,20 @@ dev-update-precommit() {
           "$applied_pyproject_fingerprint" \
           "$initial_pyproject_fingerprint"; then
           _dev_error "Lock failed and pyproject.toml rollback also failed."
+          _dev_report_result failed "lock failed; pyproject.toml rollback failed"
           return 1
         fi
         _dev_warn \
           "pyproject.toml was restored from the exact invocation backup."
+        _dev_report_result failed "lock failed; pyproject.toml restored"
         return 1
       fi
     fi
 
-    _dev_info "Syncing the environment..."
-    if ! command uv sync --all-groups >&2; then
+    if ! _dev_run_captured "uv sync --all-groups" \
+      command uv sync --all-groups; then
       _dev_error "Sync failed — pre-commit autoupdate needs the environment."
+      _dev_report_result failed "sync failed"
       return 1
     fi
 
@@ -668,10 +713,10 @@ dev-update-precommit() {
       return 1
     fi
 
-    _dev_info "Planning frozen hook revisions (autoupdate)..."
-    "${precommit_runner[@]}" autoupdate --freeze \
-      --config "$planned_config" >&2
-    local -i autoupdate_status=$?
+    local -i autoupdate_status=0
+    _dev_run_captured "pre-commit autoupdate --freeze" \
+      "${precommit_runner[@]}" autoupdate --freeze \
+      --config "$planned_config" || autoupdate_status=$?
 
     local observed_config_fingerprint=""
     _dev_update_file_fingerprint "$config_path" \
@@ -736,31 +781,51 @@ dev-update-precommit() {
       return 1
     fi
 
-    local guard_record guard_repo guard_previous guard_proposed guard_reason
-    local guard_extra
+    local guard_record guard_outcome guard_repo guard_previous guard_final
+    local guard_detail guard_display
+    local -a guard_fields=() revision_rows=()
+    local -i updated_revisions=0 kept_revisions=0 current_revisions=0
     for guard_record in "${(@f)guard_report}"; do
       [[ -n "$guard_record" ]] || continue
-      guard_repo=""
-      guard_previous=""
-      guard_proposed=""
-      guard_reason=""
-      guard_extra=""
-      IFS=$'\t' read -r guard_repo guard_previous guard_proposed \
-        guard_reason guard_extra <<< "$guard_record"
-      if [[ -z "$guard_repo" || -z "$guard_previous" \
-        || -z "$guard_proposed" || -z "$guard_reason" \
-        || -n "$guard_extra" ]]; then
+      guard_fields=("${(@ps:\t:)guard_record}")
+      guard_outcome="${guard_fields[1]:-}"
+      guard_repo="${guard_fields[2]:-}"
+      guard_previous="${guard_fields[3]:-}"
+      guard_final="${guard_fields[4]:-}"
+      guard_detail="${guard_fields[5]:-}"
+      if (( ${#guard_fields[@]} != 5 )) \
+        || [[ "$guard_outcome" != (current|updated|kept) \
+          || -z "$guard_repo" || -z "$guard_previous" \
+          || -z "$guard_final" || -z "$guard_detail" ]]; then
         _dev_error "The hook revision guard returned an invalid record."
         return 1
       fi
-      _dev_warn \
-        "Kept ${(V)guard_repo} at ${(V)guard_previous}: ${(V)guard_reason}."
-      _dev_dim "  Rejected autoupdate proposal: ${(V)guard_proposed}"
+      guard_display="${guard_repo#https://github.com/}"
+      case "$guard_outcome" in
+        current)
+          (( ++current_revisions ))
+          revision_rows+=("$guard_display"$'\t'"$guard_final"$'\t'current$'\t')
+          ;;
+        updated)
+          (( ++updated_revisions ))
+          revision_rows+=("$guard_display"$'\t'"$guard_final"$'\t'updated$'\t'"from $guard_previous")
+          ;;
+        kept)
+          (( ++kept_revisions ))
+          _dev_warn \
+            "Kept ${(V)guard_repo} at ${(V)guard_previous}: ${(V)${guard_detail#*: }}."
+          _dev_dim "  Rejected autoupdate proposal: ${(V)${guard_detail%%: *}}"
+          revision_rows+=("$guard_display"$'\t'"$guard_final"$'\t'skipped$'\t'"kept; autoupdate proposed ${guard_detail%%: *} (${guard_detail#*: })")
+          ;;
+      esac
     done
+    (( ${#revision_rows[@]} > 0 )) && _dev_table --outcome-column 3 \
+      $'Hook repository\tRevision\tResult\tDetail' "${revision_rows[@]}"
 
-    _dev_info "Validating the private hook configuration..."
-    "${precommit_runner[@]}" validate-config "$planned_config" >&2
-    local -i validate_config_status=$?
+    local -i validate_config_status=0
+    _dev_run_captured "pre-commit validate-config" \
+      "${precommit_runner[@]}" validate-config "$planned_config" \
+      || validate_config_status=$?
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
       preserve_workspace=1
@@ -775,10 +840,10 @@ dev-update-precommit() {
       return 1
     fi
 
-    _dev_info "Installing every planned hook environment before publication..."
-    "${precommit_runner[@]}" install-hooks \
-      --config "$planned_config" >&2
-    local -i install_hooks_status=$?
+    local -i install_hooks_status=0
+    _dev_run_captured "pre-commit install-hooks" \
+      "${precommit_runner[@]}" install-hooks \
+      --config "$planned_config" || install_hooks_status=$?
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
       preserve_workspace=1
@@ -844,9 +909,10 @@ dev-update-precommit() {
       _dev_dim "  No safe hook revision change needs publication."
     fi
 
-    _dev_info "Reinstalling hooks..."
-    "${precommit_runner[@]}" install --install-hooks >&2
-    local -i hook_install_status=$?
+    local -i hook_install_status=0
+    _dev_run_captured "pre-commit install --install-hooks" \
+      "${precommit_runner[@]}" install --install-hooks \
+      || hook_install_status=$?
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$expected_installed_config_fingerprint"; then
       preserve_workspace=1
@@ -857,7 +923,14 @@ dev-update-precommit() {
     fi
     if (( hook_install_status != 0 )); then
       _dev_warn "Hook installation failed after revision validation."
+      _dev_report_result failed "hook installation failed"
       return 1
+    fi
+    _dev_precommit_hook_types "$config_path"
+    if [[ -n "$REPLY" ]]; then
+      _dev_success "Git hooks installed: $REPLY."
+    else
+      _dev_success "Git hooks reinstalled."
     fi
 
     # Hook findings are project findings, not update failures. They are
@@ -874,6 +947,25 @@ dev-update-precommit() {
       _dev_info "Review the findings above, then rerun: dev-run-hooks"
     fi
 
+    # The step result: the package specifier and the revision counts.
+    local -a result_parts=()
+    [[ "$specifier_status" == "updated" ]] \
+      && result_parts+=("pre-commit $specifier_old → $specifier_new")
+    if (( updated_revisions > 0 )); then
+      _dev_count_noun "$updated_revisions" revision
+      result_parts+=("$REPLY updated")
+    fi
+    (( kept_revisions > 0 )) && result_parts+=("$kept_revisions kept")
+    if (( current_revisions > 0 )); then
+      if (( updated_revisions + kept_revisions == 0 )); then
+        _dev_count_noun "$current_revisions" revision
+        result_parts+=("$REPLY current")
+      else
+        result_parts+=("$current_revisions current")
+      fi
+    fi
+    local result_detail="${(j: · :)result_parts}"
+
     if (( autoupdate_status != 0 )); then
       _dev_warn \
         "Validated hook revisions were kept, but some repositories could not be updated."
@@ -883,16 +975,29 @@ dev-update-precommit() {
       _dev_warn \
         "Hooks were validated, but the pre-commit package query or plan failed."
       _dev_info "Retry the package update: dev-menu dev-update-precommit"
+      _dev_report_result failed \
+        "pre-commit package query failed${result_detail:+; $result_detail}"
       return 1
     fi
-    (( autoupdate_status != 0 )) && return 1
+    if (( autoupdate_status != 0 )); then
+      _dev_report_result failed \
+        "some hook repositories could not be updated${result_detail:+; $result_detail}"
+      return 1
+    fi
     if (( hook_run_status != 0 )); then
       _dev_warn \
         "Pre-commit revisions were published, but the hook run reported issues."
+      _dev_report_result failed \
+        "hook run reported issues${result_detail:+; $result_detail}"
       return 1
     fi
-    _dev_success \
-      "Pre-commit maintenance completed with safe frozen hook revisions."
+    if [[ "$specifier_status" == "updated" ]] || (( updated_revisions > 0 )); then
+      _dev_report_result updated "$result_detail" \
+        "Pre-commit maintenance completed with safe frozen hook revisions."
+    else
+      _dev_report_result current "$result_detail" \
+        "Pre-commit maintenance completed with safe frozen hook revisions."
+    fi
     return 0
   } always {
     _dev_pypi_cache_cleanup

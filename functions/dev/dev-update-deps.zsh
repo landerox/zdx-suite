@@ -12,42 +12,33 @@ if [[ -n "${_DEV_UPDATE_DEPS_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# --- Summary table ----------------------------------------------------------
+# --- Specifier plan ---------------------------------------------------------
 
+# Prints the planned specifier changes from "status|package|old|new|note" rows.
+# Nothing is applied yet, so a bump renders as planned and an unchanged
+# specifier as current.
 _dev_print_summary_table() {
-  local -a rows=("$@")
+  local -a rows=("$@") table_rows=()
   (( ${#rows[@]} > 0 )) || return 0
 
-  _dev_header "Update Summary"
+  _dev_header "Specifier Plan"
 
-  if _dev_color_enabled; then
-    printf '  \033[1;37m%-30s %-14s %-14s %s\033[0m\n' \
-      "Package" "Previous" "Latest" "Status" >&2
-  else
-    printf '  %-30s %-14s %-14s %s\n' \
-      "Package" "Previous" "Latest" "Status" >&2
-  fi
-
-  local row row_status rest package old_version new_version note label
+  local row row_status rest package old_version new_version note outcome
   for row in "${rows[@]}"; do
     row_status="${row%%|*}"; rest="${row#*|}"
     package="${rest%%|*}";   rest="${rest#*|}"
     old_version="${rest%%|*}"; rest="${rest#*|}"
     new_version="${rest%%|*}"; note="${rest#*|}"
-
     case "$row_status" in
-      updated) label="✔ updated" ;;
-      latest)  label="✔ latest" ;;
-      failed)  label="✘ failed" ;;
-      skipped) label="⊘ skipped" ;;
-      *)       label="$row_status" ;;
+      updated) outcome=planned ;;
+      latest)  outcome=current ;;
+      failed)  outcome=failed ;;
+      *)       outcome=skipped ;;
     esac
-
-    printf '  %-30s %-14s %-14s %s%s\n' \
-      "${(V)package}" "${(V)old_version}" "${(V)new_version}" \
-      "$label" "${note:+ (${(V)note})}" >&2
+    table_rows+=("$package"$'\t'"$old_version"$'\t'"$new_version"$'\t'"$outcome"$'\t'"$note")
   done
-  _dev_blank
+  _dev_table --outcome-column 4 $'Package\tPrevious\tLatest\tPlan\tNote' \
+    "${table_rows[@]}"
 }
 
 # --- Dependency specifiers --------------------------------------------------
@@ -134,7 +125,10 @@ dev-update-deps() {
     (( auto_yes )) && _DEV_AUTO_YES=1
 
     _dev_header "Updating pyproject.toml Specifiers"
-    (( dry_run )) && _dev_warn "DRY-RUN — no files will be modified."
+    # An enclosing dry-run aggregate has already said so.
+    if (( dry_run )) && ! _dev_step_quiet; then
+      _dev_warn "DRY-RUN — no files will be modified."
+    fi
     [[ "$bump_filter" != "all" ]] \
       && _dev_info "Filter: --${bump_filter}-only (other bump types are skipped)"
 
@@ -189,10 +183,11 @@ dev-update-deps() {
       return 0
     fi
 
-    _dev_info \
-      "Found ${#all_deps[@]} unique dependency(ies). Querying PyPI..."
+    _dev_count_noun "${#all_deps[@]}" dependency dependencies
+    _dev_info "Found $REPLY. Querying PyPI..."
 
-    _dev_spinner_start "Fetching versions from PyPI (${#all_deps[@]} packages)"
+    _dev_count_noun "${#all_deps[@]}" package
+    _dev_spinner_start "Fetching versions from PyPI ($REPLY)"
     _dev_pypi_prefetch "${all_deps[@]}"
     _dev_spinner_stop
     (( interrupted )) && {
@@ -265,32 +260,43 @@ dev-update-deps() {
       return 1
     fi
 
+    local failed_label="" skipped_label=""
+    _dev_count_noun "$failed" package
+    failed_label="$REPLY"
+    _dev_count_noun "$skipped" package
+    skipped_label="$REPLY"
+
     if (( dry_run )); then
       if (( updated > 0 )); then
-        _dev_success "$updated specifier(s) would be updated."
-        _dev_info "Run without --dry-run to apply the changes."
+        _dev_count_noun "$updated" specifier
+        _dev_report_result planned "$REPLY" "$REPLY would be updated."
+        _dev_note "Run without --dry-run to apply the changes."
       else
-        _dev_success "All specifiers are already at their latest versions."
+        _dev_report_result current "every specifier at its latest version" \
+          "All specifiers are already at their latest versions."
       fi
       (( failed > 0 )) \
-        && _dev_warn "$failed package(s) could not be queried from PyPI."
+        && _dev_warn "$failed_label could not be queried from PyPI."
       (( skipped > 0 )) \
-        && _dev_dim "$skipped package(s) skipped (see the notes above)."
-      (( failed > 0 )) && return 1
+        && _dev_dim "$skipped_label skipped (see the notes above)."
+      if (( failed > 0 )); then
+        _dev_report_result failed "$failed_label could not be queried"
+        return 1
+      fi
       return 0
     fi
 
     if (( updated == 0 )); then
       if (( failed > 0 )); then
         _dev_error \
-          "No update was applied because $failed package query or plan failed."
+          "No update was applied: $failed_label could not be queried or planned."
+        _dev_report_result failed "$failed_label could not be queried"
         return 1
       fi
-      _dev_success "No eligible dependency specifier needs updating."
-      (( failed > 0 )) \
-        && _dev_warn "$failed package(s) could not be queried from PyPI."
       (( skipped > 0 )) \
-        && _dev_dim "$skipped package(s) skipped (see the notes above)."
+        && _dev_dim "$skipped_label skipped (see the notes above)."
+      _dev_report_result current "no eligible specifier changes" \
+        "No eligible dependency specifier needs updating."
       return 0
     fi
 
@@ -299,8 +305,9 @@ dev-update-deps() {
       return $interrupted
     }
     local apply_outcome
+    _dev_count_noun "$updated" update
     apply_outcome=$(_dev_confirm_outcome \
-      "Apply $updated update(s) to pyproject.toml?")
+      "Apply $REPLY to pyproject.toml?")
     case "$apply_outcome" in
       confirmed) ;;
       unavailable)
@@ -372,28 +379,43 @@ dev-update-deps() {
     applied_fingerprint="$REPLY"
     _DEV_UPDATE_DEPS_OUTCOME="inconsistent"
 
-    _dev_info "$updated specifier(s) applied to pyproject.toml."
+    _dev_count_noun "$updated" specifier
+    _dev_info "$REPLY applied to pyproject.toml."
     _dev_info "Changes to pyproject.toml:"
     _dev_show_diff pyproject.toml
 
     (( failed > 0 )) \
-      && _dev_warn "$failed package(s) could not be queried from PyPI."
+      && _dev_warn "$failed_label could not be queried from PyPI."
     (( skipped > 0 )) \
-      && _dev_dim "$skipped package(s) skipped (see the notes above)."
+      && _dev_dim "$skipped_label skipped (see the notes above)."
+
+    # The evidence for the step result: the bumped packages and versions.
+    local -a applied_changes=()
+    local applied_row applied_rest
+    for applied_row in "${summary_rows[@]}"; do
+      [[ "${applied_row%%|*}" == updated ]] || continue
+      applied_rest="${applied_row#*|}"
+      applied_changes+=("${applied_rest%%|*} ${${applied_rest#*|}%%|*} → ${${${applied_rest#*|}#*|}%%|*}")
+    done
+    local applied_detail="${(j:, :)applied_changes[1,3]}"
+    (( ${#applied_changes[@]} > 3 )) && applied_detail+=", …"
 
     # Re-lock only the packages that changed. A blanket --upgrade churns
     # transitive dependencies and can surface conflicts that existing pins
     # were specifically written to avoid.
-    _dev_info "Re-locking ${#updated_packages[@]} package(s) and syncing..."
+    _dev_count_noun "${#updated_packages[@]}" package
+    _dev_info "Re-locking $REPLY and syncing..."
     local -a upgrade_args=()
     for package in "${updated_packages[@]}"; do
       upgrade_args+=(--upgrade-package "$package")
     done
+    _dev_command_display uv lock "${upgrade_args[@]}"
+    local lock_display="$REPLY"
 
     # An interruption after publication takes the same exact rollback as a
     # failed lock, then preserves the signal status.
-    if (( interrupted )) || ! command uv lock "${upgrade_args[@]}" >&2 \
-      || (( interrupted )); then
+    if (( interrupted )) || ! _dev_run_captured "$lock_display" \
+      command uv lock "${upgrade_args[@]}" || (( interrupted )); then
       if (( interrupted )); then
         _dev_error "Interrupted — attempting an exact pyproject.toml rollback."
       else
@@ -403,30 +425,35 @@ dev-update-deps() {
         "$invocation_backup" "$invocation_backup_fingerprint" \
         "$applied_fingerprint" "$initial_fingerprint"; then
         _dev_error "Lock failed and pyproject.toml rollback also failed."
+        _dev_report_result failed "lock failed; pyproject.toml rollback failed"
         return $(( interrupted ? interrupted : 1 ))
       fi
 
       _DEV_UPDATE_DEPS_OUTCOME="restored"
       _dev_warn "pyproject.toml was restored from the exact invocation backup."
+      _dev_report_result failed "lock failed; pyproject.toml restored"
       return $(( interrupted ? interrupted : 1 ))
     fi
     _DEV_UPDATE_DEPS_OUTCOME="locked"
 
-    if ! command uv sync --all-groups >&2 || (( interrupted )); then
+    if ! _dev_run_captured "uv sync --all-groups" \
+      command uv sync --all-groups || (( interrupted )); then
       _dev_error \
         "Sync failed after the project and lockfile were updated; the environment may be partial."
+      _dev_report_result failed "sync failed; environment may be partial"
       return $(( interrupted ? interrupted : 1 ))
     fi
     _DEV_UPDATE_DEPS_OUTCOME="applied"
 
+    _dev_count_noun "$updated" "dependency update"
     if (( failed > 0 )); then
-      _dev_warn \
-        "Applied $updated update(s), but $failed package query or plan failed."
+      _dev_warn "Applied $REPLY, but $failed_label could not be queried or planned."
+      _dev_report_result failed "$applied_detail; $failed_label could not be queried"
       return 1
     fi
 
-    _dev_success \
-      "Applied $updated dependency update(s) and synchronized the environment."
+    _dev_report_result updated "$applied_detail" \
+      "Applied $REPLY and synchronized the environment."
     return 0
   } always {
     _dev_spinner_stop
@@ -456,6 +483,86 @@ dev-update-deps-dry() {
 
 # --- Lockfile ---------------------------------------------------------------
 
+# Prints "name<TAB>version" records for the packages locked in uv.lock. A
+# missing, symlinked, oversized, or unparsable lockfile prints nothing and
+# returns 1, so the caller reports the refresh without version evidence.
+_dev_update_lock_versions() {
+  local lock_file="${1:-uv.lock}"
+  [[ -f "$lock_file" && ! -L "$lock_file" ]] || return 1
+  command python3 -I - "$lock_file" <<'PY_LOCK_VERSIONS' 2>/dev/null
+import os
+import sys
+import tomllib
+
+MAX_LOCK_SIZE = 16 * 1024 * 1024
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+with os.fdopen(os.open(sys.argv[1], flags), "rb") as handle:
+    data = handle.read(MAX_LOCK_SIZE + 1)
+if len(data) > MAX_LOCK_SIZE:
+    raise SystemExit(1)
+document = tomllib.loads(data.decode("utf-8"))
+for package in document.get("package", []):
+    name = package.get("name")
+    version = package.get("version")
+    if (
+        isinstance(name, str)
+        and isinstance(version, str)
+        and name.isprintable()
+        and version.isprintable()
+    ):
+        print(f"{name}\t{version}")
+PY_LOCK_VERSIONS
+}
+
+# Reports a lockfile refresh from the locked versions before and after it.
+# Usage: _dev_update_lock_report <versions-known> <before-records>
+_dev_update_lock_report() {
+  local -i versions_known="${1:-0}"
+  local before_records="${2:-}" after_records="" record name REPLY
+  if (( ! versions_known )) \
+    || ! after_records=$(_dev_update_lock_versions uv.lock); then
+    _dev_report_result done "" "uv.lock updated and the environment synced."
+    return 0
+  fi
+
+  # A package can be locked at several versions for different markers.
+  local -A before=() after=()
+  for record in "${(@f)before_records}"; do
+    [[ -n "$record" ]] || continue
+    name="${record%%$'\t'*}"
+    before[$name]="${before[$name]:+${before[$name]}, }${record#*$'\t'}"
+  done
+  for record in "${(@f)after_records}"; do
+    [[ -n "$record" ]] || continue
+    name="${record%%$'\t'*}"
+    after[$name]="${after[$name]:+${after[$name]}, }${record#*$'\t'}"
+  done
+
+  local -aU names=("${(@k)before}" "${(@k)after}")
+  names=("${(@o)names}")
+  local -a rows=() changed=()
+  for name in "${names[@]}"; do
+    [[ "${before[$name]-}" == "${after[$name]-}" ]] && continue
+    changed+=("$name")
+    rows+=("$name"$'\t'"${before[$name]:-—}"$'\t'"${after[$name]:-removed}")
+  done
+  if (( ${#changed[@]} == 0 )); then
+    _dev_report_result current "no locked version changed" \
+      "uv.lock is already current; the environment was synced."
+    return 0
+  fi
+
+  _dev_count_noun "${#changed[@]}" package
+  local changed_label="$REPLY"
+  _dev_info "Locked version changes:"
+  _dev_table $'Package\tPrevious\tLocked' "${(@)rows[1,20]}"
+  (( ${#rows[@]} > 20 )) && _dev_dim "… and $(( ${#rows[@]} - 20 )) more"
+  local preview="${(j:, :)changed[1,3]}"
+  (( ${#changed[@]} > 3 )) && preview+=", …"
+  _dev_report_result updated "$changed_label ($preview)" \
+    "uv.lock updated: $changed_label changed; the environment was synced."
+}
+
 # dev-update-lock
 #   Effects:   refreshes uv.lock to the newest resolvable versions and syncs
 #              the environment. pyproject.toml is not modified.
@@ -475,19 +582,26 @@ dev-update-lock() {
   _dev_require_command uv || return 1
   _dev_require_file "pyproject.toml" || return 1
 
-  _dev_info "Resolving the newest compatible versions..."
-  command uv lock --upgrade >&2 || {
+  # The locked versions are evidence for the result only; an unreadable lock
+  # never blocks the refresh.
+  local before_versions=""
+  local -i versions_known=0
+  if command -v python3 &>/dev/null \
+    && before_versions=$(_dev_update_lock_versions uv.lock); then
+    versions_known=1
+  fi
+
+  _dev_run_captured "uv lock --upgrade" command uv lock --upgrade || {
     _dev_error "Lock failed."
     return 1
   }
 
-  _dev_info "Syncing the environment..."
-  command uv sync --all-groups >&2 || {
+  _dev_run_captured "uv sync --all-groups" command uv sync --all-groups || {
     _dev_error "Sync failed."
     return 1
   }
 
-  _dev_success "uv.lock updated and the environment synced."
+  _dev_update_lock_report "$versions_known" "$before_versions"
 }
 
 typeset -g _DEV_UPDATE_DEPS_SOURCED=1

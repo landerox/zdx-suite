@@ -43,6 +43,16 @@ behavior, verification, and remaining limitations.
   records. Otherwise they report `current` or `done`.
 - `clean-system-quick` and `clean-system-deep` use the same plan table, step
   results, and `Cleanup Summary`, and Ctrl-C stops the remaining steps.
+- `dev-update-all` shows a numbered plan with not-applicable and blocked rows,
+  one result line per step, and a `Maintenance Summary` with each step's time
+  and detail. The lockfile step lists the packages whose locked versions
+  changed, the pre-commit step shows a revision table, ownership steps report
+  `delegated`, and cleanup reports what it removed. `uv` and pre-commit
+  backend output is captured and shown on failure; the new `--verbose` flag
+  streams it.
+- `dev-run-all-checks` shows each gate as a step and replays a failing gate's
+  last lines immediately; `dev-menu --multi` and `dev-profile-run` share one
+  batch runner with step results and a `Task Summary`.
 
 ### Fixed
 
@@ -59,6 +69,9 @@ behavior, verification, and remaining limitations.
   `nvm use` no longer leaks into a successful update.
 - Zsh plugin updates no longer claim that every repository was updated when
   nothing changed.
+- Developer messages no longer print `(s)` or `(ies)` plurals, and the
+  dependency plan table is titled `Specifier Plan` instead of `Update Summary`,
+  with bumps shown as planned until they are applied.
 - AI updates compare the release version instead of the whole version line, so
   a vendor's relative release age, such as Amp's `(released …, 4h ago)`, no
   longer reports an update. A launcher symlink that a vendor re-creates for the

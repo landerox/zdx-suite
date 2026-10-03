@@ -249,6 +249,7 @@ _dev_profile_names() {
 dev-profile-save() {
   emulate -L zsh
 
+  local REPLY
   local name=""
   local -i name_supplied=0
 
@@ -496,7 +497,8 @@ dev-profile-save() {
       "$profile_dir" "profile" "$directory_identity" || return 1
     _dev_profile_file_identity \
       "$profile_path" "$profile_dir" "profile '$name'" >/dev/null || return 1
-    _dev_success "Profile '$name' saved with ${#tasks[@]} task(s)."
+    _dev_count_noun "${#tasks[@]}" task
+    _dev_success "Profile '$name' saved with $REPLY."
   } always {
     if [[ -n "$temp_path" && ( -e "$temp_path" || -L "$temp_path" ) ]]; then
       local cleanup_inode=""
@@ -551,8 +553,8 @@ dev-profile-list() {
     _dev_profile_read_tasks \
       "$profile_path" "$profile_dir" "profile '$name'" || return 1
     tasks=("${reply[@]}")
-    _dev_label "$name" \
-      "$(_dev_display_escape "${#tasks[@]} task(s): ${(j:, :)tasks}")"
+    _dev_count_noun "${#tasks[@]}" task
+    _dev_label "$name" "$REPLY: ${(j:, :)tasks}"
   done
   return 0
 }
@@ -821,31 +823,7 @@ dev-profile-run() {
     return 0
   fi
 
-  _dev_header "Running Profile: $name (${#tasks[@]} task(s))"
-  local start_time
-  start_time=$(_dev_now)
-
-  local -i index=0 failures=0
-  local task
-  for task in "${tasks[@]}"; do
-    index=$(( index + 1 ))
-    _dev_info "[$index/${#tasks[@]}] $(_dev_display_escape "$task")"
-    _dev_timed "dev:$task" _dev_dispatch "$task" || failures=$(( failures + 1 ))
-  done
-
-  local elapsed
-  elapsed=$(_dev_elapsed "$start_time")
-
-  _dev_blank
-  if (( failures == 0 )); then
-    _dev_success \
-      "Profile '$name': all ${#tasks[@]} task(s) completed in ${elapsed}s."
-    return 0
-  fi
-
-  _dev_warn \
-    "Profile '$name': $failures of ${#tasks[@]} task(s) failed (${elapsed}s)."
-  return 1
+  _dev_run_task_batch "Profile: $name" "${tasks[@]}"
 }
 
 typeset -g _DEV_PROFILES_SOURCED=1
