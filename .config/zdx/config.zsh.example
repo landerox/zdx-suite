@@ -1,0 +1,253 @@
+# =============================================================================
+# ZDX user configuration template
+# =============================================================================
+#
+# ZDX works without this file. Copy it only when you want to override a
+# documented default, then uncomment the smallest set of options you need.
+# From the reviewed local checkout, use the installer to preview and create
+# this file without overwriting existing configuration:
+#
+#   zsh -f scripts/install.zsh --dry-run
+#   zsh -f scripts/install.zsh
+#
+# Pass custom Oh My Zsh paths as exported ZSH/ZSH_CUSTOM variables. The runtime
+# reads ~/.config/zdx/config.zsh regardless of XDG_CONFIG_HOME.
+# Installation and activation contract: docs/installation.md
+#
+# This file is executable Zsh and is sourced during shell startup. Keep it
+# owner-controlled, review every line you add, and never paste untrusted shell
+# snippets into it. Prefer references to credential files over embedded
+# secrets. Start a new shell after editing to load the configuration cleanly.
+#
+# Full workflows and validation rules: docs/user-guide.md
+# Plugin trust model: docs/plugins.md
+
+# =============================================================================
+# Workspaces and Git identities
+# =============================================================================
+
+# Root of the <platform>/<identity>/<repository> workspace layout. ws-menu
+# navigates it, clones into it, and reports its status; git-auth reads it to
+# show a workspace SSH alias, and git-identity-check uses it to choose a
+# profile. It must be an absolute path to an existing directory, and ws-clone
+# writes only below a root you own.
+# WS_BASE_DIR="${HOME:A}/workspaces"
+
+# Deepest repository level below WS_BASE_DIR that ws-jump and ws-status list;
+# 3 matches <platform>/<identity>/<repository>. Accepted range: 1-10.
+# WS_MAX_DEPTH=3
+
+# Subtrees below WS_BASE_DIR that discovery skips, as relative paths rather
+# than patterns. Hidden directories are always skipped.
+# typeset -ga WS_EXCLUDE=(github/archive gitlab/old-employer)
+
+# Concurrent git fetch jobs for ws-status --fetch, each bounded to 60 seconds.
+# Accepted range: 1-16.
+# WS_FETCH_JOBS=4
+
+# Git identity profiles used by git-menu. Name and Email are
+# required. GpgKey, GpgFormat (openpgp or ssh), and SshKey are optional.
+# Store only a key ID or key path here, never private-key contents. Profile
+# names should be short lowercase identifiers that are easy to recognize.
+# typeset -gA ZDX_GIT_IDENTITIES=(
+#   personal 'Name|Jane Doe;Email|jane@example.com;GpgKey|0123456789ABCDEF;GpgFormat|openpgp;SshKey|~/.ssh/id_ed25519_personal'
+#   work     'Name|Jane Doe;Email|jane@work.example;SshKey|~/.ssh/id_ed25519_work'
+# )
+
+# Opt-in identity guard. With 1, an interactive shell runs
+# `git-identity-check --quiet` once per repository and session when cd first
+# enters a repository below $WS_BASE_DIR/<platform>/<identity>, and warns when
+# its identity differs from the profile named after <identity>. It never
+# prompts or changes configuration. Any other value leaves it off.
+# ZDX_GIT_IDENTITY_GUARD=1
+
+# =============================================================================
+# WireGuard VPN
+# =============================================================================
+
+# WireGuard profile directory. Linux and WSL default to /etc/wireguard. On
+# macOS an unset value selects /private/etc/wireguard when it exists, else a
+# Homebrew etc/wireguard that already holds profiles, else
+# /private/etc/wireguard. Another host is unsupported by default; setting an
+# explicit profile directory is a deliberate opt-in whose local WireGuard
+# integration ZDX cannot guarantee.
+# VPN_CONFIG_DIR="/etc/wireguard"
+# macOS example: VPN_CONFIG_DIR="/opt/homebrew/etc/wireguard"
+
+# Private state and diagnostic reports. Both locations must be canonical,
+# symlink-free descendants of HOME.
+# VPN_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/zdx/vpn"
+# VPN_MENU_REPORT_DIR="$HOME/vpn-stats"
+
+# Reports retained after a successful vpn-report. 0 keeps every report.
+# Accepted range: 0-1000.
+# VPN_MENU_REPORT_RETENTION=20
+
+# Plain IP literals used by the WSL resolver hardening hook while the tunnel is
+# down. Do not place shell syntax, hostnames, or URLs in these values.
+# VPN_DNS_FALLBACK_PRIMARY="1.1.1.1"
+# VPN_DNS_FALLBACK_SECONDARY="9.9.9.9"
+
+# IPv6 stripping for tunnel profiles. Unset, it applies on WSL when NAT
+# networking or a missing IPv6 default route requires it. 1 forces it on Linux
+# and WSL, and 0 disables it. macOS never applies it and vpn-on refuses 1.
+# VPN_MENU_WSL_IPV6_FIX=1
+
+# Compare the public exit IP across the configured providers. This makes
+# additional network requests and exposes your public IP to each provider.
+# VPN_MENU_IP_CROSSCHECK=1
+
+# Advanced provider overrides. Use bounded HTTPS endpoints without embedded
+# credentials. Comma-separated values are queried in order.
+# VPN_MENU_IPINFO_URLS="https://ipinfo.io/json,https://ifconfig.co/json"
+# VPN_MENU_IPINFO_PLAIN_URLS="https://icanhazip.com"
+# VPN_MENU_IPINFO_TRACE_URLS="https://1.1.1.1/cdn-cgi/trace"
+
+# Default target of vpn-mtu-probe, which measures the path MTU with bounded
+# don't-fragment pings. Use an IPv4 address or a host name that answers ICMP
+# echo; IPv6 literals and anything else are refused.
+# VPN_MENU_MTU_TARGET="1.1.1.1"
+
+# =============================================================================
+# System maintenance
+# =============================================================================
+
+# By default, APT may send one cooperative SIGTERM to an exactly validated
+# automatic unattended-upgrade after authorization. Set 0 to disable that
+# signal. This never enables waiting and accepts only 0 or 1.
+# SYS_APT_AUTOMATIC_TAKEOVER=1
+
+# By default, APT renews the expired or replaced signing key of a known
+# repository (GitHub CLI, Google Cloud SDK, Charm, Docker, HashiCorp,
+# Microsoft, NodeSource, Google Chrome): it downloads the publisher's key over
+# HTTPS, installs it with sudo into that repository's dedicated keyring, and
+# keeps it only after APT verifies the repository. Set 0 to keep diagnosis
+# only. Accepts only 0 or 1.
+# SYS_APT_KEY_RENEWAL=1
+
+# Maximum private output tail retained for a running System command. Failure
+# rendering remains bounded and redacts common credential indicators.
+# Accepted range: 4096-16777216 bytes.
+# SYS_COMMAND_CAPTURE_MAX_BYTES=262144
+
+# On macOS, sys-health skips Apple's own com.apple.* launchd jobs. Set 1 to
+# include them in the service health check.
+# SYS_HEALTH_INCLUDE_APPLE_JOBS=0
+
+# =============================================================================
+# Developer project tools
+# =============================================================================
+
+# Keep remote package runners disabled unless you explicitly trust that model.
+# Setting 1 allows uvx or npx as last-resort quality-gate backends, which may
+# download and execute index-selected code. Accepted values: 0 or 1.
+# DEV_ALLOW_EPHEMERAL=0
+
+# Project-local state. Defaults are recommended. Overrides must remain in a
+# dedicated canonical, symlink-free directory below the project or HOME.
+# DEV_BACKUP_DIR=".dev-suite-backups"
+# DEV_REPORT_DIR="dev-suite-reports"
+# DEV_BACKUP_RETENTION=5       # 1-100 backups
+
+# Bounded discovery settings. Increase them only for a known project layout;
+# larger values increase scan cost and the size of reviewed cleanup plans.
+# DEV_CLEAN_DEPTH=12           # 1-64
+# DEV_CLEAN_MAX_TARGETS=10000  # 1-50000
+# DEV_SCAN_DEPTH=3             # 1-32
+
+# PyPI metadata query controls for dependency-specifier reviews.
+# DEV_PYPI_TIMEOUT=15          # seconds, 1-300
+# DEV_PYPI_RETRIES=2           # retries per package, 0-10
+# DEV_PYPI_JOBS=8              # concurrent requests, 1-32
+
+# GitHub Actions updates (dev-update-actions). With an authenticated gh,
+# releases younger than the cooldown are held back; 0 disables the check.
+# DEV_ACTIONS_COOLDOWN_DAYS=7  # days, 0-90
+# DEV_ACTIONS_TIMEOUT=30       # seconds per github.com query, 1-300
+
+# Verbose Developer diagnostics are written to stderr. Leave disabled during
+# normal use to keep interactive output focused.
+# DEV_SUITE_DEBUG=0
+
+# =============================================================================
+# Interface, loading, and local telemetry
+# =============================================================================
+
+# Menus default to a 16-color palette with native terminal foreground/background.
+# Optional custom fzf theme; any non-empty NO_COLOR forces --no-color last.
+# A base scheme such as 16 resets the default keys; keep border and info so
+# fzf releases before 0.66 do not draw borders in black or the counter in white.
+# ZDX_FZF_THEME="16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow,hl:4,hl+:4"
+# NO_COLOR=1
+
+# Any non-empty value (including "0") disables color and uses ASCII fzf chrome:
+# --no-unicode, pointer >, marker +. Row text can still contain Unicode.
+# C/POSIX locales select ASCII chrome automatically; TERM=dumb also disables
+# color, but interactive menus still require terminal cursor control.
+# ZDX_FZF_PLAIN=1
+# For one invocation only: ZDX_FZF_PLAIN=1 file-menu
+
+# fzf shows a displayed field with its trailing delimiter, so menu rows read
+# "Label|" unless fzf supports field templates. auto (the default) asks each
+# installed fzf executable once per shell; 0 keeps the plain field; 1 always
+# uses the template.
+# ZDX_FZF_TEMPLATES=auto
+
+# Built-in pickers isolate inherited FZF_DEFAULT_OPTS, FZF_DEFAULT_OPTS_FILE,
+# and FZF_DEFAULT_COMMAND, and scope SHELL=/bin/sh to their preview invocation.
+# They do not change the caller's shell environment. Use zdx doctor to inspect
+# display settings and the loaded source path, then open a new terminal after
+# updating that installation so source guards cannot retain old functions.
+
+# Long-running commands capture chatty tool output privately and replay a
+# bounded, redacted tail only when a step fails. Set ZDX_VERBOSE=1 to stream
+# that output live instead (unredacted) and show nested headings. Package-
+# manager transactions are always shown. Aggregate --verbose flags enable this
+# for one run. Accepted: 0 or 1.
+# ZDX_VERBOSE=0
+
+# Lazy suite loading is the default. Eager loading is useful only for
+# compatibility or diagnostics and increases shell startup work.
+# ZDX_EAGER_LOAD=1
+
+# Local telemetry is opt-in and never sent over the network. Records contain
+# only suite, canonical command identifier, duration, exit status, and UTC
+# timestamp; they never include arguments, paths, output, or environment data.
+# ZDX_TELEMETRY=1
+# ZDX_TELEMETRY_MAX_RECORDS=1000  # 1-1000000
+# ZDX_TELEMETRY_MAX_BYTES=5242880 # 1-134217728
+# SYS_TELEMETRY_MAX_READ_BYTES=5242880 # 1-134217728; keep >= writer limit
+
+# Interactive shells get these line-editor widgets. Ctrl-G opens git-menu.
+# The insert pickers open fzf and insert the quoted choice at the cursor
+# without running it: Ctrl-X b a branch, Ctrl-X p an open pull request number
+# (needs gh), Ctrl-X o the PID listening on a port (Ctrl-O in the picker
+# inserts the port), and Ctrl-X v a .venv, venv, or WORKON_HOME environment.
+# An insert chord is bound only when it is still unbound in the main keymap,
+# so existing user and Oh My Zsh bindings win. Assign another valid Zsh key
+# sequence to move a chord, or an empty value to leave that widget unbound
+# (bind it yourself with bindkey and its zdx-insert-* name).
+# ZDX_KEYBINDINGS=0 disables every ZDX widget.
+# ZDX_KEYBINDINGS=1
+# ZDX_KEY_GIT="^G"
+# ZDX_KEY_INSERT_BRANCH="^Xb"
+# ZDX_KEY_INSERT_PR="^Xp"
+# ZDX_KEY_INSERT_PORT="^Xo"
+# ZDX_KEY_INSERT_VENV="^Xv"
+
+# =============================================================================
+# Plugins and update-safe extensions
+# =============================================================================
+
+# Custom plugin root. It must be an owned, canonical, non-symlink directory.
+# Plugins are arbitrary Zsh code with your full shell authority: review their
+# source, origin, and selected commit before loading or updating them.
+# ZDX_PLUGINS_DIR="$HOME/.config/zdx/plugins"
+
+# Keep personal changes outside the tracked functions/ tree:
+#
+#   ~/.config/zdx/overrides.zsh
+#       Loaded last as arbitrary trusted Zsh with your full shell authority.
+#
+#   ~/.config/zdx/plugins/<plugin>/<plugin>-menu.zsh
+#       Loaded as a reviewed custom suite. Follow docs/plugins.md exactly.

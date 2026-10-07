@@ -1,0 +1,5 @@
+file-clean-junk	Review and delete junk files below the current directory
+file-compress	Create a staged TAR, ZIP, or 7z archive
+file-extract	Preflight and extract a TAR archive
+file-find-large	Find and optionally delete large files
+file-trash	Move paths to a trash, then restore or purge them

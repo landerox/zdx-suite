@@ -1,0 +1,210 @@
+#compdef sys-menu update-system clean-system update-apt update-brew update-snap update-gcloud update-awscli update-node update-rust update-uv-system update-pipx update-starship update-fzf update-omz update-zsh-plugins clean-journal clean-snaps sys-info sys-health sys-wsl sys-startup sys-telemetry sys-ports sys-services sys-processes
+
+local context state state_descr line
+typeset -A opt_args
+
+_sys_menu_complete_typed_target() {
+  compadd -S '' -- 'port:'
+}
+
+local -a subcmds
+subcmds=(
+  'update-system:Update the host and installed tools with a final summary'
+  'clean-system:Plan and run a quick or deep cleanup'
+  'update-apt:Update package lists, upgrade and autoremove'
+  'update-brew:Update formulas, upgrade installed packages and cleanup'
+  'update-snap:Refresh every installed snap'
+  'update-gcloud:Update installed gcloud components'
+  'update-awscli:Update via the detected owner or show verified manual guidance'
+  'update-node:Install the latest LTS via fnm or nvm'
+  'update-rust:Update toolchains via rustup'
+  'update-uv-system:Run uv self update'
+  'update-pipx:Upgrade every globally installed pipx package'
+  'update-starship:Update the starship prompt binary'
+  'update-fzf:Update the fuzzy finder'
+  'update-omz:Fast-forward the owned Oh My Zsh Git checkout'
+  'update-zsh-plugins:Update custom plugins and themes'
+  'clean-journal:Vacuum systemd logs older than 3 days'
+  'clean-snaps:Remove disabled snap revisions'
+  'sys-info:Show OS, kernel, RAM, tools and WSL detection'
+  'sys-health:Verify disk space, memory, zombie processes and services'
+  'sys-wsl:Review WSL configuration, networking MTU and disk compaction steps'
+  'sys-startup:Measure Zsh startup speed in isolated subprocesses'
+  'sys-telemetry:Inspect suite execution history and performance statistics'
+  'sys-ports:Inspect and terminate processes holding local ports'
+  'sys-services:List, inspect, and control supported background services'
+  'sys-processes:Interactive process explorer and terminator'
+)
+
+if (( ${words[(I)-h]} || ${words[(I)--help]} )); then
+  _message 'no additional arguments'
+  return
+fi
+
+local subcommand=""
+if [[ "${words[1]:-}" == "sys-menu" ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '(-h --help)1:subcommand:->subcommands' \
+    '(-h --help)*::argument:->arguments'
+
+  case "$state" in
+    subcommands)
+      _describe -t subcmds 'subcommand' subcmds
+      return
+      ;;
+    arguments)
+      subcommand="${words[1]:-}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+else
+  subcommand="${words[1]:-}"
+fi
+
+case "$subcommand" in
+      update-system)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help -f --fail-fast)'{-f,--fail-fast}'[Stop after the first failed update]' \
+          '(-h --help --dry-run)--dry-run[Display the applicable update plan without changing state]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Confirm the aggregate update plan]' \
+          '(-h --help -v --verbose)'{-v,--verbose}'[Show complete APT invocations for executed operations]' \
+          '(-h --help --include-phased-updates)--include-phased-updates[Include APT phased updates in the transaction]' \
+          '(-h --help --safe-only --include-remote-code)--safe-only[Exclude mutable Git and script-owned update workflows]' \
+          '(-h --help --safe-only --include-remote-code)--include-remote-code[Explicitly affirm default mutable-code inclusion]'
+        ;;
+      update-apt)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Display the update plan without changing state]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Confirm the update plan]' \
+          '(-h --help -v --verbose)'{-v,--verbose}'[Show complete APT invocations for executed operations]' \
+          '(-h --help --include-phased-updates)--include-phased-updates[Include phased updates in the APT transaction]'
+        ;;
+      update-snap|update-fzf|update-omz|update-zsh-plugins)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Display the update plan without changing state]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Confirm the update plan]'
+        ;;
+      update-brew|update-gcloud|update-awscli|update-starship|update-uv-system|update-pipx|update-node|update-rust)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]'
+        ;;
+      clean-system)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --quick --deep)--quick[Run the quick cleanup plan]' \
+          '(-h --help --quick --deep)--deep[Run the deep cleanup plan]' \
+          '(-h --help --dry-run)--dry-run[Display the cleanup plan without changing state]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Confirm the selected cleanup plan]'
+        ;;
+      clean-journal|clean-snaps)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Display the cleanup plan without changing state]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Confirm the cleanup plan]'
+        ;;
+      sys-info|sys-wsl)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --json)--json[Print one JSON document on stdout]'
+        ;;
+      sys-health|sys-startup)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]'
+        ;;
+      sys-telemetry)
+        if (( ${words[(I)--clear]} )); then
+          _arguments \
+            '--clear[Clear the local telemetry log]' \
+            '(--dry-run)--dry-run[Display the clear plan without changing state]' \
+            '(-y --yes)'{-y,--yes}'[Confirm telemetry clearing]'
+        else
+          _arguments \
+            '(- *)'{-h,--help}'[Show command usage]' \
+            '(-h --help --browse --clear)--dashboard[Display validated local statistics]' \
+            '(-h --help --dashboard --clear)--browse[Browse validated history with fzf]' \
+            '(-h --help --dashboard --browse)--clear[Clear the local telemetry log]'
+        fi
+        ;;
+      sys-ports)
+        case "${words[2]:-}" in
+          --kill-port)
+            _arguments \
+              '--kill-port[Terminate the process listening on a port]:port number:' \
+              '(--protocol)--protocol[Restrict the listener protocol]:protocol:(tcp udp)' \
+              '(--force)--force[Send SIGKILL instead of SIGTERM]' \
+              '(-y --yes)'{-y,--yes}'[Confirm process signaling]'
+            ;;
+          --kill)
+            case "${words[3]:-}" in
+              port:*)
+                _arguments \
+                  '--kill[Terminate the process listening on a typed port target]:typed target:' \
+                  '(--protocol)--protocol[Restrict a port target protocol]:protocol:(tcp udp)' \
+                  '(--force)--force[Send SIGKILL instead of SIGTERM]' \
+                  '(-y --yes)'{-y,--yes}'[Confirm process signaling]'
+                ;;
+              *)
+                _arguments \
+                  '--kill[Terminate the process listening on a typed port target]:typed target:_sys_menu_complete_typed_target'
+                ;;
+            esac
+            ;;
+          *)
+            _arguments \
+              '(- *)'{-h,--help}'[Show command usage]' \
+              '(-h --help --list --kill-port --kill)--list[Emit active listening ports as TSV]' \
+              '(-h --help --list --kill-port --kill)--kill-port[Terminate a listener by port]:port number:' \
+              '(-h --help --list --kill-port --kill)--kill[Terminate the listener on port:PORT]:typed target:_sys_menu_complete_typed_target'
+            ;;
+        esac
+        ;;
+      sys-services)
+        case "${words[2]:-}" in
+          --show)
+            _arguments \
+              '--show[Display service details]:service identifier:'
+            ;;
+          --start|--stop|--restart|--enable|--disable)
+            _arguments \
+              "${words[2]}[Run the selected service action]:service identifier:" \
+              '(-y --yes)'{-y,--yes}'[Confirm the service action]'
+            ;;
+          *)
+            _arguments \
+              '(- *)'{-h,--help}'[Show command usage]' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--list[Emit service records as TSV]' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--show[Display service details]:service identifier:' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--start[Start a service]:service identifier:' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--stop[Stop a service]:service identifier:' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--restart[Restart a service]:service identifier:' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--enable[Enable a service]:service identifier:' \
+              '(-h --help --list --show --start --stop --restart --enable --disable)--disable[Disable a service]:service identifier:'
+            ;;
+        esac
+        ;;
+      sys-processes)
+        case "${words[2]:-}" in
+          --terminate)
+            _arguments \
+              '--terminate[Signal a process]:PID:' \
+              '(--force)--force[Send SIGKILL instead of SIGTERM]' \
+              '(-y --yes)'{-y,--yes}'[Confirm process signaling]'
+            ;;
+          *)
+            _arguments \
+              '(- *)'{-h,--help}'[Show command usage]' \
+              '(-h --help --list --terminate)--list[Emit process records as TSV]' \
+              '(-h --help --list --terminate)--terminate[Send SIGTERM to a process]:PID:'
+            ;;
+        esac
+        ;;
+      *)
+        _message 'no additional arguments'
+        ;;
+esac

@@ -1,0 +1,196 @@
+#compdef dev-menu dev-check-health dev-check-outdated dev-run-all-checks dev-run-hooks dev-check-types dev-run-ruff dev-run-ruff-format dev-run-shellcheck dev-run-markdownlint dev-run-tflint dev-run-tests dev-run-coverage dev-run-audit dev-run-bandit dev-update-deps dev-update-lock dev-update-precommit dev-update-actions dev-update-python dev-update-terraform dev-update-tflint dev-clean-py dev-clean-terraform dev-clean-all dev-update-all
+
+local context state state_descr
+local -a line
+typeset -A opt_args
+
+local -a subcmds
+subcmds=(
+  'dev-check-health:Diagnose Python environment, lockfile, hooks, and toolchain state'
+  'dev-check-outdated:Compare declared direct dependencies against installed versions'
+  'dev-run-all-checks:Run every gate; pre-commit hooks may rewrite files'
+  'dev-run-hooks:Execute configured file-stage pre-commit hooks'
+  'dev-check-types:Detect and run the configured type checkers'
+  'dev-run-ruff:Run the Ruff linter without modifying any file'
+  'dev-run-ruff-format:Rewrite Python files in place using the Ruff formatter'
+  'dev-run-shellcheck:Lint sh and bash files and parse .zsh with zsh -n'
+  'dev-run-markdownlint:Check Markdown style; --fix rewrites files'
+  'dev-run-tflint:Lint Terraform; optionally initialize configured plugins'
+  'dev-run-tests:Run the pytest suite without coverage'
+  'dev-run-coverage:Run pytest with the project coverage backend'
+  'dev-run-audit:Check installed packages against vulnerability advisories'
+  'dev-run-bandit:Run Bandit static analysis over Python sources'
+  'dev-update-deps:Preview and bump pyproject >= specifiers after backup and confirmation'
+  'dev-update-lock:Refresh uv.lock and sync without editing pyproject'
+  'dev-update-precommit:Validate and publish safe frozen hook revisions'
+  'dev-update-actions:Pin workflow actions to newer release SHAs after backup and confirmation'
+  'dev-update-python:Select and install a runtime or safely replace an existing .venv'
+  'dev-update-terraform:Inspect Terraform ownership and its safest update workflow'
+  'dev-update-tflint:Report its host owner or print the verified procedure'
+  'dev-clean-py:Preview and remove Python caches and build artifacts'
+  'dev-clean-terraform:Preview and remove Terraform caches and state backups'
+  'dev-clean-all:Preview one combined removal plan and confirm it once'
+  'dev-update-all:Run a frozen maintenance scope, then confirm exact cleanup targets'
+)
+
+if (( ${words[(I)-h]} || ${words[(I)--help]} )); then
+  _message 'no additional arguments'
+  return
+fi
+
+local subcommand=""
+if [[ "${words[1]:-}" == "dev-menu" ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[Show usage]' \
+    '(-h --help)'{-m,--multi}'[Select independent batch-eligible tasks]' \
+    '(-h --help -m --multi)1:subcommand:->subcommands' \
+    '(-h --help -m --multi)*::argument:->arguments'
+
+  case "$state" in
+    subcommands)
+      _describe -t dev-subcommands 'Developer command' subcmds
+      return
+      ;;
+    arguments)
+      subcommand="${line[1]:-${words[2]:-}}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+else
+  subcommand="${words[1]:-}"
+fi
+
+case "$subcommand" in
+  dev-check-health|dev-check-outdated)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--report[Also write a private Markdown report]'
+    ;;
+  dev-run-all-checks)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--verbose[Show each check output]'
+    ;;
+  dev-run-hooks)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:pre-commit argument:_default'
+    ;;
+  dev-run-ruff)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Ruff check argument:_default'
+    ;;
+  dev-run-ruff-format)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:Ruff format argument:_default'
+    ;;
+  dev-run-tflint)
+    local -a tflint_specs=(
+      '(- *)'{-h,--help}'[Show command usage]'
+      '(-h --help)--init[Initialize configured plugins before linting]'
+    )
+    if (( ${words[(I)--init]} )); then
+      tflint_specs+=(
+        '(-h --help)'{-y,--yes}'[Confirm plugin initialization]'
+      )
+    fi
+    _arguments "${tflint_specs[@]}" \
+      '(-h --help)*:TFLint argument:_default'
+    ;;
+  dev-run-markdownlint)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--fix[Rewrite Markdown files in place]'
+    ;;
+  dev-run-tests)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)*:pytest argument:_default'
+    ;;
+  dev-run-coverage)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--html[Also write an HTML coverage report]' \
+      '(-h --help)--fail-under=[Fail below this coverage percentage]:percentage (0-100):_guard "[0-9]#" "percentage from 0 to 100"' \
+      '(-h --help)*:pytest argument:_default'
+    ;;
+  dev-run-audit)
+    local -a audit_specs=(
+      '(- *)'{-h,--help}'[Show command usage]'
+      '(-h --help)--fix[Upgrade vulnerable direct dependencies]'
+    )
+    if (( ${words[(I)--fix]} )); then
+      audit_specs+=(
+        '(-h --help)'{-y,--yes}'[Confirm automatic remediation]'
+      )
+    fi
+    _arguments "${audit_specs[@]}"
+    ;;
+  dev-run-bandit)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--high-only[Report only high-severity findings]'
+    ;;
+  dev-update-deps)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show planned specifier changes without writing]' \
+      '(-h --help)'{-y,--yes}'[Confirm dependency updates]' \
+      '(-h --help)--verbose[Enable debug output for this run]' \
+      '(-h --help --minor-only --patch-only)--major-only[Apply only major version bumps]' \
+      '(-h --help --major-only --patch-only)--minor-only[Apply only minor version bumps]' \
+      '(-h --help --major-only --minor-only)--patch-only[Apply only patch version bumps]'
+    ;;
+  dev-update-actions)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the planned action updates without writing]' \
+      '(-h --help)'{-y,--yes}'[Confirm the action updates]' \
+      '(-h --help)--major[Also allow newer major versions]'
+    ;;
+  dev-update-python)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)'{-y,--yes}'[Skip confirmation; delegated version selection may still prompt]'
+    ;;
+  dev-clean-py)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]' \
+      '(-h --help)--keep-build[Preserve root build and dist directories]'
+    ;;
+  dev-clean-all)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]' \
+      '(-h --help)--keep-build[Preserve root build, dist, and Cargo target directories]'
+    ;;
+  dev-clean-terraform)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Show the removal plan without deleting]' \
+      '(-h --help)'{-y,--yes}'[Confirm the frozen removal plan]'
+    ;;
+  dev-update-all)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Preview dependency, action, and cleanup plans]' \
+      '(-h --help)'{-y,--yes}'[Authorize aggregate and exact child plans]' \
+      '(-h --help)'{-v,--verbose}'[Stream tool output and show policy notes]'
+    ;;
+  dev-check-types|dev-run-shellcheck|dev-update-lock|dev-update-precommit\
+    |dev-update-terraform|dev-update-tflint)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+  *)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]'
+    ;;
+esac

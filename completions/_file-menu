@@ -1,0 +1,138 @@
+#compdef file-menu file-clean-junk file-compress file-extract file-find-large file-trash
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a subcommands
+subcommands=(
+  'file-clean-junk:Review and delete junk files below the current directory'
+  'file-compress:Create a staged TAR, ZIP, or 7z archive'
+  'file-extract:Preflight and extract a TAR archive into a new directory'
+  'file-find-large:Find large files and optionally delete them'
+  'file-trash:Move paths to a trash, then restore or purge them'
+)
+
+# Trash IDs are the names of the records below the File trash. Completion
+# reads only those names; it never opens a record or follows a link.
+_file_menu_complete_trash_ids() {
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  local info_dir="${data_home%/}/zdx/trash/info"
+  local -a trash_ids=()
+  local record_name=""
+  if [[ "$data_home" == /* && -d "$info_dir" && ! -L "$info_dir" ]]; then
+    for record_name in "$info_dir"/*.trashinfo(N.:t:r); do
+      [[ "$record_name" =~ '^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$' ]] \
+        && trash_ids+=("$record_name")
+    done
+  fi
+  if (( ${#trash_ids[@]} )); then
+    _describe -t file-trash-ids 'trash ID' trash_ids
+  else
+    _message 'trash ID'
+  fi
+}
+
+local command_name=""
+if [[ "$service" == file-menu ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[show usage]' \
+    '1:subcommand:->file_subcommand' \
+    '*::subcommand argument:->file_arguments'
+  case "$state" in
+    file_subcommand)
+      _describe -t file-subcommands 'File subcommand' subcommands
+      return
+      ;;
+    file_arguments)
+      command_name="${words[1]:-}"
+      ;;
+    *) return ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+  file-compress)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--format[archive format]:format:(tar.gz tar.xz tar.bz2 zip 7z)' \
+      '--output[output archive]:archive:_files' \
+      '--overwrite[replace one unchanged regular output]' \
+      '--dry-run[print the exact plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '*:input path:_files'
+    ;;
+  file-extract)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--destination[new extraction directory]:directory:_directories' \
+      '--dry-run[validate and print the plan]' \
+      '--yes[confirm the reviewed plan non-interactively]' \
+      '1:TAR archive:_files -g "*.(tar|tar.gz|tgz|tar.xz|tar.bz2)"'
+    ;;
+  file-find-large)
+    _arguments \
+      '(-h --help)'{-h,--help}'[show command help]' \
+      '--min-size[minimum byte size with optional K/M/G/T suffix]:size:' \
+      '--delete[plan deletion of every match]' \
+      '--dry-run[print the deletion plan without mutation]' \
+      '--yes[confirm the reviewed plan non-interactively]'
+    ;;
+  file-trash)
+    local trash_action=""
+    local trash_word=""
+    for trash_word in "${(@)words[2,-1]}"; do
+      [[ "$trash_word" == (put|list|restore|purge) ]] || continue
+      trash_action="$trash_word"
+      break
+    done
+    case "$trash_action" in
+      put)
+        _arguments \
+          '(- *)'{-h,--help}'[show command help]' \
+          '(-h --help)--dry-run[print the exact plan without moving anything]' \
+          '(-h --help)--yes[confirm the reviewed plan non-interactively]' \
+          '1:action:(put)' \
+          '*:path to trash:_files'
+        ;;
+      list)
+        _arguments \
+          '(- *)'{-h,--help}'[show command help]' \
+          '(-h --help)--json[print one zdx.file-trash.v1 JSON document]' \
+          '1:action:(list)'
+        ;;
+      restore)
+        _arguments \
+          '(- *)'{-h,--help}'[show command help]' \
+          '(-h --help)--dry-run[print the exact plan without restoring anything]' \
+          '(-h --help)--yes[confirm the reviewed plan non-interactively]' \
+          '1:action:(restore)' \
+          '*:trash ID:_file_menu_complete_trash_ids'
+        ;;
+      purge)
+        _arguments \
+          '(- *)'{-h,--help}'[show command help]' \
+          '(-h --help)--dry-run[print the exact plan without deleting anything]' \
+          '(-h --help)--yes[confirm the reviewed plan non-interactively]' \
+          '(-h --help --all *)--older-than[select items trashed more than DAYS days ago]:days:' \
+          '(-h --help --older-than *)--all[select every trash entry]' \
+          '1:action:(purge)' \
+          '*:trash ID:_file_menu_complete_trash_ids'
+        ;;
+      *)
+        _arguments \
+          '(- *)'{-h,--help}'[show command help]' \
+          '(-h --help)--dry-run[print plans without changing anything]' \
+          '(-h --help)--yes[confirm reviewed plans non-interactively]' \
+          '1:action:((put\:"move paths below the current directory to the trash" list\:"list trashed items" restore\:"move trashed items back" purge\:"permanently delete trashed items"))'
+        ;;
+    esac
+    ;;
+  file-clean-junk)
+    _arguments \
+      '(- *)'{-h,--help}'[show command help]' \
+      '(-h --help)--dry-run[print the deletion plan without mutation]' \
+      '(-h --help)--yes[confirm the reviewed plan non-interactively]'
+    ;;
+esac

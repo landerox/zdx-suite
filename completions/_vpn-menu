@@ -1,0 +1,185 @@
+#compdef vpn-menu
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a subcmds
+subcmds=(
+  'vpn-access-unlock:Authenticate with sudo so profiles and tunnel state are readable'
+  'vpn-access-lock:Invalidate this session sudo timestamp, which other sudo commands may share'
+  'vpn-access-status:Explain whether profiles and live tunnel state are readable'
+  'vpn-on:Bring a profile up with wg-quick'
+  'vpn-off:Disconnect one active tunnel'
+  'vpn-off-all:Bring down every active WireGuard interface'
+  'vpn-reconnect-last:Reconnect the profile recorded as last used'
+  'vpn-default-connect:Bring up the configured default profile'
+  'vpn-default-set:Record one profile as the default target'
+  'vpn-default-clear:Remove the saved default profile pointer'
+  'vpn-summary:List safe profiles, active tunnels, backups, and cached pointers'
+  'vpn-details:Show detailed WireGuard state for each active tunnel'
+  'vpn-ip-info:Show tunnel addresses, endpoint, public exit, and DNS'
+  'vpn-mtu-probe:Measure the path MTU with bounded pings and suggest MTU settings'
+  'vpn-report:Atomically publish an owner-only Markdown diagnostic report'
+  'vpn-profile-create:Atomically install a private profile skeleton'
+  'vpn-profile-import:Validate and install a private hook-free .conf file'
+  'vpn-profile-rename:Plan and rename a profile, backup, and saved pointers'
+  'vpn-config-edit:Edit a profile as your user; the editor never runs as root'
+  'vpn-config-dir:List a bounded inventory of safe profiles and backups'
+  'vpn-config-restore:Atomically restore a profile and keep a private undo copy'
+  'vpn-profile-remove:Plan and remove a profile after confirmation'
+)
+
+# Profile names come from the configured directory when it is readable without
+# privileges. Completion never invokes sudo. A loaded suite resolves the
+# directory itself; otherwise its rules are mirrored here: the macOS default
+# directory, and a symbolic link accepted only as a root-owned system alias,
+# such as /etc -> private/etc, inside a root-owned directory nobody else can
+# write.
+_vpn_menu_profiles() {
+  local dir=""
+  local -a profiles=()
+  local candidate profile_name
+
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  if (( ${+functions[_vpn_config_dir_resolve]} )); then
+    dir=$(_vpn_config_dir_resolve 2>/dev/null) || dir=""
+  else
+    dir="${VPN_CONFIG_DIR:-/etc/wireguard}"
+    if [[ -z "${VPN_CONFIG_DIR:-}" && "$OSTYPE" == darwin* ]]; then
+      dir=/private/etc/wireguard
+      if [[ ! -e "$dir" ]]; then
+        local brew_dir
+        local -a brew_profiles=()
+        for brew_dir in "${HOMEBREW_PREFIX:-/opt/homebrew}/etc/wireguard" \
+          /usr/local/etc/wireguard; do
+          brew_profiles=("$brew_dir"/*.conf(N))
+          if (( ${#brew_profiles[@]} > 0 )); then
+            dir="$brew_dir"
+            break
+          fi
+        done
+      fi
+    fi
+    while [[ "$dir" != "/" && "$dir" == */ ]]; do
+      dir="${dir%/}"
+    done
+    if [[ "$dir" == /* && "${dir:a}" != "${dir:A}" ]]; then
+      local prefix="" component=""
+      local -A link_state=() parent_state=()
+      for component in "${(@s:/:)dir}"; do
+        [[ -n "$component" ]] || continue
+        prefix+="/$component"
+        [[ -L "$prefix" ]] || continue
+        link_state=()
+        parent_state=()
+        if ! zstat -LH link_state -- "$prefix" 2>/dev/null \
+          || ! zstat -H parent_state -- "${prefix:h}" 2>/dev/null \
+          || (( link_state[uid] != 0 || parent_state[uid] != 0 \
+            || (parent_state[mode] & 8#22) != 0 )); then
+          dir=""
+          break
+        fi
+      done
+      [[ -n "$dir" ]] && dir="${dir:A}"
+    fi
+  fi
+
+  if [[ "$dir" == /* && "${dir:a}" == "${dir:A}" \
+    && -d "$dir" && ! -L "$dir" && -r "$dir" && -x "$dir" ]]; then
+    local -A metadata=()
+    for candidate in "$dir"/*.conf(N.); do
+      profile_name="${${candidate:t}%.conf}"
+      (( ${#profile_name} <= 64 )) || continue
+      [[ "$profile_name" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || continue
+      metadata=()
+      zstat -H metadata -- "$candidate" 2>/dev/null || continue
+      (( metadata[nlink] == 1 \
+        && (metadata[uid] == 0 || metadata[uid] == EUID) \
+        && (metadata[mode] & 8#77) == 0 \
+        && metadata[size] <= 1048576 )) || continue
+      profiles+=("$profile_name")
+      (( ${#profiles[@]} < 256 )) || break
+    done
+  fi
+
+  (( ${#profiles[@]} > 0 )) && _describe -t profiles 'profile' profiles
+}
+
+_arguments -C \
+  '(- *)'{-h,--help}'[Show usage]' \
+  '1:subcommand:->subcommands' \
+  '*::arguments:->arguments'
+
+case "$state" in
+  subcommands)
+    _describe -t subcmds 'subcommand' subcmds
+    ;;
+  arguments)
+    case "${words[1]}" in
+      vpn-on|vpn-off|vpn-default-set)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-off-all)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the disconnect plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]'
+        ;;
+      vpn-profile-create)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:new profile name:'
+        ;;
+      vpn-profile-import)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:configuration file:_files -g "*.conf"'
+        ;;
+      vpn-profile-rename)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the rename plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompts]' \
+          '1:current profile:_vpn_menu_profiles' \
+          '2:new profile name:'
+        ;;
+      vpn-config-edit)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-config-restore)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the restore plan and stop]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-profile-remove)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --dry-run)--dry-run[Show the removal plan and stop]' \
+          '(-h --help --with-backup)--with-backup[Also remove the matching backup file]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompts]' \
+          '1:profile:_vpn_menu_profiles'
+        ;;
+      vpn-default-clear)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompt]'
+        ;;
+      vpn-mtu-probe)
+        _arguments \
+          '(- *)'{-h,--help}'[Show command usage]' \
+          '(-h --help --target)--target[Probe this IPv4 address or host name]:host:_hosts' \
+          '(-h --help --profile)--profile[Name this WireGuard profile in the advice]:profile:_vpn_menu_profiles' \
+          '(-h --help --json)--json[Print one JSON object on stdout]'
+        ;;
+      *)
+        _arguments '(- *)'{-h,--help}'[Show command usage]'
+        ;;
+    esac
+    ;;
+esac

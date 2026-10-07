@@ -1,0 +1,62 @@
+name: CI · VPN smoke
+run-name: >-
+  VPN smoke · ${{
+    github.event_name == 'pull_request' && github.event.pull_request.title
+    || 'manual dispatch'
+  }}
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "functions/vpn-*.zsh"
+            - "functions/vpn/**"
+            - "completions/_vpn-menu"
+            - ".github/scripts/vpn-smoke.zsh"
+            - ".github/workflows/vpn-smoke.yml"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    smoke:
+        name: vpn smoke (${{ matrix.os }})
+        # A disposable runner with passwordless sudo brings one private test
+        # tunnel up and down. The profile routes only 10.123.45.0/24 to a
+        # TEST-NET endpoint and has no DNS line, so runner traffic is unchanged.
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - macos-15
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: Install WireGuard tools (Ubuntu)
+              if: runner.os == 'Linux'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y wireguard-tools zsh
+
+            - name: Install WireGuard tools (macOS)
+              if: runner.os == 'macOS'
+              run: |
+                  brew install bash wireguard-tools
+
+            - name: Bring a test tunnel up and down through the VPN suite
+              env:
+                  ZDX_VPN_SMOKE: "1"
+              run: |
+                  zsh -f .github/scripts/vpn-smoke.zsh

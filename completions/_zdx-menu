@@ -1,0 +1,152 @@
+#compdef zdx zdx-menu zdx-status zdx-plugins
+
+# zdx-plugins shares this declaration so the plugin wrapper registers it with
+# the master completion; `zdx plugins` reaches the same function through the
+# nested route below. Plugin names are the valid directory names below the
+# plugin root; nothing is sourced or executed.
+_zdx-plugins() {
+  local -a actions=(
+    '--list:list installed plugins'
+    '--install:fetch, review, and activate a plugin from a Git URL'
+    '--update:stage, review, and activate plugin updates'
+    '--remove:review and remove one installed plugin'
+    '--help:show plugin manager help'
+  )
+  if (( CURRENT <= 2 )); then
+    _describe -t zdx-plugins-actions 'plugin manager action' actions
+    return
+  fi
+
+  local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
+  local entry="" word=""
+  local -a plugin_names=() positional=() options=()
+  for entry in "$plugins_dir"/*(N/); do
+    [[ "${entry:t}" =~ '^[a-z0-9_-]+$' ]] && plugin_names+=("${entry:t}")
+  done
+  local -i index=0 dry_run=0 auto_yes=0
+  for (( index = 3; index < CURRENT; index++ )); do
+    word="${words[index]}"
+    case "$word" in
+      --dry-run) dry_run=1 ;;
+      --yes)     auto_yes=1 ;;
+      --)        ;;
+      *)         positional+=("$word") ;;
+    esac
+  done
+  (( dry_run )) || options+=('--dry-run:fetch and validate, or plan, without changing anything')
+  (( auto_yes )) || options+=('--yes:trust or confirm without a prompt')
+
+  case "${words[2]-}" in
+    --install)
+      if [[ "${PREFIX-}" != -* ]]; then
+        case "${#positional}" in
+          0) _message 'Git URL or local repository path'; return ;;
+          1) _message 'plugin name (optional)' ;;
+        esac
+      fi
+      _describe -t zdx-plugins-options 'option' options
+      ;;
+    --update|--remove)
+      if [[ "${PREFIX-}" != -* ]] && (( ${#positional} == 0 )); then
+        _describe -t zdx-plugins-names 'installed plugin' plugin_names
+      fi
+      _describe -t zdx-plugins-options 'option' options
+      ;;
+  esac
+}
+
+if [[ "$service" == zdx-plugins ]]; then
+  _zdx-plugins
+  return
+fi
+
+local -a zdx_suites
+zdx_suites=(
+  'dev:Developer project tools'
+  'env:Environment variables and PATH'
+  'file:Archives, large files, trash, and junk cleanup'
+  'git:Git repository operations'
+  'plugins:ZDX plugin manager'
+  'py:Python environments, packages, and tools'
+  'sys:System diagnostics and maintenance'
+  'vpn:WireGuard VPN workflows'
+  'ws:Workspace repositories'
+  'status:Read-only repository, project, and host summary'
+  'doctor:Dependency diagnostics'
+  'help:Show wrapper help'
+  'version:Show the installed version'
+)
+
+if [[ "$service" == "zdx-menu" ]]; then
+  _arguments '(-h --help)'{-h,--help}'[show wrapper help]'
+  return
+fi
+
+if [[ "$service" == "zdx-status" ]]; then
+  _arguments \
+    '(- *)'{-h,--help}'[show status help]' \
+    '(-h --help)--json[print one zdx.status.v1 JSON document]'
+  return
+fi
+
+# Completion may run before the lazy master loader. Match its loaded-name,
+# reserved-namespace, and menu-function checks without sourcing any plugin.
+local -a custom_suites=()
+local -a reserved_suites=("${(@)zdx_suites%%:*}")
+local plugin_name=""
+if (( ${+ZDX_LOADED_PLUGINS} )); then
+  for plugin_name in "${ZDX_LOADED_PLUGINS[@]}"; do
+    (( ${#plugin_name} >= 1 && ${#plugin_name} <= 128 )) || continue
+    [[ "$plugin_name" =~ '^[a-z0-9_-]+$' ]] || continue
+    (( ${reserved_suites[(Ie)$plugin_name]} == 0 \
+      && ${custom_suites[(Ie)$plugin_name]} == 0 \
+      && ${+functions[${plugin_name}-menu]} )) || continue
+    custom_suites+=("$plugin_name")
+    zdx_suites+=("$plugin_name:Loaded custom plugin")
+  done
+fi
+
+local context state state_descr line
+typeset -A opt_args
+_arguments -C \
+  '(- *)'{-h,--help}'[show wrapper help]' \
+  '(- *)'{-v,--version}'[show the installed version]' \
+  '1:ZDX suite:->suite' \
+  '*::suite arguments:->suite-arguments'
+
+case "$state" in
+  suite)
+    _describe -t zdx-suites 'ZDX suite' zdx_suites
+    ;;
+  suite-arguments)
+    local suite_name="${words[1]:-}"
+    local nested_menu=""
+    case "$suite_name" in
+      dev|env|file|git|py|sys|vpn|ws)
+        nested_menu="${suite_name}-menu"
+        ;;
+      plugins)
+        nested_menu="zdx-plugins"
+        ;;
+      doctor)
+        nested_menu="zdx-doctor"
+        ;;
+      status)
+        _arguments \
+          '(- *)'{-h,--help}'[show status help]' \
+          '(-h --help)--json[print one zdx.status.v1 JSON document]'
+        return
+        ;;
+      *)
+        (( ${custom_suites[(Ie)$suite_name]} )) || return
+        nested_menu="${suite_name}-menu"
+        ;;
+    esac
+
+    local completion_function="_${nested_menu}"
+    (( ${+functions[$completion_function]} )) || return
+    words[1]="$nested_menu"
+    service="$nested_menu"
+    "$completion_function"
+    ;;
+esac

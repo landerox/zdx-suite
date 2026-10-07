@@ -1,0 +1,67 @@
+name: CI · macOS
+run-name: >-
+  macOS · ${{
+    github.event_name == 'pull_request' && github.event.pull_request.title
+    || github.event_name == 'workflow_dispatch' && 'manual dispatch'
+    || github.ref_name
+  }}
+
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    bats:
+        name: bats (macOS)
+        # A real Apple Silicon host with BSD userland. GNU coreutils stays
+        # uninstalled and GNU tar is present only as gtar, as on a typical Mac,
+        # so GNU assumptions surface as failures.
+        runs-on: macos-15
+        timeout-minutes: 45
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: Install test dependencies
+              run: |
+                  brew install bash bats-core fzf gnu-tar just parallel uv
+
+            - name: Show the test environment
+              run: |
+                  prefix="$(brew --prefix)"
+                  export PATH="$prefix/bin:$PATH"
+                  sw_vers
+                  zsh --version
+                  bash --version | head -n 1
+                  bats --version
+                  fzf --version
+                  python3 --version
+                  git --version
+                  just --version
+                  uv --version
+
+            - name: Parse-check every tracked Zsh file
+              run: |
+                  git ls-files -z '*.zsh' | xargs -0 -n 1 zsh -n
+
+            - name: Run the BATS suite
+              env:
+                  GIT_CONFIG_NOSYSTEM: "1"
+              run: |
+                  prefix="$(brew --prefix)"
+                  export PATH="$prefix/bin:$PATH"
+                  bats --jobs 3 --print-output-on-failure test/
