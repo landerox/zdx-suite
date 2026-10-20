@@ -1,0 +1,4 @@
+# command	module	risk	capability
+env-list	env-vars.zsh	read-only	session
+env-path	env-vars.zsh	mutating	session
+env-dotenv	env-dotenv.zsh	read-only	project

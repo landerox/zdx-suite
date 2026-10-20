@@ -1,0 +1,67 @@
+#compdef env-menu env-list env-path env-dotenv
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a env_commands
+env_commands=(
+  'env-list:Inspect exported variables with mandatory secret masking'
+  'env-path:Inspect PATH or review active-session deduplication'
+  'env-dotenv:Compare dotenv keys with an example without showing values'
+)
+
+_env_complete_list() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '(--copy)--list[emit masked TSV records]' \
+    '(--list)--copy[copy one exact exported value without printing it]:variable:'
+}
+
+_env_complete_path() {
+  _arguments \
+    '(-h --help)'{-h,--help}'[show command usage]' \
+    '(--dedupe)--list[emit PATH diagnostics as TSV]' \
+    '(--list)--dedupe[review removal of later duplicate entries]' \
+    '--dry-run[print the exact deduplication plan]' \
+    '--yes[accept the reviewed plan non-interactively]'
+}
+
+_env_complete_dotenv() {
+  _arguments \
+    '(- *)'{-h,--help}'[show command usage]' \
+    '--example[compare with this example file]:example file:_files' \
+    '--json[emit one JSON report on stdout]' \
+    '1::dotenv file:_files'
+}
+
+case "$service" in
+  env-list)
+    _env_complete_list
+    ;;
+  env-path)
+    _env_complete_path
+    ;;
+  env-dotenv)
+    _env_complete_dotenv
+    ;;
+  env-menu)
+    _arguments -C \
+      '(-h --help)'{-h,--help}'[show usage]' \
+      '1:Environment command:->command' \
+      '*::command arguments:->args'
+    case "$state" in
+      command)
+        _describe -t commands 'Environment command' env_commands
+        ;;
+      args)
+        case "${words[1]:-}" in
+          env-list) _env_complete_list ;;
+          env-path) _env_complete_path ;;
+          env-dotenv) _env_complete_dotenv ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+
+unfunction _env_complete_list _env_complete_path _env_complete_dotenv 2>/dev/null

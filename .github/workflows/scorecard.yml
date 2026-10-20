@@ -1,0 +1,57 @@
+name: Security · OpenSSF Scorecard
+run-name: >-
+  Scorecard · ${{
+    github.event_name == 'schedule' && 'weekly'
+    || github.event_name == 'workflow_dispatch' && 'manual dispatch'
+    || github.ref_name
+  }}
+
+on:
+    schedule:
+        # Mondays 09:30 UTC (2.5h after Lychee).
+        - cron: "30 9 * * 1"
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+    analysis:
+        name: Analyze
+        # Skip on user-owned private repositories. OpenSSF Scorecard relies
+        # on GitHub API surface (and optionally a public transparency log)
+        # that is not available for private repos under personal accounts.
+        # When the repo is flipped to public, the job runs automatically.
+        if: ${{ ! github.event.repository.private }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: read
+            security-events: write
+            id-token: write
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: Run analysis
+              uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+              with:
+                  results_file: results.sarif
+                  results_format: sarif
+                  publish_results: true
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: SARIF file
+                  path: results.sarif
+                  retention-days: 5
+
+            - name: Upload to code-scanning
+              uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+              with:
+                  sarif_file: results.sarif

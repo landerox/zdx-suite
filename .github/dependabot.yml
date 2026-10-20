@@ -1,0 +1,20 @@
+# Weekly updates for the GitHub Actions the workflows use. References stay
+# pinned to commit SHAs with a version comment, and a new release waits a week
+# before Dependabot proposes it. All actions arrive in one grouped pull request.
+version: 2
+updates:
+    - package-ecosystem: github-actions
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+      cooldown:
+          default-days: 7
+      groups:
+          github-actions:
+              patterns:
+                  - "*"
+      commit-message:
+          prefix: ci
+          include: scope
+      open-pull-requests-limit: 5

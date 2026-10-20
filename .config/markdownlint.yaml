@@ -1,0 +1,31 @@
+### markdownlint config
+# Reference: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+
+default: true
+
+# Line length: irrelevant for prose-heavy docs and badge rows.
+MD013: false
+
+# Allow first line to not be H1 (badges appear before the heading).
+MD041: false
+
+# Allow inline HTML (badge images, details/summary, etc.).
+MD033: false
+
+# Bare URLs are fine in CLI docs.
+MD034: false
+
+# Fenced code blocks: language is preferred but not required.
+MD040: false
+
+# Duplicate headings allowed when nested under different sections.
+MD024:
+  siblings_only: true
+
+# Bullet style: leave existing files alone (don't normalize -/+/*).
+MD004: false
+
+# Table pipe alignment (table-column-style): tables with variable-width
+# content cannot keep pixel-perfect alignment without constant churn.
+# Same rationale as MD013.
+MD060: false

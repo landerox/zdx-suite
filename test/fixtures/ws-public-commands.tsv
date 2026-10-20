@@ -1,0 +1,4 @@
+# command	module	risk	capability
+ws-status	ws-status.zsh	network	workspace
+ws-jump	ws-jump.zsh	mutating	shell-state
+ws-clone	ws-clone.zsh	network	workspace

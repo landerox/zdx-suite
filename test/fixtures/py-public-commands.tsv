@@ -1,0 +1,17 @@
+# command	module	risk	capability
+venv-list	py-venv.zsh	read-only	environment
+venv-create	py-venv.zsh	mutating	environment
+venv-activate	py-venv.zsh	mutating	shell-state
+venv-info	py-venv.zsh	read-only	environment
+venv-rebuild	py-venv.zsh	destructive	environment
+venv-remove	py-venv.zsh	destructive	environment
+venv-python-list	py-venv.zsh	read-only	runtime
+venv-python-install	py-venv.zsh	network	runtime
+venv-python-pin	py-venv.zsh	mutating	runtime
+package-search	py-pypi.zsh	network	package
+package-install	py-pypi.zsh	network	package
+package-uninstall	py-pypi.zsh	mutating	package
+tool-list	py-tools.zsh	read-only	tool
+tool-install	py-tools.zsh	network	tool
+tool-uninstall	py-tools.zsh	mutating	tool
+tool-upgrade	py-tools.zsh	network	tool

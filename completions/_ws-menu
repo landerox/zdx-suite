@@ -1,0 +1,81 @@
+#compdef ws-menu ws-clone ws-jump ws-status
+
+local context state state_descr line
+typeset -A opt_args
+
+local -a ws_commands
+ws_commands=(
+  'ws-clone:Clone a repository into the workspace layout after a plan'
+  'ws-jump:Change the current shell to a workspace repository'
+  'ws-status:Show branch, changes, and sync state for every repository'
+)
+
+# Completion reads directory names only; it never scans repositories.
+_ws_complete_directories() {
+  local workspace_root="${WS_BASE_DIR:-${HOME:A}/workspaces}"
+  local -a names=()
+  case "$1" in
+    platform)
+      names=("$workspace_root"/*(N/:t))
+      ;;
+    identity)
+      names=("$workspace_root"/*/*(N/:t))
+      if [[ "${(t)ZDX_GIT_IDENTITIES-}" == *association* ]]; then
+        names+=("${(@k)ZDX_GIT_IDENTITIES}")
+      fi
+      names=("${(@u)names}")
+      ;;
+  esac
+  compadd -a names
+}
+
+_ws_complete_clone() {
+  _arguments \
+    '(- *)'{-h,--help}'[show command help]' \
+    '--platform[workspace platform directory]:platform:_ws_complete_directories platform' \
+    '--identity[workspace identity directory]:identity:_ws_complete_directories identity' \
+    '--name[repository directory name]:directory name:' \
+    '--dry-run[print the clone plan without cloning]' \
+    '--yes[accept the reviewed plan non-interactively]' \
+    '1:repository URL:'
+}
+
+_ws_complete_jump() {
+  _arguments \
+    '(- *)'{-h,--help}'[show command help]' \
+    '1:repository name or path fragment:'
+}
+
+_ws_complete_status() {
+  _arguments \
+    '(- *)'{-h,--help}'[show command help]' \
+    '--fetch[fetch every repository before reporting]' \
+    '--json[print one JSON document on stdout]'
+}
+
+local command_name=""
+if [[ "$service" == ws-menu ]]; then
+  _arguments -C \
+    '(- *)'{-h,--help}'[show usage]' \
+    '1:Workspace command:->ws_command' \
+    '*::command argument:->ws_arguments'
+  case "$state" in
+    ws_command)
+      _describe -t ws-commands 'Workspace command' ws_commands
+      ;;
+    ws_arguments)
+      command_name="${words[1]:-}"
+      ;;
+  esac
+else
+  command_name="$service"
+fi
+
+case "$command_name" in
+  ws-clone) _ws_complete_clone ;;
+  ws-jump) _ws_complete_jump ;;
+  ws-status) _ws_complete_status ;;
+esac
+
+unfunction _ws_complete_directories _ws_complete_clone _ws_complete_jump \
+  _ws_complete_status 2>/dev/null
