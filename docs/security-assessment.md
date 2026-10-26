@@ -518,9 +518,40 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   ignored files. Uncommitted changes need a reviewed plan and an explicit carry
   or stash choice, and HEAD, the index and working tree, the stash list, and
   the target ref are compared again after authorization. `git-recover` only
-  adds a branch through `git update-ref` with an empty old value, so Git
-  refuses the write if the ref exists; it never moves, resets, or deletes a
-  ref.
+  adds a branch through `git update-ref --no-deref` with an empty old value.
+  It refuses a name that a branch or a symbolic ref holds, even a dangling
+  alias that `for-each-ref` and `show-ref` skip; Git refuses the write if a
+  branch appeared in the meantime, and the write never follows an alias to
+  create another ref. It never moves, resets, or deletes a branch.
+- No Git deletion or local ref write follows a symbolic ref to the ref it
+  names. Cleanup and tag inventories skip refs whose `%(symref)` is set;
+  deletions and tracking-ref updates use `git update-ref --no-deref`
+  (`option no-deref` before every command of a transaction); and
+  `git-recover`, `git-switch`, `git-stash branch`, and `git-tag-create` refuse
+  a new name that a symbolic ref holds, even a dangling one, while planning
+  and after confirmation. Because a server deletes the target of a symbolic
+  ref that a push deletes, `clean-remote-merged` and `git-tag-delete` read the
+  remote's symbolic refs (a read-only protocol v2 `git ls-remote --symref`,
+  bounded to 30 seconds and never prompting) while planning and before each
+  push, refuse a remote deletion when the remote does not answer with
+  protocol v2, and stop the whole run with its status when that query is
+  interrupted. Because Git updates or deletes, through any alias and despite
+  negative refspecs, the local ref that the first matching fetch refspec maps
+  a pushed ref to, every pushing command (`git-push`, `git-pr-create`,
+  `git-tag-push`, `git-tag-create --push`, `clean-remote-merged`, and
+  `git-tag-delete`) maps each pushed ref through every fetch refspec and
+  refuses a symbolic or uninspectable result, or a destination outside
+  `refs/remotes/` (a tag that maps to itself may still be published), while
+  planning and before each push; an interrupted check stops the whole run
+  with its status. `git_remote.bats`, `git_tag_recovery.bats`,
+  `git_branches.bats`, `git_local_changes.bats`, and `git_github_safety.bats`
+  cover local and remote aliases, refs swapped after review, mapped
+  destinations, and interrupts. Residual risk: `git switch -c`,
+  `git stash branch`, and `git tag` have no `--no-deref`; a ref that turns
+  symbolic between the last check and the push is still followed; remotes
+  without protocol v2 (OpenSSH without `AcceptEnv GIT_PROTOCOL`, `plink`,
+  dumb HTTP) cannot be cleaned remotely; and `git-push` does not check
+  aliases on the server.
 - System cleanup displays an applicable plan, supports dry-run, fails closed
   non-interactively, executes only unique typed confirmed records, revalidates
   cache scopes, reports partial failure, and excludes shared `/tmp` and Docker

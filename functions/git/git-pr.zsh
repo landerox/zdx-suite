@@ -605,6 +605,13 @@ git-pr-create() {
       "Remote branch '$remote_branch' is not an ancestor of HEAD; fetch and integrate it first."
     return 1
   fi
+  # A publication push to the remote URL updates the refs that the remote's
+  # fetch refspecs map the branch to, and Git would follow a symbolic one to
+  # the ref it points to.
+  if (( needs_push )); then
+    _git_require_direct_tracking_refs "$remote" "refs/heads/${remote_branch}" \
+      || return $?
+  fi
 
   _git_header "Pull Request Creation Plan"
   _git_label "Repository:" \
@@ -667,6 +674,8 @@ git-pr-create() {
     # The reviewed fast-forward is bound to the exact remote head (or its
     # absence); follow-tags and submodule recursion stay off so only the
     # reviewed head is published.
+    _git_require_direct_tracking_refs "$remote" "refs/heads/${remote_branch}" \
+      || return $?
     command git push --no-follow-tags --recurse-submodules=no \
       "--force-with-lease=refs/heads/${remote_branch}:${remote_head_oid}" \
       -- "$remote_url" "${expected_head}:refs/heads/${remote_branch}" >&2

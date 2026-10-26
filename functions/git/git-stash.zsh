@@ -1394,6 +1394,9 @@ _git_stash_branch_one() {
   local -a stash_branch_refs=("refs/heads/$branch_name")
   _git_ref_case_guard stash_branch_refs refs/heads \
     "Choose a branch name that differs by more than letter case." || return 1
+  # show-ref skips a dangling symbolic ref, and git stash branch would create
+  # the new branch through it.
+  _git_require_not_symbolic_ref "refs/heads/$branch_name" branch || return 1
   command git -C "${snapshot[1]}" \
     show-ref --verify --quiet "refs/heads/$branch_name" && {
     _git_error "Local branch already exists: $branch_name"
@@ -1420,6 +1423,7 @@ _git_stash_branch_one() {
     target_paths "create a stash branch" || return 1
   _git_ref_case_guard stash_branch_refs refs/heads \
     "Choose a branch name that differs by more than letter case." || return 1
+  _git_require_not_symbolic_ref "refs/heads/$branch_name" branch || return 1
   command git -C "${snapshot[1]}" \
     show-ref --verify --quiet "refs/heads/$branch_name" && {
     _git_error "The branch appeared after confirmation; refusing to overwrite it."

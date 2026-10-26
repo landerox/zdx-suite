@@ -49,24 +49,29 @@ _git_tag_ref_oid() {
 
 # Sets reply to:
 #   short-name<TAB>full-ref<TAB>object-id
+# A symbolic ref below refs/tags is an alias of another ref, often a branch,
+# so it is never a tag target.
 _git_tag_collect_local() {
   reply=()
   local output
   output=$(command git for-each-ref \
     --sort=-version:refname \
-    --format='%(refname:strip=2)%09%(refname)%09%(objectname)' \
+    --format='%(refname:strip=2)%09%(refname)%09%(objectname)%09%(symref)' \
     refs/tags 2>/dev/null) || {
     _git_error "Unable to enumerate local tags."
     return 1
   }
 
-  local record short_name remainder ref oid
+  local record short_name remainder ref oid symbolic_target
   for record in "${(@f)output}"; do
-    [[ -n "$record" && "$record" == *$'\t'* ]] || continue
+    [[ -n "$record" && "$record" == *$'\t'*$'\t'*$'\t'* ]] || continue
     short_name="${record%%$'\t'*}"
     remainder="${record#*$'\t'}"
     ref="${remainder%%$'\t'*}"
-    oid="${remainder##*$'\t'}"
+    remainder="${remainder#*$'\t'}"
+    oid="${remainder%%$'\t'*}"
+    symbolic_target="${remainder#*$'\t'}"
+    [[ -z "$symbolic_target" ]] || continue
     local REPLY=""
     _git_tag_normalize_ref "$short_name" \
       && [[ "$REPLY" == "$ref" ]] \
@@ -111,7 +116,8 @@ _git_tag_filter_local() {
       fi
     done
     [[ -n "$matched" ]] || {
-      _git_error "Local tag '$(_git_display_escape "$input")' does not exist."
+      _git_error \
+        "Local tag '$(_git_display_escape "$input")' does not exist or is a symbolic ref."
       return 1
     }
 
@@ -610,6 +616,7 @@ git-tag-create() {
   local -a created_tag_refs=("$tag_ref")
   _git_ref_case_guard created_tag_refs refs/tags \
     "Choose a tag name that differs by more than letter case." || return 1
+  _git_require_not_symbolic_ref "$tag_ref" tag || return 1
   if command git show-ref --verify --quiet "$tag_ref"; then
     _git_error "Tag '$(_git_display_escape "$tag_name")' already exists."
     return 1
@@ -645,6 +652,10 @@ git-tag-create() {
         "Remote tag '$(_git_display_escape "$tag_ref")' already exists at $expected_remote_oid."
       return 1
     }
+    # The push to the remote URL updates the refs that the fetch refspecs map
+    # the tag to, through any alias.
+    _git_require_direct_tracking_refs --allow-self-tag "$remote" "$tag_ref" \
+      || return $?
   fi
 
   _git_label "Repository:" "$root"
@@ -672,6 +683,9 @@ git-tag-create() {
     || return 1
   _git_ref_case_guard created_tag_refs refs/tags \
     "Choose a tag name that differs by more than letter case." || return 1
+  # Porcelain `git tag` has no --no-deref, so this is the last check before it
+  # writes; an alias created after it would still redirect the new tag.
+  _git_require_not_symbolic_ref "$tag_ref" tag || return 1
   command git show-ref --verify --quiet "$tag_ref" && {
     _git_error "The tag appeared after planning; refusing to overwrite it."
     return 1
@@ -746,6 +760,13 @@ git-tag-create() {
       "The remote tag changed before push; the local tag remains at $created_oid."
     return 1
   }
+  local -i tracking_rc=0
+  _git_require_direct_tracking_refs --allow-self-tag "$remote" "$tag_ref" \
+    || tracking_rc=$?
+  if (( tracking_rc != 0 )); then
+    _git_error "The local tag remains available at $created_oid."
+    return $tracking_rc
+  fi
 
   local -a push_cmd=(
     command git push --no-follow-tags --recurse-submodules=no
@@ -942,10 +963,13 @@ _git_tag_push_parse() {
 
 # Builds:
 #   full-ref<TAB>local-oid<TAB>remote-oid-or-absent
+# Usage: _git_tag_build_push_plan REMOTE URL RECORD...
 _git_tag_build_push_plan() {
-  local remote="$1"
-  shift
+  local remote_name="$1"
+  local remote="$2"
+  shift 2
   local -a local_records=("$@")
+  local -i tracking_rc=0
   reply=()
 
   local -a remote_records=()
@@ -967,6 +991,14 @@ _git_tag_build_push_plan() {
         "Refusing to overwrite remote tag $(_git_display_escape "$ref") at $remote_oid."
       return 1
     fi
+    # The push to the remote URL updates the refs that the fetch refspecs map
+    # the tag to, through any alias.
+    _git_require_direct_tracking_refs --allow-self-tag \
+      "$remote_name" "$ref" || {
+      tracking_rc=$?
+      reply=()
+      return $tracking_rc
+    }
     reply+=("${ref}"$'\t'"${local_oid}"$'\t'"${remote_oid}")
   done
   return 0
@@ -1022,7 +1054,8 @@ git-tag-push() {
   local remote_url="$REPLY"
 
   local -a plan=()
-  _git_tag_build_push_plan "$remote_url" "${selected_tags[@]}" || return $?
+  _git_tag_build_push_plan "$remote" "$remote_url" "${selected_tags[@]}" \
+    || return $?
   plan=("${reply[@]}")
   if (( ${#plan[@]} == 0 )); then
     _git_success "Every selected tag already matches '$remote'."
@@ -1094,6 +1127,17 @@ git-tag-push() {
     actual_remote_oid="$REPLY"
     if [[ "$actual_remote_oid" != "$remote_oid" ]]; then
       _git_error "Refused changed remote tag: $(_git_display_escape "$ref")"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    local -i tracking_rc=0
+    _git_require_direct_tracking_refs --allow-self-tag "$remote" "$ref" \
+      || tracking_rc=$?
+    if (( tracking_rc == 130 || tracking_rc == 143 )); then
+      _git_count_noun "$pushed" tag
+      _git_warn "Tag push interrupted: $REPLY pushed before the interruption."
+      return "$tracking_rc"
+    elif (( tracking_rc != 0 )); then
       failed=$(( failed + 1 ))
       continue
     fi
@@ -1234,16 +1278,27 @@ _git_tag_delete_parse() {
 
 # Builds:
 #   full-ref<TAB>local-oid<TAB>remote-oid-or-not-requested-or-absent
+# Usage: _git_tag_build_delete_plan DELETE_REMOTE REMOTE URL RECORD...
 _git_tag_build_delete_plan() {
   local -i delete_remote="$1"
-  local remote="$2"
-  shift 2
+  local remote_name="$2"
+  local remote="$3"
+  shift 3
   local -a local_records=("$@")
 
-  local -a remote_records=()
+  local -a remote_records=() remote_symbolic=()
   if (( delete_remote )); then
     _git_tag_remote_snapshot "$remote" 'refs/tags/*' || return $?
     remote_records=("${reply[@]}")
+    # A server deletes the target of a symbolic tag that a push deletes, and
+    # only a protocol v2 answer shows which tags are symbolic.
+    _git_remote_symbolic_refs "$remote" 'refs/tags/*' || return $?
+    remote_symbolic=("${reply[@]}")
+    [[ "$REPLY" == "v2" ]] || {
+      _git_remote_symref_refusal tag
+      reply=()
+      return 1
+    }
   fi
   reply=()
 
@@ -1254,6 +1309,21 @@ _git_tag_build_delete_plan() {
     ref="${remainder%%$'\t'*}"
     local_oid="${remainder##*$'\t'}"
     if (( delete_remote )); then
+      if (( ${remote_symbolic[(Ie)$ref]} )); then
+        _git_error \
+          "Remote tag '$(_git_display_escape "${ref#refs/tags/}")' is a symbolic ref on the remote; deleting it there would delete its target. Nothing was deleted."
+        reply=()
+        return 1
+      fi
+      # The push to the remote URL deletes the refs that the fetch refspecs
+      # map the tag to, through any alias.
+      local -i tracking_rc=0
+      _git_require_direct_tracking_refs "$remote_name" "$ref" \
+        || tracking_rc=$?
+      if (( tracking_rc != 0 )); then
+        reply=()
+        return $tracking_rc
+      fi
       _git_tag_find_remote_oid "$ref" "${remote_records[@]}"
       remote_oid="$REPLY"
     fi
@@ -1329,8 +1399,8 @@ git-tag-delete() {
 
   local -a plan=()
   _git_tag_build_delete_plan \
-    "$_git_tag_delete_opt_delete_remote" "$remote_url" "${selected_tags[@]}" \
-    || return $?
+    "$_git_tag_delete_opt_delete_remote" "$remote" "$remote_url" \
+    "${selected_tags[@]}" || return $?
   plan=("${reply[@]}")
 
   _git_label "Repository:" "$root"
@@ -1395,16 +1465,50 @@ git-tag-delete() {
         failed=$(( failed + 1 ))
         continue
       }
-      _git_tag_remote_snapshot "$remote_url" "$ref" || {
+      # Just before this push; an interrupted query stops the whole run.
+      local -i probe_rc=0
+      _git_tag_remote_snapshot "$remote_url" "$ref" || probe_rc=$?
+      if (( probe_rc == 0 )); then
+        current_remote_records=("${reply[@]}")
+        _git_remote_symbolic_refs "$remote_url" "$ref" || probe_rc=$?
+      fi
+      if (( probe_rc == 130 || probe_rc == 143 )); then
+        _git_count_noun "$deleted" tag
+        _git_warn \
+          "Tag deletion interrupted: $REPLY deleted; local $ref retained."
+        return "$probe_rc"
+      elif (( probe_rc != 0 )); then
         failed=$(( failed + 1 ))
         continue
-      }
-      current_remote_records=("${reply[@]}")
+      fi
+      if [[ "$REPLY" != "v2" ]]; then
+        _git_error \
+          "Refused remote tag $(_git_display_escape "$ref"): the remote did not answer with protocol v2."
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      if (( ${#reply[@]} > 0 )); then
+        _git_error \
+          "Refused remote tag that is now a symbolic ref: $(_git_display_escape "$ref")"
+        failed=$(( failed + 1 ))
+        continue
+      fi
       _git_tag_find_remote_oid "$ref" "${current_remote_records[@]}"
       actual_remote_oid="$REPLY"
       if [[ "$actual_remote_oid" != "$remote_oid" ]]; then
         _git_error \
           "Refused changed remote tag: $(_git_display_escape "$ref")"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      local -i tracking_rc=0
+      _git_require_direct_tracking_refs "$remote" "$ref" || tracking_rc=$?
+      if (( tracking_rc == 130 || tracking_rc == 143 )); then
+        _git_count_noun "$deleted" tag
+        _git_warn \
+          "Tag deletion interrupted: $REPLY deleted; local $ref retained."
+        return "$tracking_rc"
+      elif (( tracking_rc != 0 )); then
         failed=$(( failed + 1 ))
         continue
       fi
@@ -1435,7 +1539,9 @@ git-tag-delete() {
       _git_success "Deleted $ref from '$remote' at $remote_oid."
     fi
 
-    if command git update-ref -d "$ref" "$local_oid" 2>/dev/null; then
+    # --no-deref deletes the reviewed tag ref itself; a ref that became
+    # symbolic after review never takes its target with it.
+    if command git update-ref --no-deref -d "$ref" "$local_oid" 2>/dev/null; then
       _git_success "Deleted local $ref at $local_oid."
       deleted=$(( deleted + 1 ))
     else
