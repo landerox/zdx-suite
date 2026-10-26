@@ -78,6 +78,15 @@ verification, and remaining limitations.
   reviewed pull-request head itself from a configured remote and checks out
   only that commit, instead of running `gh pr checkout`, and a rebase pull is
   refused when the configuration asks it to recreate merges.
+- Core: the Zsh timeout watchdog, used without `timeout` or `gtimeout` as on
+  stock macOS, now delivers each TERM and KILL pass to the whole visible
+  process tree of a timed-out command, even when the command exits on the
+  first signal; in a stress test on a loaded host, a descendant kept running
+  in 46 of 100 timeouts. The standalone System fallback now signals every
+  process of a multi-process tree instead of none, a `TRAPTERM` function in
+  the user's shell no longer keeps a finished bounded command waiting until its
+  deadline, and a stalled process listing can no longer hold a bounded
+  command.
 
 ## [0.1.0] — 2026-10-22
 
