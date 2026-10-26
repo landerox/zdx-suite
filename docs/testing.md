@@ -920,7 +920,11 @@ ago, because the realtime clock can step between the fixture and the product:
 WSL2 steps it back about 2 seconds every 30 seconds. A test that a time budget
 stops a loop sizes the budget so that the iterations it asserts still fit after
 one program is charged its whole deadline, as a clock step causes, and it
-asserts the count the run reports instead of assuming one.
+asserts the count the run reports instead of assuming one. A delay counts from
+the event it depends on, not from the start of the test: a signal that must
+reach a wait is sent from a `DEBUG` trap when the shell reaches that wait, and a
+stall that must outlast a deadline waits for the event that marks the deadline,
+such as the watchdog's token in its marker, instead of sleeping a fixed time.
 
 BATS loads `test/setup_suite.bash` whenever it runs a file from `test/`. It
 checks the Bash floor once and exports `BATS_TEST_TIMEOUT=300` unless the
