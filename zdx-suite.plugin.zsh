@@ -113,11 +113,22 @@ unset -f _zdx_register_completion_file
 
 # --- Zsh Keyboard Shortcuts & Bindings ----------------------------------------
 if [[ "${ZDX_KEYBINDINGS:-1}" == "1" ]] && [[ -o interactive ]] && (( $+widgets )); then
-  # Git menu widget (Ctrl+G)
+  # Git menu widget (Ctrl+G). A widget gets /dev/null as standard input and
+  # cannot start the line editor again, so the menu's confirmations and its
+  # vared text prompts would fail inside it. At the main prompt, the widget
+  # puts the line being edited on the buffer stack, so it returns at the next
+  # prompt, and accepts ' git-menu' instead: the menu runs as a typed command,
+  # and the leading space lets HIST_IGNORE_SPACE drop it from the history.
+  # print -z pushes the line because push-input would also save the cursor
+  # for the next line editor, which can be a prefilled vared prompt in the
+  # menu. Anywhere else (vared, a continuation line, a recursive edit) the
+  # widget fails without acting, because accept-line would hand ' git-menu'
+  # to that read instead.
   _zdx_git_menu_widget() {
-    zle -I
-    git-menu
-    zle redisplay
+    [[ "$CONTEXT" == start ]] && (( ! ZLE_RECURSIVE )) || return 1
+    [[ -n "$BUFFER" ]] && builtin print -z -r -- "$BUFFER"
+    BUFFER=' git-menu'
+    zle accept-line
   }
   zle -N git-menu-widget _zdx_git_menu_widget
   typeset _zdx_key_git="${ZDX_KEY_GIT-^G}"

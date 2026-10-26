@@ -155,7 +155,11 @@ and `ZDX_KEY_INSERT_VENV` in `~/.config/zdx/config.zsh`; an empty value leaves
 that widget unbound, and you can bind any widget yourself, for example
 `bindkey '^[b' zdx-insert-branch`. `ZDX_KEYBINDINGS=0` disables every ZDX
 widget, including `Ctrl-G` for `git-menu`, which `ZDX_KEY_GIT` moves and an
-empty `ZDX_KEY_GIT` unbinds. The widget code loads on first use, so it adds no
+empty `ZDX_KEY_GIT` unbinds. `Ctrl-G` runs `git-menu` as if you had typed it,
+so its confirmations and text prompts work and the line you were editing comes
+back at the next prompt; with `HIST_IGNORE_SPACE`, which Oh My Zsh sets, the
+call is dropped from your history when you enter the next command. The widget
+code loads on first use, so it adds no
 work to shell startup beyond registering the names and reading the current
 bindings once.
 

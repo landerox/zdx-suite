@@ -2292,7 +2292,12 @@ memory or CPU during inspection.
   (10 s), `gh pr list` (15 s, at most 200 records), and the `jq` decode (5 s),
   and offer at most 2,000 candidates; virtual-environment discovery walks at
   most 64 ancestors and 500 `WORKON_HOME` entries. These bounds keep the line
-  editor responsive; a widget never waits on a mutation.
+  editor responsive, and an insert widget never waits on a mutation. The
+  `Ctrl-G` widget runs no Git command itself: at the main prompt it pushes the
+  edited line and accepts `git-menu`, with a leading space, as a typed command
+  line, so the menu runs outside the line editor, with the terminal as standard
+  input, under the same confirmations as when it is typed; anywhere else, such
+  as in `vared`, the chord does nothing.
 - Workspace discovery runs under a 30-second deadline with an 8 MiB output
   ceiling and fails closed above 2,000 repositories. Each `ws-status` probe and
   each SSH alias or Git configuration probe is bounded through the core timeout
