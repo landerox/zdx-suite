@@ -124,8 +124,12 @@ jobs:
 EOF
 }
 
-# Epoch seconds <days> ago, for release-age fixtures.
-days_ago() { echo $(( $(date +%s) - $1 * 86400 )); }
+# Epoch seconds <days> and a half days ago, for release-age fixtures. The
+# product floors an age to whole days. The half day keeps that floor at <days>
+# when the clock steps between this read and the product's (WSL2 steps it back
+# about 2 s every 30 s) or a loaded run is slow, and it still tells flooring
+# from rounding.
+days_ago() { echo $(( $(date +%s) - $1 * 86400 - 43200 )); }
 
 gh_release() {
   local owner_repo="$1" tag_name="$2" epoch="$3"

@@ -421,19 +421,32 @@ EOF
 @test "vpn mtu: the time budget stops a search that keeps hanging" {
   export MOCK_PING_HANG_ABOVE=1364
   local started=$SECONDS
+  # A program whose clock reading goes negative is charged its whole deadline
+  # and grace, 3 s here, as when WSL2 steps the clock back 2 s during one of
+  # the bounded programs before the search. The 6 s budget leaves room for the
+  # first search probe after such a charge, and the search can never finish
+  # inside it: settling this boundary takes seven probes that each hang for
+  # their full second.
   run run_zsh "$LINUX"'
     _VPN_MTU_PROBE_SECONDS=1
-    _VPN_MTU_BUDGET_SECONDS=4
+    _VPN_MTU_BUDGET_SECONDS=6
     vpn-mtu-probe
   '
 
   [ "$status" -eq 0 ]
   [[ "$(value 'Path MTU')" == "at least "* ]]
-  [[ "$output" == *"probing stopped at its 4s limit after "*" probes."* ]]
+  # The reachability probe and at least one search probe that hung until its
+  # deadline; the budget, not the 16-probe cap, ended the search. Both counts
+  # name the probes actually sent.
+  local sent
+  sent=$(probe_count)
+  (( sent >= 2 && sent < 16 ))
+  grep -Eq -- '-s (136[5-9]|13[7-9][0-9]|1[4-9][0-9]{2}) ' "$MOCK_PING_LOG"
+  [[ "$output" == *"probing stopped at its 6s limit after $sent probes."* ]]
+  [[ "$(value 'Probes')" == "$sent in "* ]]
   [[ "$output" == *"No change is recommended from a partial measurement."* ]]
   [[ "$output" != *"Recommendations"* ]]
-  (( $(probe_count) < 16 ))
-  (( SECONDS - started < 10 ))
+  (( SECONDS - started < 12 ))
 }
 
 @test "vpn mtu: a wall-clock jump never shrinks the accounted budget" {

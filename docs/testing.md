@@ -907,6 +907,21 @@ New tests must keep that property: write only inside the sandbox, share no
 files with other tests, and leave enough slack in any timing assertion for a
 fully loaded host.
 
+Slack alone does not remove a race. A test that checks that a process stopped
+polls for its exit for a bounded time, such as up to 10 seconds in
+20-millisecond steps, instead of probing `kill -0` once: signal delivery and
+reaping are asynchronous, and a zombie still answers `kill -0`. A bounded
+command that must start a descendant or write a readiness file before its
+deadline does that first, under a bound of at least 3 seconds, and the
+descendant redirects its standard streams and closes descriptor 3, so that a
+survivor cannot hold the BATS pipes open. A date fixture for an age that the
+product floors sits in the middle of the unit, such as `N` days and 12 hours
+ago, because the realtime clock can step between the fixture and the product:
+WSL2 steps it back about 2 seconds every 30 seconds. A test that a time budget
+stops a loop sizes the budget so that the iterations it asserts still fit after
+one program is charged its whole deadline, as a clock step causes, and it
+asserts the count the run reports instead of assuming one.
+
 BATS loads `test/setup_suite.bash` whenever it runs a file from `test/`. It
 checks the Bash floor once and exports `BATS_TEST_TIMEOUT=300` unless the
 caller already set a value, so a hung test fails instead of blocking the run.

@@ -105,21 +105,33 @@ SH
   export PLATFORM_CANONICAL
   PLATFORM_CANONICAL=$(cd -P "$TEST_TEMP_DIR/physical/tmp" && pwd -P)
 
+  # The command records its descendant first, so a loaded host has the whole
+  # bound to start it, and the descendant outlives the bound and the wait
+  # below. Its streams never hold the BATS pipes open.
   run run_zsh '
     source "$PLATFORM_NO_TIMEOUT" || return 90
+    zmodload zsh/zselect || return 93
     export TMPDIR="$TEST_TEMP_DIR/alias/tmp"
-    _zdx_run_with_timeout 1 zsh -fc "
+    _zdx_run_with_timeout 3 zsh -fc "
+      sleep 60 </dev/null >/dev/null 2>&1 3>&- &
+      print -r -- \$! > \"\$HOME/descendant.pid\"
       markers=(\"\$PLATFORM_CANONICAL\"/zdx-timeout.*(N))
       print -r -- \${#markers} > \"\$HOME/markers\"
-      sleep 20 &
-      print -r -- \$! > \"\$HOME/descendant.pid\"
       wait
     "
     local -i timeout_rc=$?
     local descendant_pid=""
     descendant_pid=$(<"$HOME/descendant.pid") || return 91
+    [[ "$descendant_pid" == <-> ]] || return 91
+    # A signaled process dies and is reaped asynchronously: wait up to 10 s.
+    local -i attempt=0
+    while builtin kill -0 "$descendant_pid" 2>/dev/null \
+      && (( ++attempt <= 500 )); do
+      zselect -t 2
+    done
     if builtin kill -0 "$descendant_pid" 2>/dev/null; then
       builtin kill -KILL "$descendant_pid" 2>/dev/null
+      print -r -- "descendant still ran 10 s after the timeout (rc=$timeout_rc)"
       return 92
     fi
     print -r -- "rc=$timeout_rc markers=$(<"$HOME/markers")"
