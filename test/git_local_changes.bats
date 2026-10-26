@@ -58,6 +58,24 @@ show_failure() {
   cat "$HOME"/*.stderr >&2 2>/dev/null || true
 }
 
+# Wraps the standard fzf mock. A picker call that finds the fixture
+# $HOME/picker-side-effect renames it and runs it once with /bin/sh, as if an
+# editor or another tool changed the repository while the picker was open,
+# and then answers like the standard mock.
+wrap_fzf_with_side_effect() {
+  mv "$TEST_MOCK_BIN/fzf" "$TEST_MOCK_BIN/fzf-standard"
+  cat > "$TEST_MOCK_BIN/fzf" <<'EOF'
+#!/usr/bin/env bash
+side_effect="$HOME/picker-side-effect"
+if [[ -f "$side_effect" ]]; then
+  mv -f -- "$side_effect" "$side_effect.ran" || exit 96
+  /bin/sh "$side_effect.ran" </dev/null >&2 || exit 95
+fi
+exec "$TEST_MOCK_BIN/fzf-standard" "$@"
+EOF
+  chmod +x "$TEST_MOCK_BIN/fzf"
+}
+
 # --- Discard all changes ---------------------------------------------------------
 
 @test "git local changes: discard --all dry run lists every tracked change and stays inert" {
@@ -388,6 +406,181 @@ show_failure() {
     "$HOME/changed.stderr"
 }
 
+@test "git local changes: unstage refuses a plan when the index or working tree changes while the picker is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/edit-a.sh" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "edited while the picker was open" > a.txt
+EOF
+  cat > "$HOME/stage-c.sh" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "staged while the picker was open" > c.txt
+git add c.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tfile\ta.txt'
+  run run_zsh "$(local_repo)"'
+    # Each case starts where unstaging a.txt is reversible: HEAD has "base a",
+    # and the index and the working tree both have "staged a".
+    reviewed_state() {
+      command git reset -q --hard || return 1
+      print -r -- "staged a" > a.txt
+      command git add a.txt
+    }
+    report_case() {
+      local -a staged=("${(@f)$(command git diff --cached --name-only)}")
+      print -r -- "$1: rc=$2 index=[$(command git show :a.txt)] worktree=[$(<a.txt)] staged=[${(j:,:)staged}]"
+    }
+
+    # Nothing changes while the picker is open: the reversible plan runs
+    # without a question.
+    reviewed_state || return 9
+    git-unstage >"$HOME/safe.stdout" 2>"$HOME/safe.stderr"
+    report_case safe $?
+
+    # Control: the staged version is already missing from the working tree
+    # when the picker opens, so the plan names it and fails closed without a
+    # terminal.
+    reviewed_state || return 10
+    print -r -- "edited after staging" > a.txt
+    git-unstage >"$HOME/lossy.stdout" 2>"$HOME/lossy.stderr"
+    report_case lossy $?
+
+    # The same loss, caused by an editor while the picker is open.
+    reviewed_state || return 11
+    command cp -- "$HOME/edit-a.sh" "$HOME/picker-side-effect" || return 12
+    git-unstage >"$HOME/worktree.stdout" 2>"$HOME/worktree.stderr"
+    report_case worktree $?
+
+    # --yes bypasses only the question: a path staged while the picker is
+    # open still refuses the plan.
+    reviewed_state || return 13
+    command cp -- "$HOME/stage-c.sh" "$HOME/picker-side-effect" || return 14
+    git-unstage --yes >"$HOME/index.stdout" 2>"$HOME/index.stderr"
+    report_case index $?
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  printf '%s\n' "$output" >&2
+  [ "${lines[0]}" = "safe: rc=0 index=[base a] worktree=[staged a] staged=[]" ]
+  [ "${lines[1]}" = "lossy: rc=1 index=[staged a] worktree=[edited after staging] staged=[a.txt]" ]
+  # Before the fix: rc=0 index=[base a] staged=[], the only copy of the
+  # staged version dropped without the confirmation the plan requires.
+  [ "${lines[2]}" = "worktree: rc=1 index=[staged a] worktree=[edited while the picker was open] staged=[a.txt]" ]
+  [ "${lines[3]}" = "index: rc=1 index=[staged a] worktree=[staged a] staged=[a.txt,c.txt]" ]
+  [ "${#lines[@]}" -eq 4 ]
+  [ ! -s "$HOME/safe.stdout" ]
+  [ ! -s "$HOME/lossy.stdout" ]
+  [ ! -s "$HOME/worktree.stdout" ]
+  [ ! -s "$HOME/index.stdout" ]
+  grep -Fq "Unstage completed: 1 file unstaged." "$HOME/safe.stderr"
+  ! grep -Fq "Unstaging loses" "$HOME/safe.stderr" || false
+  grep -Fq "Unstaging loses the staged content of 1 file because it differs from the working tree:" \
+    "$HOME/lossy.stderr"
+  grep -Fq "Refusing to continue without a terminal" "$HOME/lossy.stderr"
+  grep -Fq "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again." \
+    "$HOME/worktree.stderr"
+  grep -Fq "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again." \
+    "$HOME/index.stderr"
+  # No plan is built from the inventory the picker showed.
+  ! grep -Fq "Unstage Files" "$HOME/worktree.stderr" || false
+  ! grep -Fq "Unstage Files" "$HOME/index.stderr" || false
+}
+
+@test "git local changes: unstage --dry-run refuses instead of planning when the working tree changes while the picker is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "edited while the picker was open" > a.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tfile\ta.txt'
+  run run_zsh "$(local_repo)"'
+    print -r -- "staged a" > a.txt
+    command git add a.txt || return 9
+    git-unstage --dry-run >"$HOME/dry.stdout" 2>"$HOME/dry.stderr"
+    local -i dry_rc=$?
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 10
+    [[ "$(command git show :a.txt)" == "staged a" ]] || return 11
+    [[ "$(<a.txt)" == "edited while the picker was open" ]] || return 12
+    print -r -- "$dry_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  # Before the fix: 0, with a plan and a dry-run line for the stale state.
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/dry.stdout" ]
+  grep -Fq "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again." \
+    "$HOME/dry.stderr"
+  ! grep -Fq "Unstage Files" "$HOME/dry.stderr" || false
+  ! grep -Fq "Dry run:" "$HOME/dry.stderr" || false
+}
+
+@test "git local changes: unstage from a subdirectory with diff.relative refuses a root-level change made while the picker is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "edited while the picker was open" > a.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tfile\ta.txt'
+  run run_zsh "$(local_repo)"'
+    command git config diff.relative true || return 9
+    mkdir -p sub || return 10
+    print -r -- "staged a" > a.txt
+    print -r -- "new in sub" > sub/s.txt
+    command git add a.txt sub/s.txt || return 11
+    builtin cd -q sub || return 12
+    git-unstage >"$HOME/sub.stdout" 2>"$HOME/sub.stderr"
+    local -i sub_rc=$?
+    builtin cd -q .. || return 13
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 14
+    [[ "$(command git show :a.txt)" == "staged a" ]] || return 15
+    [[ "$(command git diff --cached --name-only)" == $'"'"'a.txt\nsub/s.txt'"'"' ]] || return 16
+    print -r -- "$sub_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/sub.stdout" ]
+  # The picker lists every staged path by its root-relative name.
+  grep -Fq $'\tfile\ta.txt' "$MOCK_FZF_INPUT_FILE"
+  grep -Fq $'\tfile\tsub/s.txt' "$MOCK_FZF_INPUT_FILE"
+  grep -Fq "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again." \
+    "$HOME/sub.stderr"
+}
+
+@test "git local changes: unstage refuses a plan when its staged change is unstaged while the picker is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+git restore --staged a.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tfile\ta.txt'
+  run run_zsh "$(local_repo)"'
+    # While the picker is open the staged change moves back to the working
+    # tree, where its diff text is the same.
+    print -r -- "staged a" > a.txt
+    command git add a.txt || return 9
+    git-unstage >"$HOME/moved.stdout" 2>"$HOME/moved.stderr"
+    local -i moved_rc=$?
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 10
+    [[ -z "$(command git diff --cached --name-only)" ]] || return 11
+    [[ "$(<a.txt)" == "staged a" ]] || return 12
+    print -r -- "$moved_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  # Before the fix: 0, with "Unstaged: a.txt" reported for a change that
+  # another tool had already unstaged.
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/moved.stdout" ]
+  grep -Fq "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again." \
+    "$HOME/moved.stderr"
+  ! grep -Fq "Unstaged:" "$HOME/moved.stderr" || false
+}
+
 # --- Amend the last commit ----------------------------------------------------
 
 @test "git local changes: amend --message dry run is inert and shows the kept body" {
@@ -465,6 +658,180 @@ show_failure() {
   [ "$status" -eq 0 ] || { show_failure; false; }
   grep -Fq "Repository HEAD or diff changed after review; nothing was amended." \
     "$HOME/moved.stderr"
+}
+
+@test "git local changes: amend refuses a plan when the index changes while the action dialog is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/stage-b.sh" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "staged while the dialog was open" > b.txt
+git add b.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tstaged\t'
+  run run_zsh "$(local_repo)"'
+    report_case() {
+      local -a staged=("${(@f)$(command git diff --cached --name-only)}")
+      local head_state="kept"
+      [[ "$(command git rev-parse HEAD)" == "$3" ]] || head_state="moved"
+      print -r -- "$1: rc=$2 head=$head_state a=[$(command git show HEAD:a.txt)] b=[$(command git show HEAD:b.txt)] staged=[${(j:,:)staged}]"
+    }
+    local head_before=""
+
+    # Nothing changes while the dialog is open: the plan lists a.txt and the
+    # amend adds exactly that file.
+    print -r -- "staged a" > a.txt
+    command git add a.txt || return 9
+    head_before=$(command git rev-parse HEAD) || return 10
+    git-amend --yes >"$HOME/control.stdout" 2>"$HOME/control.stderr"
+    report_case control $? "$head_before"
+
+    # Another tool stages b.txt while the dialog is open.
+    print -r -- "staged a again" > a.txt
+    command git add a.txt || return 11
+    head_before=$(command git rev-parse HEAD) || return 12
+    command cp -- "$HOME/stage-b.sh" "$HOME/picker-side-effect" || return 13
+    git-amend --yes >"$HOME/changed.stdout" 2>"$HOME/changed.stderr"
+    report_case changed $? "$head_before"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  printf '%s\n' "$output" >&2
+  [ "${lines[0]}" = "control: rc=0 head=moved a=[staged a] b=[base b] staged=[]" ]
+  # Before the fix: rc=0 head=moved with b.txt committed, a file the plan
+  # never listed.
+  [ "${lines[1]}" = "changed: rc=1 head=kept a=[staged a] b=[base b] staged=[a.txt,b.txt]" ]
+  [ "${#lines[@]}" -eq 2 ]
+  [ ! -s "$HOME/control.stdout" ]
+  [ ! -s "$HOME/changed.stdout" ]
+  grep -Eq '1 +staged +a\.txt' "$HOME/control.stderr"
+  grep -Fq "Amended main:" "$HOME/control.stderr"
+  grep -Fq "Repository state changed while the action dialog was open; nothing was amended. Run git-amend again." \
+    "$HOME/changed.stderr"
+  # No plan is built from the inventory the dialog showed.
+  ! grep -Fq "a.txt" "$HOME/changed.stderr" || false
+  ! grep -Fq "Amended" "$HOME/changed.stderr" || false
+}
+
+@test "git local changes: amend refuses Reset Author when only the working tree changes while the action dialog is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "edited while the dialog was open" > c.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\treset-author\t'
+  run run_zsh "$(local_repo)"'
+    local head_before=""
+    head_before=$(command git rev-parse HEAD) || return 9
+    # A new identity makes the reset-author commit differ from HEAD.
+    command git config user.name "Renamed Author" || return 10
+    git-amend --yes >"$HOME/author.stdout" 2>"$HOME/author.stderr"
+    local -i author_rc=$?
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 11
+    [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 12
+    [[ "$(command git log -1 --format=%an)" == "Local Test" ]] || return 13
+    [[ -z "$(command git diff --cached --name-only)" ]] || return 14
+    [[ "$(<c.txt)" == "edited while the dialog was open" ]] || return 15
+    print -r -- "$author_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/author.stdout" ]
+  grep -Fq "Repository state changed while the action dialog was open; nothing was amended. Run git-amend again." \
+    "$HOME/author.stderr"
+  ! grep -Fq "Amended" "$HOME/author.stderr" || false
+}
+
+@test "git local changes: amend from a subdirectory with diff.relative plans every staged file" {
+  run run_zsh "$(local_repo)"'
+    command git config diff.relative true || return 9
+    mkdir -p sub || return 10
+    print -r -- "staged a" > a.txt
+    print -r -- "new in sub" > sub/s.txt
+    command git add a.txt sub/s.txt || return 11
+    local head_before=""
+    head_before=$(command git rev-parse HEAD) || return 12
+    builtin cd -q sub || return 13
+    git-amend --staged --dry-run >"$HOME/plan.stdout" 2>"$HOME/plan.stderr" || return 14
+    [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 15
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ ! -s "$HOME/plan.stdout" ]
+  # Before the fix the plan listed only s.txt, relative to sub/.
+  grep -Eq '1 +staged +a\.txt' "$HOME/plan.stderr"
+  grep -Eq '2 +added +sub/s\.txt' "$HOME/plan.stderr"
+  grep -Fq "Dry run: 1 commit planned; nothing was amended." "$HOME/plan.stderr"
+}
+
+@test "git local changes: amend from a subdirectory with diff.relative refuses a root-level path staged while the action dialog is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "staged while the dialog was open" > b.txt
+git add b.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tstaged\t'
+  run run_zsh "$(local_repo)"'
+    command git config diff.relative true || return 9
+    mkdir -p sub || return 10
+    print -r -- "new in sub" > sub/s.txt
+    command git add sub/s.txt || return 11
+    local head_before=""
+    head_before=$(command git rev-parse HEAD) || return 12
+    builtin cd -q sub || return 13
+    git-amend --yes >"$HOME/changed.stdout" 2>"$HOME/changed.stderr"
+    local -i changed_rc=$?
+    builtin cd -q .. || return 14
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 15
+    # Before the fix: HEAD moved, with the unlisted b.txt committed.
+    [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 16
+    [[ "$(command git diff --cached --name-only)" == $'"'"'b.txt\nsub/s.txt'"'"' ]] || return 17
+    print -r -- "$changed_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/changed.stdout" ]
+  grep -Fq "Repository state changed while the action dialog was open; nothing was amended. Run git-amend again." \
+    "$HOME/changed.stderr"
+  ! grep -Fq "Amended" "$HOME/changed.stderr" || false
+}
+
+@test "git local changes: amend refuses a plan when an unstaged change is staged while the action dialog is open" {
+  wrap_fzf_with_side_effect
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+git add a.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tstaged\t'
+  run run_zsh "$(local_repo)"'
+    # While the dialog is open the unstaged change to a.txt moves to the
+    # index, where its diff text is the same.
+    print -r -- "edited a" > a.txt
+    print -r -- "staged b" > b.txt
+    command git add b.txt || return 9
+    local head_before=""
+    head_before=$(command git rev-parse HEAD) || return 10
+    git-amend --yes >"$HOME/moved.stdout" 2>"$HOME/moved.stderr"
+    local -i moved_rc=$?
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 11
+    # Before the fix: HEAD moved, with the unlisted a.txt committed.
+    [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 12
+    [[ "$(command git diff --cached --name-only)" == $'"'"'a.txt\nb.txt'"'"' ]] || return 13
+    print -r -- "$moved_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/moved.stdout" ]
+  grep -Fq "Repository state changed while the action dialog was open; nothing was amended. Run git-amend again." \
+    "$HOME/moved.stderr"
+  ! grep -Fq "Amended" "$HOME/moved.stderr" || false
 }
 
 @test "git local changes: amend --staged and --reset-author rewrite only what they name" {

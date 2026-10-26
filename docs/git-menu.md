@@ -344,9 +344,11 @@ differs from both HEAD and the working tree, such as a file edited again after
 `git add` or a staged new file deleted from disk, loses that staged content
 when it is unstaged. The plan names those paths and then requires confirmation
 or `--yes`; a batch without them is reversible and runs without a question.
-The batch is one index write (`git restore --staged`, or `git rm --cached`
-before the first commit), so every target or none is unstaged. Conflicted
-paths are not offered.
+The plan is classified from the index and working tree that the picker
+listed, and a change made while the picker is open refuses it; run the
+command again to review the new state. The batch is one index write
+(`git restore --staged`, or `git rm --cached` before the first commit), so
+every target or none is unstaged. Conflicted paths are not offered.
 
 ### Stashes
 
@@ -392,11 +394,12 @@ the current identity. Without `--staged`, staged changes stay staged and the
 commit tree is unchanged.
 
 The plan binds the commit and its branch. A branch switch, a new commit, or an
-index or working-tree change after confirmation refuses the amend. When a
-remote-tracking branch already contains the commit, the plan says so and the
-result names `git-push --force-with-lease`; this is a disclosure, not a
-refusal. The amended commit must keep the old parents, keep the old tree
-unless `--staged` was requested, and stay on the same branch.
+index or working-tree change while the action dialog is open or after
+confirmation refuses the amend. When a remote-tracking branch already contains
+the commit, the plan says so and the result names `git-push --force-with-lease`;
+this is a disclosure, not a refusal. The amended commit must keep the old
+parents, keep the old tree unless `--staged` was requested, and stay on the
+same branch.
 
 ### Discarding changes
 
@@ -969,7 +972,7 @@ regressing.
 | `test/git_json.bats` | Exact `zdx.git-status.v1` and `zdx.git-identity-check.v1` documents validated with `jq -e`, null and boolean typing, single-document stdout through the nested route, and missing-`jq`, invalid-argument, and no-repository failures with empty stdout |
 | `test/git_interface.bats` | Exact routing and timing, all direct help streams, outside-repository annotations, standalone and double sourcing, exact-root loader failure and retry, `NO_COLOR`, row validation, fzf behavior, the Local Changes and Branches sections and help groups, the pull-mode dialog, and rejection of a `git-push --tags` mode |
 | `test/git_safety.bats` | Credential redaction, non-TTY refusal on the local-change and shared confirmation paths, literal pathspec isolation, identity-data non-execution, exact PR OID comparison, SSH host-alias PR remotes, detached checkout of the reviewed PR head, subdirectory path selections for discard, unstage, and stash, nested-repository stashes with stdout diffs, staged-rename unstaging, untracked discard obstacles, and branch-bound undo plans |
-| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, and refusal after post-confirmation changes |
+| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, refusal of an unstage or amend plan whose state changes while its picker or dialog is open, and refusal after post-confirmation changes |
 | `test/git_github_safety.bats` | Push-remote precedence, local PR head naming, exact single push-URL enforcement, and deny-by-default GitHub write calls |
 | `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, and full-ref upstreams |
 | `test/git_sync_recovery.bats`, `test/git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, absence leases, moved local tags, and rejection of multiple push URLs before and after review |

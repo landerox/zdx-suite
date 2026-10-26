@@ -44,6 +44,11 @@ verification, and remaining limitations.
   `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`, and `GIT_CONFIG_PARAMETERS`. A
   `ws-clone` interrupted with Ctrl-C at a terminal now returns 130 instead
   of 0.
+- Git: `git-unstage` and `git-amend` refuse a plan when HEAD, the index, or
+  the working tree changes while the picker or action dialog is open, and plan
+  the whole repository when run from a subdirectory with `diff.relative`;
+  before, an unstage could drop the only copy of a staged version without the
+  confirmation, and an amend could commit files its plan never listed.
 
 ## [0.1.0] — 2026-10-22
 
