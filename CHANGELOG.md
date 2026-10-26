@@ -19,6 +19,9 @@ verification, and remaining limitations.
   what `clean-system` deletes or make a dry run download a Go toolchain, and a
   cache that is or contains the ZDX suite or the current repository, bare ones
   included, is refused.
+- Files: 7z creation no longer treats a literal `*` or `?` in a reviewed name
+  as a wildcard, so it cannot add unplanned files to the archive; it requires a
+  7-Zip that accepts `-spd` and `-sae`.
 
 ### Fixed
 
@@ -54,6 +57,9 @@ verification, and remaining limitations.
   `TAR_OPTIONS=--remove-files` can no longer delete the inputs; when the inputs
   change during creation, the unpublished archive is kept and reported as a
   recovery path instead of deleted.
+- Files: 7z and zip outputs keep exactly the reviewed name and `--format`
+  alone selects the format; an output name without an extension no longer
+  fails after confirmation.
 
 ## [0.1.0] — 2026-10-22
 

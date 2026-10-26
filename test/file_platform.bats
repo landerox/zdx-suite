@@ -118,6 +118,107 @@ SH
   chmod +x "$TEST_MOCK_BIN/find"
 }
 
+# mock_7z NAME: a 7-Zip installed as NAME (7z, 7zz, or 7za) that appends its
+# name and arguments to FILE_7Z_LOG and models the documented 7-Zip rules
+# that matter here: without -spd, a * or ? in a name is a wildcard; without
+# -t, the archive name's extension selects the type, and 7z otherwise; -sas,
+# the default, adds the type's extension to a name without one, and -sae
+# keeps the exact name. Like 7-Zip, it parses every switch before the
+# command, so FILE_7Z_LEGACY=yes models an older 7-Zip, such as p7zip 9.20,
+# that refuses -spd and -sa as unknown switches. The archive holds a TYPE=
+# line and one MEMBER= line per archived name.
+mock_7z() {
+  export FILE_7Z_LOG="$TEST_TEMP_DIR/7z-log"
+  cat > "$TEST_MOCK_BIN/$1" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "${0##*/}" "$*" >> "$FILE_7Z_LOG"
+command_name="${1:-}"
+shift
+type="" wildcards=yes name_mode=s
+while (( $# > 0 )) && [[ "$1" == -* ]]; do
+  if [[ "$1" == -- ]]; then
+    shift
+    break
+  fi
+  case "$1" in
+    -spd|-sa[sea])
+      if [[ "${FILE_7Z_LEGACY:-}" == yes ]]; then
+        printf '\nCommand Line Error:\nUnknown switch:\n%s\n' "$1" >&2
+        exit 7
+      fi
+      if [[ "$1" == -spd ]]; then wildcards=no; else name_mode="${1#-sa}"; fi
+      ;;
+    -t?*) type="${1#-t}" ;;
+  esac
+  shift
+done
+case "$command_name" in
+  i)
+    # FILE_7Z_PROBE_STATUS ends the info command with that status instead.
+    [[ -n "${FILE_7Z_PROBE_STATUS:-}" ]] && exit "$FILE_7Z_PROBE_STATUS"
+    printf '7-Zip (mock)\n\nFormats:\n'
+    exit 0
+    ;;
+  a) ;;
+  *) exit 7 ;;
+esac
+archive="${1:-}"
+(( $# > 0 )) && shift
+[[ -n "$archive" && $# -gt 0 ]] || exit 7
+base="${archive##*/}"
+if [[ -z "$type" ]]; then
+  if [[ "$base" == *.* ]]; then type="${base##*.}"; else type=7z; fi
+fi
+case "$name_mode" in
+  a) archive+=".$type" ;;
+  s) [[ "$base" == *.* ]] || archive+=".$type" ;;
+esac
+members=()
+for operand in "$@"; do
+  if [[ "$wildcards" == yes && "$operand" == *[\*\?]* ]]; then
+    for match in $operand; do members+=("$match"); done
+  else
+    members+=("$operand")
+  fi
+done
+{
+  printf 'TYPE=%s\n' "$type"
+  printf 'MEMBER=%s\n' "${members[@]}"
+} > "$archive"
+SH
+  chmod +x "$TEST_MOCK_BIN/$1"
+}
+
+# mock_zip: an Info-ZIP zip 3.0 that appends its arguments to FILE_ZIP_LOG and
+# models zip(1) and its Unix name processing: .zip is appended to an archive
+# name whose last component has no dot, and an existing name is added as it
+# is, recursing into a directory. Only a name that does not exist would be
+# matched as a pattern, against the archive being updated, which a new
+# archive does not have. The archive holds one MEMBER= line per archived name.
+mock_zip() {
+  export FILE_ZIP_LOG="$TEST_TEMP_DIR/zip-log"
+  cat > "$TEST_MOCK_BIN/zip" <<'SH'
+#!/usr/bin/env bash
+printf 'zip %s\n' "$*" >> "$FILE_ZIP_LOG"
+while (( $# > 0 )) && [[ "$1" == -* && "$1" != -- ]]; do shift; done
+archive="${1:-}"
+(( $# > 0 )) && shift
+[[ "${1:-}" == -- ]] && shift
+[[ -n "$archive" && $# -gt 0 ]] || exit 16
+[[ "${archive##*/}" == *.* ]] || archive+=".zip"
+members=""
+for operand in "$@"; do
+  if [[ ! -e "$operand" ]]; then
+    printf '\tzip warning: name not matched: %s\n' "$operand" >&2
+    exit 12
+  fi
+  members+="$(find "$operand" -print | LC_ALL=C sort)"$'\n'
+done
+printf '%s' "$members" | sed 's/^/MEMBER=/' > "$archive"
+SH
+  chmod +x "$TEST_MOCK_BIN/zip"
+}
+
 @test "file platform: macOS deletion compares devices and reads no mount table" {
   mock_kernel Darwin
   printf '%s\n' first > "$WORK/one.txt"
@@ -386,14 +487,7 @@ SH
 }
 
 @test "file platform: 7z archives use 7zz when 7z is absent" {
-  export FILE_7Z_LOG="$TEST_TEMP_DIR/7z-log"
-  cat > "$TEST_MOCK_BIN/7zz" <<'SH'
-#!/usr/bin/env bash
-printf '7zz %s\n' "$*" >> "$FILE_7Z_LOG"
-[[ "$1" == a && "$2" == -- ]] || exit 7
-printf 'archive\n' > "$3"
-SH
-  chmod +x "$TEST_MOCK_BIN/7zz"
+  mock_7z 7zz
   printf '%s\n' data > "$WORK/one"
 
   run run_zsh '
@@ -408,7 +502,178 @@ SH
 
   [ "$status" -eq 0 ]
   [ -f "$WORK/one.7z" ]
-  grep -q '^7zz a -- .*/one.7z ./one$' "$FILE_7Z_LOG"
+  grep -q -x -F '7zz i -spd -sae' "$FILE_7Z_LOG"
+  grep -q '^7zz a -spd -t7z -sae -- .*/one.7z ./one$' "$FILE_7Z_LOG"
+}
+
+@test "file platform: 7-Zip archives a literal wildcard name as exactly that file" {
+  mock_7z 7z
+  printf 'star\n' > "$WORK/a*"
+  printf 'other\n' > "$WORK/ab"
+  printf 'other\n' > "$WORK/ac"
+
+  run run_zsh 'cd "$WORK" && file-compress --format 7z --output out.7z --yes -- "a*"'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Inputs: 1"* ]]
+  # Without -spd, 7-Zip would match a* as a wildcard and add ab and ac.
+  [ "$(cat "$WORK/out.7z")" = "$(printf '%s\n' TYPE=7z 'MEMBER=./a*')" ]
+  grep -q '^7z a -spd -t7z -sae -- .*/out[.]7z [.]/a[*]$' "$FILE_7Z_LOG"
+}
+
+@test "file platform: zip archives a literal wildcard name without its own wildcard processing" {
+  mock_zip
+  printf 'star\n' > "$WORK/a*"
+  printf 'other\n' > "$WORK/ab"
+  printf 'other\n' > "$WORK/ac"
+
+  run run_zsh 'cd "$WORK" && file-compress --format zip --output out.zip --yes -- "a*"'
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$WORK/out.zip")" = 'MEMBER=./a*' ]
+  # -nw keeps zip from treating any name as a pattern; the archive is staged
+  # under its fixed private name.
+  grep -q '^zip -q -r -nw .*/[.]zdx-file-archive[.][^/]*/archive[.]zip -- [.]/a[*]$' "$FILE_ZIP_LOG"
+}
+
+@test "file platform: 7z and zip outputs are published under the reviewed name in the requested format" {
+  mock_7z 7z
+  mock_zip
+  printf '%s\n' data > "$WORK/one"
+  local request
+  for request in 7z:backup.zip 7z:backup zip:bundle; do
+    export FILE_TEST_FORMAT="${request%%:*}" FILE_TEST_OUTPUT="${request#*:}"
+    run run_zsh '
+      cd "$WORK" || exit 90
+      file-compress --format "$FILE_TEST_FORMAT" --output "$FILE_TEST_OUTPUT" \
+        --yes -- one
+    '
+    [ "$status" -eq 0 ]
+    printf '%s\n' "${lines[@]}" \
+      | grep -q -x -F -- "➜ Output: $WORK/$FILE_TEST_OUTPUT"
+    [ -f "$WORK/$FILE_TEST_OUTPUT" ]
+  done
+
+  # --format selects the type, whatever the output name's extension.
+  [ "$(head -n 1 "$WORK/backup.zip")" = TYPE=7z ]
+  [ "$(head -n 1 "$WORK/backup")" = TYPE=7z ]
+  [ "$(cat "$WORK/bundle")" = 'MEMBER=./one' ]
+  [ ! -e "$WORK/backup.7z" ]
+  [ ! -e "$WORK/bundle.zip" ]
+  [ -z "$(find "$WORK" -name '.zdx-file-archive.*' -print)" ]
+}
+
+@test "file platform: a 7-Zip without -spd and -sae is refused before the plan" {
+  mock_7z 7z
+  export FILE_7Z_LEGACY=yes
+  printf '%s\n' data > "$WORK/one"
+
+  run run_zsh 'cd "$WORK" && file-compress --format 7z --output one.7z --yes -- one'
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Creating 7z archives requires 7-Zip with -spd and -sae."* ]]
+  [[ "$output" != *"Archive Creation Plan"* ]]
+  [ ! -e "$WORK/one.7z" ]
+  [ -z "$(find "$WORK" -name '.zdx-file-archive.*' -print)" ]
+  # Only the bounded probe ran; no archive command reached 7-Zip.
+  [ "$(cat "$FILE_7Z_LOG")" = '7z i -spd -sae' ]
+
+  # The format picker shows the same requirement in the menu form.
+  run run_zsh '
+    file-menu --help >/dev/null 2>&1
+    _file_archive_format_missing 7z
+    print -r -- "missing=$REPLY"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = 'missing=7-Zip with -spd and -sae' ]
+}
+
+@test "file platform: zip and 7z publish an output whose name is the longest a file can have" {
+  mock_7z 7z
+  mock_zip
+  # 255 bytes, the usual name limit, with a dot: zip keeps the name as given,
+  # so its staging name must not grow.
+  local long_name format
+  printf -v long_name '%*s' 251 ''
+  long_name="${long_name// /a}.bin"
+  [ "${#long_name}" -eq 255 ]
+  for format in zip 7z; do
+    mkdir "$WORK/$format"
+    printf '%s\n' data > "$WORK/$format/one"
+    export FILE_TEST_FORMAT="$format" FILE_TEST_OUTPUT="$long_name"
+    run run_zsh '
+      cd "$WORK/$FILE_TEST_FORMAT" || exit 90
+      file-compress --format "$FILE_TEST_FORMAT" --output "$FILE_TEST_OUTPUT" \
+        --yes -- one
+    '
+    [ "$status" -eq 0 ]
+    [ -f "$WORK/$format/$long_name" ]
+    [ -z "$(find "$WORK/$format" -name '.zdx-file-archive.*' -print)" ]
+  done
+}
+
+@test "file platform: without the core or a timeout tool, 7z creation names the missing timeout service" {
+  mock_7z 7z
+
+  run zsh -f -c '
+    source "$1/functions/file-common.zsh" || exit 90
+    source "$1/functions/file/file-archive.zsh" || exit 90
+    (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
+    # Neither timeout nor gtimeout resolves, so no probe can be bounded.
+    whence() {
+      [[ "$1" == -p && ( "${@[-1]}" == timeout || "${@[-1]}" == gtimeout ) ]] \
+        && return 1
+      builtin whence "$@"
+    }
+    _file_archive_format_missing 7z
+    print -r -- "missing=$REPLY"
+    _file_archive_require_format 7z
+  ' _ "$TEST_SUITE_ROOT"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing=timeout or gtimeout"* ]]
+  [[ "$output" == *"Creating 7z archives requires timeout or gtimeout."* ]]
+  [[ "$output" != *"-spd"* ]]
+  # 7-Zip itself never ran.
+  [ ! -s "$FILE_7Z_LOG" ]
+}
+
+@test "file platform: an interrupted 7-Zip probe stops the direct command with its status" {
+  mock_7z 7z
+  printf '%s\n' data > "$WORK/one"
+  local probe_status
+  for probe_status in 130 143; do
+    export FILE_7Z_PROBE_STATUS="$probe_status"
+    : > "$FILE_7Z_LOG"
+    run run_zsh 'cd "$WORK" && file-compress --format 7z --output one.7z --yes -- one'
+    # No missing dependency is reported, and no plan or archive follows.
+    [ "$status" -eq "$probe_status" ]
+    [[ "$output" != *"requires"* ]]
+    [[ "$output" != *"Archive Creation Plan"* ]]
+    [ ! -e "$WORK/one.7z" ]
+    [ "$(cat "$FILE_7Z_LOG")" = '7z i -spd -sae' ]
+  done
+  [ -z "$(find "$WORK" -name '.zdx-file-archive.*' -print)" ]
+}
+
+@test "file platform: an interrupted 7-Zip probe stops the interactive command before the format picker" {
+  mock_7z 7z
+  printf '%s\n' data > "$WORK/one"
+  export FILE_PICKER_LOG="$TEST_TEMP_DIR/picker-rows"
+  local probe_status
+  for probe_status in 130 143; do
+    export FILE_7Z_PROBE_STATUS="$probe_status"
+    rm -f "$FILE_PICKER_LOG"
+    run run_zsh '
+      file-menu --help >/dev/null 2>&1
+      _file_select_paths() { reply=(one); }
+      _file_choose_fixed() { print -rl -- "$@" > "$FILE_PICKER_LOG"; return 130; }
+      cd "$WORK" && file-compress
+    '
+    [ "$status" -eq "$probe_status" ]
+    [ ! -e "$FILE_PICKER_LOG" ]
+    [ ! -e "$WORK/one.7z" ]
+  done
 }
 
 @test "file platform: content digests hash stdin, so names with a backslash work" {

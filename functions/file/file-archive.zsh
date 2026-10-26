@@ -65,10 +65,66 @@ _file_archive_normalize_format() {
   esac
 }
 
+# REPLY is the 7-Zip that creates 7z archives: the one _file_7z_command finds,
+# which must accept -spd, so that a literal * or ? in a reviewed name is never
+# a wildcard that selects other files, and -sae, so that it writes exactly the
+# staged name, as p7zip 16.02 and 7zz do. 7-Zip parses every switch before it
+# runs a command and refuses an unknown one, so the bounded probe runs its
+# info command with both; it reads and writes no file. On failure, reply
+# names the missing requirement in the menu's "missing:" wording: without the
+# core, the probe also needs timeout or gtimeout, which is then named. Status
+# 130 or 143 means the probe was interrupted, and every caller stops with it.
+_file_7z_create_command() {
+  REPLY=""
+  reply=()
+  _file_7z_command || {
+    reply=("7z or 7zz or 7za")
+    return 1
+  }
+  local seven_zip="$REPLY"
+  REPLY=""
+  _file_run_archive_tool --timeout 10 "$seven_zip" i -spd -sae \
+    </dev/null >/dev/null 2>&1
+  local -i probe_rc=$?
+  if (( probe_rc == 0 )); then
+    REPLY="$seven_zip"
+    return 0
+  fi
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  reply=("7-Zip with -spd and -sae")
+  if (( ! ${+functions[_zdx_run_with_timeout]} )) \
+    && ! whence -p timeout &>/dev/null && ! whence -p gtimeout &>/dev/null; then
+    reply=("timeout or gtimeout")
+  fi
+  return 1
+}
+
+# REPLY is the 7-Zip for <purpose>. Otherwise the error names the missing
+# requirement and the next step, and the status is 1; an interrupted probe
+# returns its 130 or 143 without a message.
+# Usage: _file_require_7z_create <purpose>
+_file_require_7z_create() {
+  local purpose="${1:-This operation}"
+  local -a reply=()
+  _file_7z_create_command
+  local -i create_rc=$?
+  (( create_rc == 0 )) && return 0
+  (( create_rc == 130 || create_rc == 143 )) && return $create_rc
+  _file_error "$purpose requires ${(j:, :)reply}."
+  if [[ "${reply[1]}" == "timeout or gtimeout" ]]; then
+    _file_dim "Bounded File commands need timeout or gtimeout when the ZDX core is not loaded."
+  else
+    _file_dim "Install a 7-Zip that accepts -spd and -sae, for example p7zip 16.02 or 7zz; on macOS: brew install sevenzip."
+  fi
+  return 1
+}
+
 # REPLY names what a normalized compression format lacks on this host, in the
 # menu's "missing:" wording, or is empty when the format can be created.
+# Status 130 or 143 means an interrupted probe; REPLY is then empty.
 _file_archive_format_missing() {
   local format="${1-}" missing=""
+  local -i probe_rc=0
   local -a reply=()
   case "$format" in
     tar.gz|tar.xz|tar.bz2)
@@ -81,7 +137,13 @@ _file_archive_format_missing() {
       whence -p zip &>/dev/null || missing="zip"
       ;;
     7z)
-      _file_7z_command || missing="7z or 7zz or 7za"
+      _file_7z_create_command
+      probe_rc=$?
+      if (( probe_rc == 130 || probe_rc == 143 )); then
+        REPLY=""
+        return $probe_rc
+      fi
+      (( probe_rc == 0 )) || missing="${(j:, :)reply}"
       ;;
   esac
   REPLY="$missing"
@@ -93,6 +155,10 @@ _file_archive_require_format() {
   local format="${1-}"
   if [[ "$format" == tar.zst ]]; then
     _file_require_tar_zstd "Creating tar.zst archives"
+    return
+  fi
+  if [[ "$format" == 7z ]]; then
+    _file_require_7z_create "Creating 7z archives"
     return
   fi
   _file_archive_format_missing "$format"
@@ -254,8 +320,9 @@ _file_compress_execute() {
 
   _file_archive_normalize_format "$format" || return $?
   format="$REPLY"
-  # The backend is checked before planning, so a dry run reports it too.
-  _file_archive_require_format "$format" || return 1
+  # The backend is checked before planning, so a dry run reports it too; an
+  # interrupted probe keeps its 130 or 143.
+  _file_archive_require_format "$format" || return $?
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
 
@@ -348,14 +415,18 @@ _file_compress_execute() {
         ;;
       zip)
         _file_require_cmd zip "ZIP creation" || return 1
-        archive_command=(zip -q -r "$staged_file" --)
+        # zip adds .zip to a name without an extension, so the archive is
+        # staged under a fixed private name and published under the
+        # reviewed one; -nw turns off zip's own wildcard processing.
+        staged_file="${stage_dir}/archive.zip"
+        archive_command=(zip -q -r -nw "$staged_file" --)
         ;;
       7z)
-        _file_7z_command || {
-          _file_error "7z, 7zz, or 7za is required for 7z creation."
-          return 1
-        }
-        archive_command=("$REPLY" a -- "$staged_file")
+        # -spd keeps a literal * or ? in a name from matching other files,
+        # -t7z keeps the output name from choosing the type, and -sae keeps
+        # 7-Zip from adding an extension to that name.
+        _file_require_7z_create "Creating 7z archives" || return $?
+        archive_command=("$REPLY" a -spd -t7z -sae -- "$staged_file")
         ;;
     esac
     # macOS tools add AppleDouble ._* copies of extended attributes unless
@@ -426,7 +497,8 @@ file-compress() {
     local -a format_rows=()
     local format_name=""
     for format_name in tar.gz zip tar.xz tar.bz2 tar.zst 7z; do
-      _file_archive_format_missing "$format_name"
+      # An interrupted probe stops the command before the picker opens.
+      _file_archive_format_missing "$format_name" || return $?
       if [[ -n "$REPLY" ]]; then
         format_rows+=("○ $format_name (missing: $REPLY)")
       else
@@ -440,7 +512,7 @@ file-compress() {
       return $format_rc
     fi
     local format="${${REPLY#○ }%% \(missing: *}"
-    _file_archive_require_format "$format" || return 1
+    _file_archive_require_format "$format" || return $?
     local default_output="${interactive_inputs[1]:t}.${format}"
     _file_read_line "Output archive" "$default_output" || return $?
     _file_compress_execute \

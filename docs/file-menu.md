@@ -382,7 +382,24 @@ capability probe shows it accepts them, as macOS bsdtar does. Every creation
 also exports `COPYFILE_DISABLE=1`, so archives made on macOS carry neither
 AppleDouble `._*` members nor extended-attribute headers. 7z archives use the
 first of `7z`, `7zz` (7-Zip 21 and newer, as Homebrew's `sevenzip` installs
-it), and `7za`.
+it), and `7za`. That 7-Zip must accept `-spd` and `-sae` (for example
+p7zip 16.02 or `7zz`): a bounded `7z i -spd -sae` probe, which reads and
+writes no file, confirms both before planning, and a 7-Zip that refuses them
+is refused with `Creating 7z archives requires 7-Zip with -spd and -sae.`, as
+the format picker's `○ 7z (missing: 7-Zip with -spd and -sae)` row shows.
+When the suite runs without the core and neither `timeout` nor `gtimeout`
+can bound that probe, the requirement named is `timeout or gtimeout`
+instead. A probe interrupted with status `130` or `143` reports no missing
+requirement: `file-compress` stops with that status, before the plan or the
+format picker. Creation passes `-spd`, so a literal `*` or `?` in a reviewed name
+never matches other files, `-t7z`, so the output name never selects the
+type, and `-sae`, so 7-Zip adds no extension. Info-ZIP zip runs with `-nw`,
+which turns off its own wildcard processing, and writes a fixed private
+staging name, `archive.zip`, because zip adds `.zip` to a name without an
+extension. Every format is therefore published under exactly the reviewed
+output name, up to the 255-byte name limit, and `--format` alone selects the
+format: `--format 7z --output backup.zip` creates a 7z archive named
+`backup.zip`.
 
 Archive tools run without the default-option variables they read from the
 environment, so only the reviewed command line decides what they do: an
@@ -510,7 +527,7 @@ mismatch, and the data stays in the trash.
 | TAR creation | GNU tar | GNU tar | `gtar`, or bsdtar without metadata |
 | TAR extraction | GNU tar | GNU tar | `gtar` only (Homebrew `gnu-tar`) |
 | zstd TAR | GNU tar 1.31+ and `zstd` | as Linux | `gtar` and Homebrew `zstd` |
-| 7z creation | `7z`, `7zz`, or `7za` | as Linux | `7zz` from Homebrew `sevenzip` |
+| 7z creation | `7z`, `7zz`, or `7za` with `-spd` and `-sae` | as Linux | `7zz` from Homebrew `sevenzip` |
 
 On WSL, the Windows drives below `/mnt` (DrvFs, or 9p) report every file as
 mode 777 unless WSL mounts them with metadata, so the ownership and permission
@@ -577,7 +594,12 @@ and 64 GiB bounds through a GNU tar listing fixture, and refuse invalid values
 before the archive is read. Platform tests cover one mount snapshot per
 pass, escaped and bind mount points, device changes, unsupported kernels, the
 `mv` adapter, GNU tar as `gtar` behind a bsdtar `tar`, metadata-free bsdtar
-creation, `7zz`, backslash names and FIFOs in digests, case-colliding and
+creation, `7zz`, 7-Zip and zip creation of a literal `a*` input next to `ab`
+and `ac` that archives only `a*`, 7z and zip outputs published under the
+reviewed name whatever their extension with `--format` choosing the type,
+255-byte output names, the refusal of a 7-Zip without `-spd` and `-sae`
+before planning, the `timeout or gtimeout` reason without the core,
+backslash names and FIFOs in digests, case-colliding and
 uppercase archives, the WSL hint and detection, the junk walker, the menu's
 unavailable form, the format picker's unavailable rows, a format without its
 backend refused before planning, zstd TAR archives through `gtar` behind a
