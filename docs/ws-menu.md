@@ -131,6 +131,25 @@ The read-only commands accept a root reached through symbolic links, such as
 `~/workspaces` linked to another disk. `ws-clone` applies stricter ownership
 rules before it writes; see [Destination checks](#destination-checks).
 
+## Repository variables
+
+Git exports repository-local variables such as `GIT_DIR` to its hooks and to
+`git rebase --exec`, and `vcsh enter` and `yadm enter` export them in their
+shells. Inherited, they make Git ignore `-C` and the working directory and use
+the repository, work tree, index, or configuration they name. Workspace
+therefore runs every Git command that uses a repository or Git configuration
+without them: the `ws-status` probes, `git remote` listing, and fetches, the
+`ws-jump` preview, the SSH alias configuration probes, the clone, and the
+delegated identity command.
+
+The removed names are every name that `git rev-parse --local-env-vars` prints
+from Git 2.31 on, such as `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+`GIT_CONFIG`, `GIT_CONFIG_COUNT`, and `GIT_CONFIG_PARAMETERS`, plus
+`GIT_NAMESPACE`. They are removed only in the subshell or preview program that
+runs Git, so the calling shell keeps its own values. A variable that cannot be
+removed, such as a read-only `GIT_DIR`, makes that Git command fail instead of
+using another repository.
+
 ## `ws-jump`
 
 `ws-jump` changes the directory of the shell that runs it, as
@@ -156,9 +175,11 @@ uncommitted changes (`clean` for none), and the last commit's age and subject.
 Its program text is constant: fzf supplies only the integer row index `{n}`,
 and the program reads the matching path from an owner-only snapshot file in a
 private directory below the validated `TMPDIR`. No path, name, or selected
-text is ever part of the program. It runs only read-only Git commands
-(`symbolic-ref`, `rev-parse`, `--no-optional-locks status --porcelain`, and
-`log -1`), and removes control characters from the commit subject. The
+text is ever part of the program. It first clears the
+[repository variables](#repository-variables), then runs only read-only Git
+commands (`symbolic-ref`, `rev-parse`,
+`--no-optional-locks status --porcelain`, and `log -1`), and removes control
+characters from the commit subject. The
 preview has no timeout of its own; fzf replaces it when the cursor moves.
 
 After a selection, the target must still be a real, non-symlink directory at
@@ -180,7 +201,9 @@ git -C <repository> rev-list --walk-reflogs --count refs/stash
 ```
 
 `--no-optional-locks` keeps the status probe from rewriting the index, and
-`log.showSignature=false` keeps signature checks out of the timestamp. The
+`log.showSignature=false` keeps signature checks out of the timestamp. Without
+the [repository variables](#repository-variables), each row describes the
+repository it names even when the calling shell exports `GIT_DIR`. The
 text report prints the `Workspace Status` heading, the root and repository
 count as key-value lines, and one table:
 
@@ -215,8 +238,10 @@ computed, it:
 2. discloses the scope, for example
    `⚠ Fetching 6 repositories over the network with git fetch --prune (at most 4 at a time, 60s each).`;
 3. runs `git -C <repository> fetch --prune --quiet` with `GIT_TERMINAL_PROMPT=0`
-   and `GCM_INTERACTIVE=Never`, closed stdin, and discarded output, at most
-   `WS_FETCH_JOBS` at a time and each bounded to 60 seconds;
+   and `GCM_INTERACTIVE=Never`, without the
+   [repository variables](#repository-variables), with closed stdin and
+   discarded output, at most `WS_FETCH_JOBS` at a time and each bounded to
+   60 seconds;
 4. reports each failure or timeout and one summary, such as
    `⚠ Fetched 5 of 6 repositories; 1 failed.`
 
@@ -392,8 +417,8 @@ still be absent, and the destination must still not exist.
 2. A private staging directory `.ws-clone.XXXXXX` (mode `700`) is created in
    the identity directory, on the destination's file system.
 3. `git clone -- <url> <staging>/<name>` runs in the foreground, so Git can
-   ask for credentials, with repository variables such as `GIT_DIR`,
-   `GIT_WORK_TREE`, and `GIT_INDEX_FILE` removed. Its output goes to stderr.
+   ask for credentials, without the
+   [repository variables](#repository-variables). Its output goes to stderr.
    The clone has no timeout: a large repository may legitimately take long,
    and `Ctrl-C` stops it.
 4. On a failure or interruption, the staging directory is removed only while
@@ -412,16 +437,19 @@ content. Hooks and filters from your own Git configuration, such as an
 ### Identity delegation
 
 When `ZDX_GIT_IDENTITIES` has an entry named like the identity, `ws-clone`
-then runs, in a subshell inside the new repository:
+then runs, in a subshell inside the new repository and without the
+[repository variables](#repository-variables):
 
 ```zsh
 git-menu git-identity-switcher --switch <identity> local
 ```
 
-The Git suite validates the profile and writes the local configuration; that
-command has no prompt of its own, and the clone plan already named it. If it
-fails, or `git-menu` is not loaded, the clone is kept, the exact retry command
-is printed, and the status is `1`. The caller's directory never changes.
+An inherited `GIT_DIR` therefore cannot redirect the profile to another
+repository. The Git suite validates the profile and writes the local
+configuration; that command has no prompt of its own, and the clone plan
+already named it. If it fails, or `git-menu` is not loaded, the clone is kept,
+the exact retry command is printed, and the status is `1`. The caller's
+directory never changes.
 
 On success `ws-clone` prints the destination's absolute path on stdout, so
 `cd "$(ws-clone URL --yes)"` works.
@@ -471,6 +499,12 @@ configuration, and BSD `mv` on a Mac remain manual acceptance.
   configuration and runs as Git would run it.
 - **Secrets:** URLs with credentials are refused, remote URLs never appear in
   JSON, and fetch output is discarded.
+- **Inherited Git state:** every Git command that uses a repository or Git
+  configuration runs without the
+  [repository variables](#repository-variables), so a shell that exports
+  `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_PARAMETERS` cannot make
+  Workspace read, fetch, or configure a repository other than the one it
+  names.
 
 See [`security-assessment.md`](security-assessment.md) for the threat entries.
 
@@ -478,11 +512,11 @@ See [`security-assessment.md`](security-assessment.md) for the threat entries.
 
 | File | Covered boundary |
 | --- | --- |
-| `test/ws.bats` | Standalone and double sourcing, side-effect-free loading, loader failure, help streams, grammar statuses before probes, literal dispatch, menu context, cancellation, current-shell dispatch, forged and failed selections, missing-Git marks, the `zdx ws` route and reserved name, the catalog row, the doctor `fd` row, and lazy stubs |
+| `test/ws.bats` | Standalone and double sourcing, side-effect-free loading, loader failure, help streams, grammar statuses before probes, literal dispatch, menu context, cancellation, current-shell dispatch, forged and failed selections, missing-Git marks, the repository-variable list against the installed Git's `--local-env-vars`, the `zdx ws` route and reserved name, the catalog row, the doctor `fd` row, and lazy stubs |
 | `test/ws_contract.bats` | Fixture, module, menu, dispatcher, help, completion, compinit registration, lazy-stub, and documentation parity, and the absence of an evaluator |
-| `test/ws_jump.bats` | `fd` and `find` parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, cancellation, forged and stale selections, hostile names, the index-only preview, and routing through `ws-menu` and `zdx` |
-| `test/ws_status.bats` | Clean, dirty, diverged, detached, stashed, and unborn repositories in text and JSON, attention order, stdout reserved for one JSON document, bounded and disclosed `--fetch` with a mocked fetch, failures and timeouts, unreadable repositories, an empty root, and a missing `jq` |
-| `test/ws_clone.bats` | URL refusals, the exact dry-run plan, new workspaces, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, delegated identity application with exact arguments and real configuration, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, and unsafe roots and directories |
+| `test/ws_jump.bats` | `fd` and `find` parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, cancellation, forged and stale selections, hostile names, the index-only preview, a preview unchanged by an inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_PARAMETERS`, and routing through `ws-menu` and `zdx` |
+| `test/ws_status.bats` | Clean, dirty, diverged, detached, stashed, and unborn repositories in text and JSON, attention order, stdout reserved for one JSON document, bounded and disclosed `--fetch` with a mocked fetch, failures and timeouts, probes, remote listings, and fetches unchanged by inherited repository variables, a read-only `GIT_DIR` that fails closed, unreadable repositories, an empty root, and a missing `jq` |
+| `test/ws_clone.bats` | URL refusals, the exact dry-run plan, new workspaces, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, delegated identity application with exact arguments and real configuration, an inherited `GIT_DIR` that never redirects the profile, an inherited `GIT_CONFIG` that never hides the global `core.sshCommand` from alias resolution, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, and unsafe roots and directories |
 
 `git clone` is mocked: the URL rules refuse the local transports a test could
 otherwise use.

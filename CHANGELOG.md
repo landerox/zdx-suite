@@ -36,6 +36,14 @@ verification, and remaining limitations.
   confirmations and text prompts work, the line you were editing comes back at
   the next prompt, and the prompt refreshes; before, every confirmation and text
   prompt reached through `Ctrl-G` failed for lack of a terminal.
+- Workspace: `ws-status`, its `--fetch`, the `ws-jump` preview, and
+  `ws-clone` ignore inherited repository variables such as `GIT_DIR`,
+  `GIT_WORK_TREE`, and `GIT_CONFIG_PARAMETERS`, so `ws-clone` no longer writes
+  the identity profile into the repository an exported `GIT_DIR` names. The
+  clone and the fetches also stop inheriting `GIT_CONFIG`,
+  `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`, and `GIT_CONFIG_PARAMETERS`. A
+  `ws-clone` interrupted with Ctrl-C at a terminal now returns 130 instead
+  of 0.
 
 ## [0.1.0] — 2026-10-22
 

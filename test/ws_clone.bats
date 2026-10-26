@@ -48,6 +48,19 @@ if [[ "${1:-}" == clone ]]; then
       kill -INT "$PPID"
       exit 130
       ;;
+    terminal-interrupt)
+      # Ctrl-C at a terminal: the terminal driver sends SIGINT to its
+      # foreground process group, which includes this clone.
+      mkdir -p "$target/.git/objects" && printf 'partial\n' > "$target/partial"
+      ps_program=/bin/ps
+      [[ -x "$ps_program" ]] || ps_program=/usr/bin/ps
+      tpgid=$("$ps_program" -o tpgid= -p "$$" | tr -d ' ')
+      [[ "$tpgid" =~ ^[1-9][0-9]*$ ]] || exit 99
+      printf 'interrupt tpgid=%s\n' "$tpgid" >> "$MOCK_GIT_LOG"
+      kill -INT -- "-$tpgid"
+      sleep 5
+      exit 0
+      ;;
   esac
   exit 0
 fi
@@ -199,6 +212,54 @@ clone_count() {
   [ -z "$(ls -A "$WS/github/personal")" ]
 }
 
+@test "ws clone: Ctrl-C at a terminal ends with 130, publishes nothing, and applies no profile" {
+  has_util_linux_script || skip "util-linux script is unavailable"
+  export MOCK_CLONE=terminal-interrupt
+  export WS_PTY_LOG="$TEST_TEMP_DIR/pty.log"
+  export WS_PTY_CODE='
+    source "$TEST_SUITE_ROOT/functions/ws-menu.zsh" || exit 98
+    typeset -gA ZDX_GIT_IDENTITIES=(personal "Name|Jane Doe;Email|jane@example.com")
+    git-menu() { print -r -- "git-menu:$*" >> "$MOCK_GIT_MENU_LOG"; }
+    print -r -- "shell pgid=$$" >> "$WS_PTY_LOG"
+    NO_COLOR=1 ws-clone https://github.com/acme/app.git --identity personal --yes
+    print -r -- "ws-clone status=$?" >> "$WS_PTY_LOG"
+  '
+  # script runs the command through $SHELL -c; exec makes Zsh the session
+  # leader. Without job control (-fc) the shell shares the foreground group,
+  # so the signal also reaches ws-clone and runs its INT trap; with job
+  # control (-fic) the clone runs in its own foreground group.
+  export SHELL=/bin/sh
+  local mode shell_group signaled_group violations=""
+  for mode in -fc -fic; do
+    : > "$WS_PTY_LOG"
+    : > "$MOCK_GIT_LOG"
+    : > "$MOCK_GIT_MENU_LOG"
+    export WS_PTY_MODE="$mode"
+    run script -qefc 'exec zsh $WS_PTY_MODE "$WS_PTY_CODE"' /dev/null
+    printf '%s: status=%s\n%s\n' "$mode" "$status" "${output//$'\r'/}" >&2
+    sed "s/^/$mode: /" "$MOCK_GIT_LOG" "$WS_PTY_LOG" >&2
+    find "$WS/github/personal" -mindepth 1 -maxdepth 1 \
+      | sed "s|^|$mode: left: |" >&2
+    grep -q '^clone ' "$MOCK_GIT_LOG" || violations+=" $mode:no-clone"
+    shell_group=$(sed -n 's/^shell pgid=//p' "$WS_PTY_LOG")
+    signaled_group=$(sed -n 's/^interrupt tpgid=//p' "$MOCK_GIT_LOG")
+    if [[ -z "$signaled_group" || -z "$shell_group" ]]; then
+      violations+=" $mode:no-signal"
+    elif [[ "$mode" == -fc && "$signaled_group" != "$shell_group" ]] \
+      || [[ "$mode" == -fic && "$signaled_group" == "$shell_group" ]]; then
+      violations+=" $mode:unexpected-group"
+    fi
+    grep -Fqx 'ws-clone status=130' "$WS_PTY_LOG" || violations+=" $mode:status"
+    [ ! -e "$WS/github/personal/app" ] || violations+=" $mode:published"
+    [ -z "$(find "$WS/github/personal" -mindepth 1 -maxdepth 1 ! -name app)" ] \
+      || violations+=" $mode:staging-left"
+    [ ! -s "$MOCK_GIT_MENU_LOG" ] || violations+=" $mode:profile-applied"
+    rm -rf -- "$WS/github/personal/app" "$WS/github/personal"/.ws-clone.*
+  done
+  printf 'violations:%s\n' "$violations" >&2
+  [ -z "$violations" ]
+}
+
 @test "ws clone: the SSH alias of the workspace replaces the host when it resolves" {
   install_alias_ssh
   run run_zsh 'NO_COLOR=1 ws-clone git@github.com:acme/app.git --identity personal --yes 2>"$HOME/stderr"'
@@ -273,6 +334,62 @@ clone_count() {
   '
   [ "$status" -eq 0 ]
   [ "$output" = "jane@example.com" ]
+}
+
+@test "ws clone: an inherited GIT_DIR never redirects the identity profile" {
+  # vcsh enter, yadm enter, a Git hook, and git rebase --exec export GIT_DIR.
+  # The profile belongs in the new clone, not in the repository it names.
+  local other="$TEST_TEMP_DIR/dotfiles"
+  "$REAL_GIT" init -q "$other"
+  "$REAL_GIT" -C "$other" config --local user.email owner@dotfiles.example
+  export WS_OTHER_GIT_DIR="$other/.git"
+  run run_zsh '
+    typeset -gA ZDX_GIT_IDENTITIES=(personal "Name|Jane Doe;Email|jane@example.com")
+    export GIT_DIR="$WS_OTHER_GIT_DIR"
+    ws-clone https://github.com/acme/app.git --identity personal --yes \
+      2>"$HOME/clone.stderr"
+  '
+  sed 's/^/stderr: /' "$HOME/clone.stderr" >&2
+  [ "$status" -eq 0 ]
+  [ "$output" = "$WS/github/personal/app" ]
+  grep -Fq 'GIT_DIR=unset' "$MOCK_GIT_LOG"
+  local clone_email="" other_email=""
+  clone_email=$("$REAL_GIT" -C "$WS/github/personal/app" config --local --get user.email || true)
+  other_email=$("$REAL_GIT" -C "$other" config --local --get user.email || true)
+  printf 'clone=%s other=%s\n' "$clone_email" "$other_email" >&2
+  [ "$clone_email" = jane@example.com ]
+  [ "$other_email" = owner@dotfiles.example ]
+  # The keyless profile's signing overrides never reached the other repository.
+  run "$REAL_GIT" -C "$other" config --local --get commit.gpgSign
+  [ "$status" -eq 1 ]
+}
+
+@test "ws clone: an inherited GIT_CONFIG never hides the SSH command Git would run" {
+  # Alias resolution reads the global core.sshCommand, as the clone does.
+  cat > "$TEST_MOCK_BIN/alias-ssh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -G ]]; then
+  shift
+  [[ "${1:-}" == -- ]] && shift
+  case "${1:-}" in
+    github-personal) printf 'user git\nhostname github.com\nport 22\n' ;;
+    *) printf 'user git\nhostname %s\nport 22\n' "${1:-}" ;;
+  esac
+  exit 0
+fi
+exit 97
+EOF
+  chmod +x "$TEST_MOCK_BIN/alias-ssh"
+  "$REAL_GIT" config --global core.sshCommand "$TEST_MOCK_BIN/alias-ssh"
+  printf '[user]\n\tname = Other\n' > "$TEST_TEMP_DIR/other.gitconfig"
+  export WS_OTHER_CONFIG="$TEST_TEMP_DIR/other.gitconfig"
+  run run_zsh '
+    export GIT_CONFIG="$WS_OTHER_CONFIG"
+    NO_COLOR=1 ws-clone git@github.com:acme/app.git --identity personal --dry-run
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"URL:               git@github-personal:acme/app.git"* ]]
+  [[ "$output" == *"SSH alias:         github-personal (HostName github.com)"* ]]
 }
 
 @test "ws clone: without a terminal, confirmation and identity choices fail closed" {

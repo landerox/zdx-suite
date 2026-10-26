@@ -8,8 +8,9 @@
 #
 # ws-jump changes the directory of the shell that runs it, as venv-activate
 # changes its environment, so it runs as a function in that shell. Its
-# picker preview is a constant program that receives only fzf's row index and
-# reads the matching path from a private snapshot file.
+# picker preview is a constant program that receives only fzf's row index,
+# reads the matching path from a private snapshot file, and clears the
+# repository-local Git variables before it runs Git.
 #
 
 if [[ -n "${_WS_JUMP_SOURCED:-}" ]]; then
@@ -79,7 +80,11 @@ _ws_jump_pick() {
 
   # The preview program is constant: fzf supplies only the row index {n},
   # and the snapshot path is a validated private file quoted for /bin/sh.
-  local preview="s=${(qq)snapshot_file}"$'\n'
+  # It runs in fzf's shell, so it first clears the repository-local Git
+  # variables itself, as _ws_git_command does, or an inherited GIT_DIR would
+  # make every row describe the repository it names.
+  local preview="unset ${(j: :)${(@qq)_WS_GIT_LOCAL_ENV_VARS}}"$'\n'
+  preview+="s=${(qq)snapshot_file}"$'\n'
   preview+='n={n}
 case "$n" in ""|*[!0-9]*) exit 0 ;; esac
 d=$(sed -n "$((n + 1))p" "$s" 2>/dev/null)

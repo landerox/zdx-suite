@@ -28,6 +28,28 @@ teardown() {
   cleanup_sandbox
 }
 
+# An fzf that renders every row's preview like fzf would while the snapshot
+# exists, into $PREVIEW_OUT, and keeps the program text in
+# $PREVIEW_OUT.program: {n} is the only placeholder.
+install_preview_fzf() {
+  export PREVIEW_OUT="$TEST_TEMP_DIR/preview.out"
+  cat > "$TEST_MOCK_BIN/fzf" <<'EOF'
+#!/usr/bin/env bash
+preview=""
+for argument in "$@"; do
+  case "$argument" in --preview=*) preview="${argument#--preview=}" ;; esac
+done
+mapfile -t rows
+printf '%s' "$preview" > "$PREVIEW_OUT.program"
+for index in "${!rows[@]}"; do
+  printf '== %s\n' "${rows[index]}" >> "$PREVIEW_OUT"
+  /bin/sh -c "${preview//\{n\}/$index}" >> "$PREVIEW_OUT" 2>&1
+done
+exit 130
+EOF
+  chmod +x "$TEST_MOCK_BIN/fzf"
+}
+
 # The sorted relative paths that discovery reports with a forced backend.
 collect_with() {
   local backend="$1"
@@ -217,24 +239,8 @@ EOF
   git -C "$repo" -c user.name=T -c user.email=t@example.invalid \
     commit -q --allow-empty -m "first subject"
   printf 'x\n' > "$repo/untracked"
-  export PREVIEW_OUT="$TEST_TEMP_DIR/preview.out"
-  # Render every row like fzf would while the snapshot exists: {n} is the
-  # only placeholder and the program text never contains a selected path.
-  cat > "$TEST_MOCK_BIN/fzf" <<'EOF'
-#!/usr/bin/env bash
-preview=""
-for argument in "$@"; do
-  case "$argument" in --preview=*) preview="${argument#--preview=}" ;; esac
-done
-mapfile -t rows
-printf '%s' "$preview" > "$PREVIEW_OUT.program"
-for index in "${!rows[@]}"; do
-  printf '== %s\n' "${rows[index]}" >> "$PREVIEW_OUT"
-  /bin/sh -c "${preview//\{n\}/$index}" >> "$PREVIEW_OUT" 2>&1
-done
-exit 130
-EOF
-  chmod +x "$TEST_MOCK_BIN/fzf"
+  # The program text never contains a selected path.
+  install_preview_fzf
   run run_zsh 'ws-jump'
   [ "$status" -eq 0 ]
   [ ! -e "${TMPDIR}pwned" ]
@@ -247,6 +253,65 @@ EOF
   grep -Eq 'Last commit: .*: first subject' "$TEST_TEMP_DIR/hostile.preview"
   local -a leftovers=("$TMPDIR"/zdx-ws-*)
   [ ! -e "${leftovers[0]}" ]
+}
+
+@test "ws jump: the preview describes each repository, not inherited repository variables" {
+  local repo="$WS/github/personal/real"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  printf 'tracked\n' > "$repo/tracked"
+  git -C "$repo" add tracked
+  git -C "$repo" -c user.name=T -c user.email=t@example.invalid \
+    commit -q -m "real subject"
+  printf 'new\n' > "$repo/new"
+  local outside="$TEST_TEMP_DIR/outside"
+  git init -q -b elsewhere "$outside"
+  git -C "$outside" -c user.name=T -c user.email=t@example.invalid \
+    commit -q --allow-empty -m "outside subject"
+  mkdir -p "$TEST_TEMP_DIR/foreign-tree"
+  printf 'one\n' > "$TEST_TEMP_DIR/foreign-tree/one"
+  printf 'two\n' > "$TEST_TEMP_DIR/foreign-tree/two"
+  install_preview_fzf
+  # The first pass, with nothing inherited, proves the expected preview.
+  local name value mismatches=""
+  for name in none GIT_DIR GIT_WORK_TREE GIT_CONFIG_PARAMETERS; do
+    case "$name" in
+      none) value="" ;;
+      GIT_DIR) value="$outside/.git" ;;
+      GIT_WORK_TREE) value="$TEST_TEMP_DIR/foreign-tree" ;;
+      GIT_CONFIG_PARAMETERS) value="'status.showUntrackedFiles=no'" ;;
+    esac
+    export WS_INHERITED_NAME="$name" WS_INHERITED_VALUE="$value"
+    rm -f "$PREVIEW_OUT"
+    run run_zsh '
+      if [[ "$WS_INHERITED_NAME" != none ]]; then
+        typeset -gx "$WS_INHERITED_NAME=$WS_INHERITED_VALUE" || exit 3
+      fi
+      ws-jump
+    '
+    [ "$status" -eq 0 ]
+    grep -A3 -F '== github/personal/real|' "$PREVIEW_OUT" | tail -n 3 \
+      > "$TEST_TEMP_DIR/real.preview"
+    printf '%s:\n' "$name" >&2
+    sed 's/^/  /' "$TEST_TEMP_DIR/real.preview" >&2
+    if [[ "$(sed -n 1p "$TEST_TEMP_DIR/real.preview")" != "Branch:      main" \
+      || "$(sed -n 2p "$TEST_TEMP_DIR/real.preview")" != "Changes:     1" \
+      || "$(sed -n 3p "$TEST_TEMP_DIR/real.preview")" != "Last commit: "*": real subject" ]]; then
+      mismatches+=" $name"
+    fi
+  done
+  printf 'mismatches:%s\n' "$mismatches" >&2
+  [ -z "$mismatches" ]
+
+  # The constant program clears every name of the suite's list.
+  run run_zsh 'print -rl -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"'
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -ge 15 ]
+  local clear_line=""
+  clear_line=$(grep -m 1 '^unset ' "$PREVIEW_OUT.program")
+  for name in "${lines[@]}"; do
+    [[ "$clear_line" == *" '$name'"* ]]
+  done
 }
 
 @test "ws jump: routed through ws-menu and zdx it still changes the shell" {

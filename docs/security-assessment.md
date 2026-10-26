@@ -439,7 +439,9 @@ snippet and executes unintended code.
   The `ws-jump` preview is a constant program: fzf supplies only the integer
   row index `{n}`, which selects a line of an owner-only snapshot file, so no
   directory name, however hostile, reaches program text; names with control
-  characters or `|` are skipped. `ws-clone` passes the validated URL to
+  characters or `|` are skipped. The preview first unsets the
+  repository-local Git variables, so an inherited `GIT_DIR` cannot make it
+  describe another repository. `ws-clone` passes the validated URL to
   `git clone` after `--`, and resolves workspace SSH aliases with the SSH
   program Git would run, as `-G -- ALIAS` with the alias as an argument and
   stdin closed; a `GIT_SSH_COMMAND` or global `core.sshCommand` runs through
@@ -1704,7 +1706,14 @@ unintended targets.
   the umask plus `022`. Picker results, the `ws-jump` path snapshot, and fetch
   statuses live in owner-only directories below a validated `TMPDIR` and are
   removed, after an identity check, on every exit path. Read-only discovery
-  never follows symbolic links.
+  never follows symbolic links. Every Workspace Git command that uses a
+  repository or Git configuration, including the delegated
+  `git-menu git-identity-switcher --switch NAME local`, runs without the
+  names `git rev-parse --local-env-vars` lists and `GIT_NAMESPACE`, so an
+  inherited `GIT_DIR` cannot redirect the identity write to another
+  repository, and a read-only one makes the step fail. `ws.bats`,
+  `ws_status.bats`, `ws_jump.bats`, and `ws_clone.bats` cover these paths,
+  and a drift test checks the list against the installed Git.
 
 **Residual requirements.** Plugin trees written by `zdx-plugins` are staged
 in owner-only directories inside the canonical root, published and rolled

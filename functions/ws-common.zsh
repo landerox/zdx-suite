@@ -255,7 +255,7 @@ _ws_run_with_timeout() {
 # macOS, Apple's /usr/bin/git is a Command Line Tools placeholder that opens
 # an installation dialog while no developer directory exists; it is reported
 # as missing and never run.
-_ws_git_command() {
+_ws_git_program() {
   emulate -L zsh
   REPLY=""
   local git_path="" version_output="" developer_dir=""
@@ -296,6 +296,52 @@ _ws_git_command() {
     return 1
   fi
   REPLY="$git_path"
+}
+
+# The repository-local Git variables: every name that
+# `git rev-parse --local-env-vars` prints from Git 2.31 on, including
+# GIT_INTERNAL_SUPER_PREFIX, which only releases before 2.40 print, and
+# GIT_NAMESPACE, which selects the refs that a local remote serves. Git
+# exports some of them to its hooks and to `git rebase --exec`, and vcsh and
+# yadm export them in their shells. Inherited, they make Git ignore -C and the
+# working directory and use the repository, work tree, index, or
+# configuration they name. The list is fixed so that the constant ws-jump
+# preview program clears the same names, and removing a name that a Git
+# release does not use changes nothing; test/ws.bats fails when the installed
+# Git reports a name missing here.
+typeset -ga _WS_GIT_LOCAL_ENV_VARS=(
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CONFIG GIT_CONFIG_COUNT
+  GIT_CONFIG_PARAMETERS GIT_DIR GIT_GRAFT_FILE GIT_IMPLICIT_WORK_TREE
+  GIT_INDEX_FILE GIT_INTERNAL_SUPER_PREFIX GIT_NAMESPACE GIT_NO_REPLACE_OBJECTS
+  GIT_OBJECT_DIRECTORY GIT_PREFIX GIT_REPLACE_REF_BASE GIT_SHALLOW_FILE
+  GIT_WORK_TREE
+)
+
+# Runs one Git command in a subshell without the repository-local Git
+# variables, so -C or the working directory alone selects the repository, and
+# the caller's environment never changes. A variable that cannot be removed,
+# such as a read-only GIT_DIR, aborts the subshell with status 1 before the
+# command runs. SECONDS from 1 to 600 bound an external program, such as the
+# resolved Git, through _ws_run_with_timeout, which returns 124 on timeout;
+# 0 runs the command in the foreground without a deadline, which also allows
+# a Git suite command such as git-menu, so an external program then needs the
+# `command` prefix. Status 2 means invalid arguments.
+# Usage: _ws_git_command <seconds> <command> [argument...]
+_ws_git_command() {
+  local git_deadline="${1-}"
+  shift 2>/dev/null
+  [[ "$git_deadline" == <0-600> && ${#git_deadline} -le 3 ]] && (( $# > 0 )) || {
+    _ws_error "Internal error: invalid workspace Git command."
+    return 2
+  }
+  (
+    unset -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"
+    if (( git_deadline == 0 )); then
+      "$@"
+    else
+      _ws_run_with_timeout "$git_deadline" "$@"
+    fi
+  )
 }
 
 # --- Filesystem trust helpers ----------------------------------------------

@@ -288,7 +288,7 @@ _ws_ssh_alias_hostname() {
   local output="" line="" resolved="" ssh_path=""
 
   if [[ -z "$ssh_command" ]]; then
-    ssh_command=$(_ws_run_with_timeout "$_WS_PROBE_TIMEOUT" "$git_path" \
+    ssh_command=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
       config --global --get core.sshCommand </dev/null 2>/dev/null) \
       || ssh_command=""
   fi
@@ -298,7 +298,7 @@ _ws_ssh_alias_hostname() {
   else
     ssh_program="${GIT_SSH:-ssh}"
   fi
-  ssh_variant=$(_ws_run_with_timeout "$_WS_PROBE_TIMEOUT" "$git_path" \
+  ssh_variant=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
     config --global --get ssh.variant </dev/null 2>/dev/null) || ssh_variant=""
   if [[ -z "$ssh_variant" || "$ssh_variant" == auto ]]; then
     ssh_variant="${${${ssh_program##*[/\\]}:l}%.exe}"
@@ -476,7 +476,7 @@ ws-clone() {
     name="$REPLY"
   fi
 
-  _ws_git_command || return 1
+  _ws_git_program || return 1
   local git_path="$REPLY"
 
   # The root must already exist: a mistyped WS_BASE_DIR never creates a tree.
@@ -752,12 +752,8 @@ ws-clone() {
     _ws_dim "\$ $REPLY"
     # Repository variables inherited from a hook or another tool would
     # redirect the clone; the clone gets a clean repository environment.
-    (
-      unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
-        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
-        GIT_PREFIX GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_SHALLOW_FILE
-      command "$git_path" clone -- "$clone_url" "$staging/$name"
-    ) >&2 || clone_rc=$?
+    _ws_git_command 0 command "$git_path" clone -- "$clone_url" \
+      "$staging/$name" >&2 || clone_rc=$?
     if (( clone_rc == 130 || clone_rc == 143 )); then
       _ws_error "git clone was interrupted; nothing was published."
       operation_rc=$clone_rc
@@ -820,9 +816,12 @@ ws-clone() {
       final_rc=1
     else
       # The Git suite owns identity configuration; it runs inside the new
-      # repository in a subshell, so this shell keeps its directory.
+      # repository in a subshell, so this shell keeps its directory, and
+      # without inherited repository variables such as GIT_DIR, which would
+      # make it configure the repository they name instead of the clone.
       ( builtin cd -q -- "$destination" \
-        && git-menu git-identity-switcher --switch "$identity" local ) \
+        && _ws_git_command 0 git-menu git-identity-switcher \
+          --switch "$identity" local ) \
         || identity_rc=$?
       if (( identity_rc != 0 )); then
         _ws_error "The identity profile was not applied (status $identity_rc); the clone is kept."

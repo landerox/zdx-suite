@@ -365,11 +365,11 @@ focused regression cases.
 
 | File | Covered boundary |
 | --- | --- |
-| `ws.bats` | Standalone, double, and side-effect-free sourcing, loader failure, help streams, grammar statuses before probes, literal dispatch, the menu context block, cancellation, current-shell dispatch, forged and failed selections, missing-Git marks, the `zdx ws` route and reserved name, the catalog row, the doctor `fd` row, and lazy stubs that change the calling shell |
+| `ws.bats` | Standalone, double, and side-effect-free sourcing, loader failure, help streams, grammar statuses before probes, literal dispatch, the menu context block, cancellation, current-shell dispatch, forged and failed selections, missing-Git marks, the `zdx ws` route and reserved name, the catalog row, the doctor `fd` row, lazy stubs that change the calling shell, and the repository-variable list checked against the installed Git's `--local-env-vars` |
 | `ws_contract.bats` | Frozen three-command fixture with module, function, menu, dispatcher, help, completion, compinit registration, lazy-stub, and documentation parity, and no evaluator |
-| `ws_jump.bats` | `fd` and `find` discovery parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, no match, cancellation, forged and stale selections, hostile names, the index-only preview rendered by a mocked fzf, and routing through `ws-menu` and `zdx` |
-| `ws_status.bats` | Real clean, dirty, diverged, detached, stashed, and unborn fixture repositories with a local bare remote, in text and JSON; attention order; stdout reserved for one compact JSON document on a single line; a mocked `git fetch` that records its bound, arguments, and prompt setting; failed and timed-out fetches; unreadable repositories; an empty root; and a missing `jq` |
-| `ws_clone.bats` | URL refusals before any clone, the exact dry-run plan, new workspace directories, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, identity delegation with exact arguments and a real profile, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, and unsafe roots and directories |
+| `ws_jump.bats` | `fd` and `find` discovery parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, no match, cancellation, forged and stale selections, hostile names, the index-only preview rendered by a mocked fzf, a preview unchanged by an inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_PARAMETERS`, and routing through `ws-menu` and `zdx` |
+| `ws_status.bats` | Real clean, dirty, diverged, detached, stashed, and unborn fixture repositories with a local bare remote, in text and JSON; attention order; stdout reserved for one compact JSON document on a single line; a mocked `git fetch` that records its bound, arguments, and prompt setting; failed and timed-out fetches; probes, remote listings, and fetches unchanged by inherited repository variables, and a read-only `GIT_DIR` that stops each fetch job before it fetches; unreadable repositories; an empty root; and a missing `jq` |
+| `ws_clone.bats` | URL refusals before any clone, the exact dry-run plan, new workspace directories, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, identity delegation with exact arguments and a real profile, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, an inherited `GIT_DIR` that never redirects the identity profile, an inherited `GIT_CONFIG` that never hides `core.sshCommand`, a terminal Ctrl-C that ends with 130 and publishes nothing, and unsafe roots and directories |
 
 `git clone` is mocked by a `git` wrapper that delegates every other command
 to the real Git: the harness has no test-only transport, and the URL rules
@@ -521,8 +521,9 @@ is the evidence the platform work needs. The current Linux-only tests are:
 | `sys_apt_keys.bats`: every APT signing-key renewal case | APT and its signing keyrings exist only on Debian-based Linux |
 | `sys_maintenance.bats`: the trusted unattended-upgrade version record and the dirty dpkg audit before takeover signaling | APT, dpkg, and unattended-upgrade exist only on Debian-based Linux |
 
-The two interactive PTY cases in `sys_maintenance.bats` skip unless
-`has_util_linux_script` succeeds, which also covers BSD `script` on macOS.
+The two interactive PTY cases in `sys_maintenance.bats` and the terminal
+Ctrl-C case in `ws_clone.bats` skip unless `has_util_linux_script` succeeds,
+which also covers BSD `script` on macOS.
 The planted-pip case in the same file runs a real interpreter from a sandbox
 virtual environment without pip and skips when the host has no `python3` or
 no `venv` module.
