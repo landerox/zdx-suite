@@ -1376,6 +1376,10 @@ MOCK
       || return 12
 
     # With a direct ref there, the push goes ahead and Git updates that ref.
+    # Drop the negative refspec first: Git releases differ on whether it
+    # stops that update.
+    command git config --fixed-value --unset-all remote.origin.fetch \
+      "^refs/heads/feature" || return 17
     command git update-ref --no-deref refs/remotes/cache/feature \
       "$REFSPEC_MAIN_OID" || return 13
     git-push --yes >"$HOME/direct.stdout" 2>"$HOME/direct.stderr"

@@ -535,9 +535,10 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   bounded to 30 seconds and never prompting) while planning and before each
   push, refuse a remote deletion when the remote does not answer with
   protocol v2, and stop the whole run with its status when that query is
-  interrupted. Because Git updates or deletes, through any alias and despite
-  negative refspecs, the local ref that the first matching fetch refspec maps
-  a pushed ref to, every pushing command (`git-push`, `git-pr-create`,
+  interrupted. Because Git updates or deletes, through any alias, the local
+  ref that the first matching fetch refspec maps a pushed ref to (and Git
+  releases differ on whether a negative refspec stops that), every pushing
+  command (`git-push`, `git-pr-create`,
   `git-tag-push`, `git-tag-create --push`, `clean-remote-merged`, and
   `git-tag-delete`) maps each pushed ref through every fetch refspec and
   refuses a symbolic or uninspectable result, or a destination outside
