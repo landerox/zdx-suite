@@ -860,6 +860,7 @@ _vpn_mtu_render_failure() {
 #   Status:    0 when measured; 1 when not applicable, unsupported, or
 #              unreachable; 2 on bad arguments; 130 or 143 when interrupted.
 vpn-mtu-probe() {
+  emulate -L zsh
   local target="" profile=""
   local -i json=0 target_given=0 profile_given=0
 

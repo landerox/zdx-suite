@@ -409,6 +409,7 @@ _vpn_restore_backup() {
 #   Effects:   opens the profile through sudoedit; the editor is unprivileged.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-config-edit() {
+  emulate -L zsh
   local -a positional=()
 
   while (( $# > 0 )); do
@@ -502,6 +503,7 @@ vpn-config-edit() {
 #              the previous profile as <name>.conf.pre-restore.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-config-restore() {
+  emulate -L zsh
   local -a positional=()
   local -i dry_run=0 auto_yes=0
 
@@ -713,6 +715,7 @@ vpn-config-restore() {
 #   stdout:    none. The listing is UI and goes to stderr.
 #   Effects:   read-only.
 vpn-config-dir() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-config-dir"

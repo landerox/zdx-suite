@@ -2488,6 +2488,7 @@ _vpn_dispatch_prepare() {
 }
 
 _vpn_dispatch() {
+  emulate -L zsh
   local command_name="${1:-}"
   shift 2>/dev/null || true
 

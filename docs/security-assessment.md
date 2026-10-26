@@ -1026,8 +1026,16 @@ never elevate downloaded or user-computed shell text.
   staging copy, validates the staged copy again, and atomically installs
   validated mode-`600` content without replacing an existing profile. Residual
   risk: the macOS `wg-quick` from Homebrew `wireguard-tools` is assumed to
-  parse like the Linux script, and the other VPN entry points still inherit the
-  caller's shell options.
+  parse like the Linux script.
+- Every VPN public command, the `vpn-menu` router, and the `_vpn_dispatch`
+  dispatcher start with `emulate -L zsh`, so once the suite is loaded, options
+  inherited from the calling shell, such as `KSH_ARRAYS`, `PIPE_FAIL`,
+  `NO_UNSET`, `SH_WORD_SPLIT`, or `emulate sh`, cannot redirect a target, skip
+  a validation, or change a reported result. `vpn_interface.bats` checks each
+  entry point after lazy and eager loading and compares safe paths, dry runs,
+  and a clean import across such callers. Residual risk: in a lazy shell, a
+  caller with `KSH_ARRAYS` or `emulate sh` still fails, closed, in the core's
+  lazy stub before VPN code runs.
 - The WSL DNS hooks the VPN suite writes are executed by root on every tunnel
   transition, and their resolver address comes from an imported profile's
   `DNS =` line. The value is validated as a strict comma-separated list of at

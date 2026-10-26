@@ -252,6 +252,7 @@ _vpn_tunnel_down() {
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments;
 #              interrupted operations preserve 130 (INT) or 143 (TERM).
 vpn-on() {
+  emulate -L zsh
   local _vpn_opt_iface=""
   local -i parse_status=0
 
@@ -322,6 +323,7 @@ vpn-on() {
 #   Effects:   brings one tunnel down. With no argument and one active tunnel it
 #              acts on that one; with several it opens a picker.
 vpn-off() {
+  emulate -L zsh
   local _vpn_opt_iface=""
   local -i parse_status=0
 
@@ -388,6 +390,7 @@ vpn-off() {
 #              confirmation could be obtained without --yes; interruption
 #              preserves 130/143 and leaves remaining interfaces unattempted.
 vpn-off-all() {
+  emulate -L zsh
   local -i auto_yes=0 dry_run=0
 
   while (( $# > 0 )); do
@@ -548,6 +551,7 @@ vpn-off-all() {
 #   Arguments: --help only.
 #   Effects:   brings the recorded last-used profile down, if up, then up again.
 vpn-reconnect-last() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-reconnect-last"
@@ -599,6 +603,7 @@ vpn-reconnect-last() {
 #   Effects:   brings the configured default profile up, or reports that it is
 #              already active.
 vpn-default-connect() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-default-connect"
@@ -649,6 +654,7 @@ vpn-default-connect() {
 #   Arguments: [PROFILE] | --help
 #   Effects:   records one profile as the default in the owner-only cache.
 vpn-default-set() {
+  emulate -L zsh
   local _vpn_opt_iface=""
   local -i parse_status=0
 
@@ -690,6 +696,7 @@ vpn-default-set() {
 #   Arguments: --yes | --help
 #   Effects:   removes the saved default profile pointer after confirmation.
 vpn-default-clear() {
+  emulate -L zsh
   local -i auto_yes=0
 
   while (( $# > 0 )); do
