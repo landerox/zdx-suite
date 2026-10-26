@@ -739,7 +739,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   and an executable `zstd` on `PATH` that is not below a WSL Windows drive; a
   missing requirement is refused before planning. As with gzip, xz, and
   bzip2, GNU tar runs `zstd` from `PATH`, so the decompressor shares the
-  user's `PATH` trust boundary.
+  user's `PATH` trust boundary. 7-Zip used to match a literal `*` or `?` in a
+  reviewed input as a wildcard, so unplanned files that skipped the link,
+  mount, and ownership checks could enter an archive. 7z creation now requires
+  a 7-Zip that accepts `-spd` and `-sae` (for example p7zip 16.02 or `7zz`),
+  confirmed by a bounded `7z i -spd -sae` probe before planning, and runs
+  `7z a -spd -t7z -sae --`; zip runs with `-nw` under the fixed private
+  staging name `archive.zip`. Every format is published under exactly the
+  reviewed output name, and `--format` alone selects the format
+  (`file_platform.bats`). Real 7-Zip and Info-ZIP binaries are verified only
+  by hand.
 - `file-trash` is the one File mutation outside the current directory. `put`
   plans its targets under the same per-target boundary, plans a symbolic link
   as the link itself below a canonical trusted parent and never follows it,

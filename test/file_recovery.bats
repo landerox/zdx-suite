@@ -70,6 +70,8 @@ if [[ "$tool" == tar && "${1:-}" == --version ]]; then
   printf 'tar (GNU tar) 1.35\n'
   exit 0
 fi
+# 7-Zip's capability probe runs its info command.
+[[ "$tool" == 7z && "${1:-}" == i ]] && exit 0
 for name in $FILE_ARCHIVE_OPTION_NAMES; do
   if [[ -n "${!name+set}" ]]; then
     printf '%s %s=%s\n' "$tool" "$name" "${!name}"

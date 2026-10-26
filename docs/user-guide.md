@@ -1375,6 +1375,12 @@ large-file inspection, a recoverable trash, and junk-file cleanup. Run
   Inherited `TAR_OPTIONS`, `ZIPOPT`, `GZIP`, and similar default-option
   variables are ignored. If the inputs change while the archive is created,
   the unpublished archive is kept and reported as a recovery path.
+- **7z archives**: Creating them needs a 7-Zip that accepts `-spd` and
+  `-sae`, for example p7zip 16.02 or `7zz` (`brew install sevenzip` on
+  macOS); any other 7-Zip is refused before the plan. Names containing `*`
+  or `?` are archived literally, `--format` alone decides the format, so
+  `--format 7z --output backup.zip` creates a 7z archive, and the output
+  keeps exactly the name you gave.
 - **Extract (`file-extract`)**: The hardened extractor intentionally accepts
   only GNU TAR archives (`.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.bz2`,
   `.tar.zst`, and `.tzst`) and needs GNU tar as `tar` or `gtar`; on macOS,

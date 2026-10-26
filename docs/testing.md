@@ -323,9 +323,16 @@ as `tar` or `gtar`, and the zstd one also when that GNU tar lacks `--zstd` or
 `zstd` is missing. `file_platform.bats` reproduces macOS, BSD, and WSL
 branches with mocks, including zstd archives through `gtar` behind a bsdtar
 `tar`, the format picker's unavailable rows, a format without its backend
-refused before planning, and the zstd refusals for a `PATH` lookup without
-`zstd` and a GNU tar without `--zstd`. Real ZIP and 7z archives,
-cross-filesystem behavior, and a macOS or WSL host remain manual boundaries.
+refused before planning, the zstd refusals for a `PATH` lookup without `zstd` and a GNU tar without
+`--zstd`, 7-Zip and zip creation of a literal `a*` input next to `ab` and
+`ac` that archives only `a*`, 7z and zip outputs published under the
+reviewed name whether its extension is missing, mismatched, or part of a
+255-byte name, the refusal before planning of a 7-Zip without `-spd` and
+`-sae`, an interrupted 7-Zip probe that keeps its status, and the
+`timeout or gtimeout` reason without the core. Real ZIP and 7z archives,
+including a real `7zz` or p7zip 16.02 and zip 3.0 run on a literal `*.txt`
+next to `secret.txt`, cross-filesystem behavior, and a macOS or WSL host
+remain manual boundaries.
 
 ### Environment coverage
 
