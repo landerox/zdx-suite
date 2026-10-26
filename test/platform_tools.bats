@@ -276,12 +276,22 @@ _platform_tree_outcome() {
   [[ "$fate" == stopped ]] || return 92
 }
 
-# A DEBUG trap body: stalls the caller for <centiseconds> right before it
-# KILLs the watchdog, that is, right after it decided the deadline had not
-# passed, then records in $HOME/watchdog.state whether the watchdog is still
-# there to receive that KILL. Usage:
+# A DEBUG trap body. Right before the caller first waits for the command, it
+# starts a sender that sends USR1 to the caller one second later, so that a
+# slow start cannot deliver the signal before the wait begins; the caller
+# traps USR1. Right before the caller KILLs the watchdog, that is, right after
+# it decided the deadline had not passed, it stalls the caller for
+# <centiseconds>, then records in $HOME/watchdog.state whether the watchdog is
+# still there to receive that KILL. Usage:
+#   trap ":" USR1
 #   trap "_platform_stall_before_watchdog_kill 350" DEBUG
 _platform_stall_before_watchdog_kill() {
+  if [[ "$ZSH_DEBUG_CMD" == 'wait "$command_pid"'* \
+    && ! -e "$HOME/caller.signaled" ]]; then
+    : >| "$HOME/caller.signaled"
+    ( zselect -t 100; builtin kill -USR1 $$ ) </dev/null >/dev/null 2>&1 3>&- &
+    return 0
+  fi
   [[ "$ZSH_DEBUG_CMD" == 'builtin kill -KILL "$watchdog_pid"'* ]] || return 0
   zselect -t "$1" 2>/dev/null
   if builtin kill -0 "$watchdog_pid" 2>/dev/null; then
@@ -427,8 +437,9 @@ ZSH
   [ -z "$(ls -A "$PLATFORM_TMP")" ]
 }
 
-# A trapped signal ends the caller's wait while the command still runs, two
-# seconds before the deadline. The caller then stalls right before it KILLs
+# A trapped signal ends the caller's wait while the command still runs, one
+# second after the wait begins and two seconds before the deadline, however
+# slowly the bounded call starts. The caller then stalls right before it KILLs
 # the watchdog, past the deadline, while the watchdog would fire and start a
 # slow pass. The caller must not cut that pass: the watchdog stands down, the
 # caller signals the tree itself, and the watchdog is still there for the
@@ -445,7 +456,6 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=300
     trap ":" USR1
-    ( zselect -t 100; builtin kill -USR1 $$ ) </dev/null >/dev/null 2>&1 3>&- &
     trap "_platform_stall_before_watchdog_kill 350" DEBUG
     _zdx_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
@@ -473,7 +483,6 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=300
     trap ":" USR1
-    ( zselect -t 100; builtin kill -USR1 $$ ) </dev/null >/dev/null 2>&1 3>&- &
     trap "_platform_stall_before_watchdog_kill 350" DEBUG
     _sys_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
