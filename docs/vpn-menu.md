@@ -520,18 +520,30 @@ Linux keeps `sudoedit` for every directory.
 
 `wg-quick` executes `PreUp`, `PostUp`, `PreDown`, and `PostDown` as root. An
 imported profile is therefore accepted only when it is a private, singly linked
-regular file owned by the current user, at most 1 MiB, containing
-`[Interface]` and `[Peer]`, and containing none of those lifecycle hooks.
-Symlinks, hard links, public modes, oversized files, and hook-bearing profiles
-are refused before sudo. A NUL or any control byte other than tab, line feed,
-and carriage return is refused first: wg-quick's bash `read` silently drops
-NUL bytes, so `Post<NUL>Up` would evade a text search and still run as
-`PostUp`. A user can add a reviewed hook later through
-`vpn-config-edit`; the suite never elevates unreviewed imported shell text.
+regular file owned by the current user, at most 1 MiB, holding exactly one
+`[Interface]` section and at least one `[Peer]` section, and containing none of
+those lifecycle hooks. Symlinks, hard links, public modes, oversized files,
+hook-bearing profiles, and a second `[Interface]` section are refused before
+sudo. A NUL or any control byte other than tab, line feed, and carriage return
+is refused first: wg-quick's bash `read` silently drops NUL bytes, so
+`Post<NUL>Up` would evade a text search and still run as `PostUp`. A user can
+add a reviewed hook later through `vpn-config-edit`; the suite never elevates
+unreviewed imported shell text.
+
+The profile is read once, within the size bound, and parsed in Zsh the way
+wg-quick parses it: each line loses its `#` comment, the key is the text before
+the first `=` without surrounding whitespace, any key that starts with `[`
+opens a new section, and keys and section names compare without ASCII letter
+case. A hook key is refused in every section, so `postup =` under
+`[interface]` is refused exactly like `PostUp =` under `[Interface]`, while a
+commented-out hook is not a hook. The parse runs under fixed Zsh options
+(`emulate -L zsh`) and the C locale, with no pipeline deciding it, so the
+caller's shell options, such as an inherited `PIPE_FAIL` or `emulate sh`,
+cannot change the result.
 
 Accepted content is copied into an owner-only staging directory, fingerprinted
-before and after staging, and installed mode `600` through a same-directory
-temporary. Existing profiles are never overwritten by import.
+before and after staging, validated again, and installed mode `600` through a
+same-directory temporary. Existing profiles are never overwritten by import.
 
 ### WSL DNS hardening validates, never escapes
 
@@ -554,8 +566,11 @@ $ vpn-profile-import ./hostile.conf     # DNS = 1.1.1.1'; curl … | sh; '
 
 Each configured fallback (`VPN_DNS_FALLBACK_PRIMARY`,
 `VPN_DNS_FALLBACK_SECONDARY`) must be exactly one valid IP literal. Patching
-builds an owner-only staged profile and asks `wg-quick strip` to parse that
-staged file **before** an atomic same-directory replacement. Because wg-quick
+finds the `[Interface]` and `[Peer]` headers with the import validator's rule,
+in any ASCII letter case and with blanks around them, so a header form that
+import accepts does not stop hardening. It builds an owner-only staged profile
+and asks `wg-quick strip` to parse that staged file **before** an atomic
+same-directory replacement. Because wg-quick
 re-executes itself through sudo for `strip`, that parse runs through
 `_vpn_sudo_exec` after the announcement and authentication, never as an
 unannounced escalation. Hardening refuses a symlinked `/etc/resolv.conf`
@@ -697,12 +712,12 @@ doing nothing and reporting success.
 
 | File | Covered boundary |
 | --- | --- |
-| `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, and DNS hook idempotency |
+| `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, DNS hook idempotency, and hardening of the lower-case and indented headers import accepts |
 | `vpn_contract.bats` | The frozen 22-command fixture, six-way parity including exact dispatcher arms and direct completion bindings, a host-independent command set, dispatcher coverage, cancellation, timing label, argument forwarding, invalid-argument statuses |
 | `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity, the header context block, canonical unavailable marks, and em-dash profile notes |
 | `vpn_privilege.bats` | DNS hook injection refusal, `sudoedit` instead of a root editor, target revalidation after authentication, the restore undo copy, least privilege on read paths, announcement ordering, destructive controls (`--dry-run`, declined, no-terminal, `--yes` scope), secret redaction in excerpts and panes, state permissions and traversal/symlink refusal, stale pointers, and the platform gate |
 | `vpn_grammar.bats` | Exact completion grammar, identical through `vpn-menu` and as a direct command, parser-before-probe behavior, option terminators, operand cardinality, and safety-flag parity |
-| `vpn_hardening.bats` | Profile-directory boundaries, unsafe profile and import sources, lifecycle-hook refusal, strict DNS literals, picker ambiguity, atomic cache and report publication, cleanup on failure, and no-privilege dry runs |
+| `vpn_hardening.bats` | Profile-directory boundaries, unsafe profile and import sources, lifecycle-hook and second-`[Interface]` refusal in any letter case, spacing, or section and under default, `PIPE_FAIL`, and `emulate sh` callers, a stated reason for missing sections and an unreadable source, strict DNS literals, picker ambiguity, atomic cache and report publication, cleanup on failure, and no-privilege dry runs |
 | `vpn_regressions.bats` | Provider URL and curl restrictions, exact WSL hook ownership, single-IP fallbacks, atomic IPv6 rewrite, fail-closed connect, stream isolation, sudo timestamp failure, cache/report bounds, signal-safe preview cleanup, NUL-hidden import hooks, the profile summary, `NO_CLOBBER` state writes, locked reconnect fallback, unreadable-profile access, empty privileged inventories, sudo-bound `wg-quick strip`, stdout-clean details and IPv6 rewrites, picker interruption status, whitespace-split secret redaction, aligned IP-info columns, terminal-less import failure, symlinked homes, and 15-character new profile names |
 | `vpn_control_recovery.bats` | Exact profile paths for both transitions, post-authentication revalidation, missing profiles, interrupted batches with not-run tunnels, ordinary partial failures, tunnel-tool output replayed only on failure, and unknown live-state refusal |
 | `vpn_probe_recovery.bats` | Preserved sudo, WireGuard, and protected-profile inspection interruptions, no fallback after interruption, bounded capture statuses, and warm-cache-only ordinary probe recovery |

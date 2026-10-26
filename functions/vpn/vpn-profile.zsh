@@ -26,40 +26,85 @@ _vpn_profile_template() {
   print -r -- "PersistentKeepalive = 25"
 }
 
+# Judges profile text the way wg-quick will parse it. wg-quick reads each line
+# with bash `read` under LC_ALL=C and nocasematch, drops the text from the
+# first `#`, takes the key as the text before the first `=` without
+# surrounding whitespace, and lets any key that starts with `[` open a new
+# section. Keys and section names therefore compare here without ASCII letter
+# case, under fixed options and the C locale, with no pipeline or external
+# command. Whole-key patterns stay linear on a hostile 1 MiB line, where
+# trimming with `%%[[:space:]]#` would be quadratic.
+# Status: 0 with no lifecycle hook, exactly one [Interface], and at least one
+# [Peer]; 1 for a NUL or other control byte; 2 for a PreUp, PostUp, PreDown, or
+# PostDown key in any section; 3 for a second [Interface]; 4 when [Interface]
+# or [Peer] is missing.
+_vpn_validate_profile_text() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C
+  local text="${1-}" line key
+  local -i interfaces=0 peers=0
+
+  # wg-quick's bash `read` silently drops NUL bytes, so "Post<NUL>Up" would
+  # still run as PostUp. Refuse NUL and every control byte other than tab,
+  # line feed, and carriage return. The set is built from character codes
+  # because a $'...' literal is expanded when the code runs, and
+  # POSIX_STRINGS would cut it at the NUL.
+  local control="[${(#):-0}-${(#):-8}${(#):-11}${(#):-12}${(#):-14}-${(#):-31}${(#):-127}]"
+  [[ "$text" == *${~control}* ]] && return 1
+
+  for line in "${(@f)text}"; do
+    key="${${line%%\#*}%%=*}"
+    case "${(L)key}" in
+      ([[:space:]]#(preup|postup|predown|postdown)[[:space:]]#) return 2 ;;
+      ([[:space:]]#'[interface]'[[:space:]]#) (( ++interfaces )) ;;
+      ([[:space:]]#'[peer]'[[:space:]]#) (( ++peers )) ;;
+    esac
+  done
+  (( interfaces > 1 )) && return 3
+  (( interfaces == 1 && peers > 0 )) || return 4
+  return 0
+}
+
+# Validates an import source: a private regular file of at most
+# _VPN_MAX_PROFILE_BYTES whose text, read once, passes
+# _vpn_validate_profile_text. Fixed options keep the result independent of the
+# caller's shell, such as an inherited PIPE_FAIL. Status 1 after reporting why;
+# _vpn_user_file_fingerprint reports its own refusals.
 _vpn_validate_profile_file() {
+  emulate -L zsh
   local src="${1:-}"
   _vpn_user_file_fingerprint "$src" "profile source" >/dev/null || return 1
 
-  # wg-quick reads profiles with bash `read`, which silently drops NUL bytes,
-  # while grep treats them as binary data or line breaks: "Post<NUL>Up" would
-  # pass the hook check below and still run as PostUp. Refuse NUL and every
-  # control byte other than tab, line feed, and carriage return.
-  local control_bytes=""
-  control_bytes=$(command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
-    | LC_ALL=C command tr -d '\t\n\r\040-\176\200-\377' \
-    | LC_ALL=C command wc -c) || return 1
-  [[ "${control_bytes//[[:space:]]/}" == 0 ]] || {
-    _vpn_error "Imported profiles must not contain NUL or control bytes."
+  # One bounded read: every rule judges this exact text.
+  local content=""
+  content=$(command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null) || {
+    _vpn_error "Could not read ${src}."
     return 1
   }
 
-  # Imported hooks would be executed as root by wg-quick. The suite never
-  # imports them from an untrusted file; trusted WSL hooks are generated later
-  # from validated literals by vpn-wsl.zsh.
-  if command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
-    | command grep -aEiq \
-      '^[[:space:]]*(PreUp|PostUp|PreDown|PostDown)[[:space:]]*='; then
-    _vpn_error \
-      "Imported profiles must not contain PreUp/PostUp/PreDown/PostDown hooks."
-    _vpn_info \
-      "Import the profile without hooks, then add reviewed commands with vpn-config-edit."
-    return 1
-  fi
-
-  command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
-    | command grep -q '^\[Interface\]' \
-    && command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$src" 2>/dev/null \
-      | command grep -q '^\[Peer\]'
+  local -i text_status=0
+  _vpn_validate_profile_text "$content" || text_status=$?
+  case "$text_status" in
+    0) return 0 ;;
+    1) _vpn_error "Imported profiles must not contain NUL or control bytes." ;;
+    2)
+      # Imported hooks would be executed as root by wg-quick. The suite never
+      # imports them from an untrusted file; trusted WSL hooks are generated
+      # later from validated literals by vpn-wsl.zsh.
+      _vpn_error \
+        "Imported profiles must not contain PreUp/PostUp/PreDown/PostDown hooks."
+      _vpn_info \
+        "Import the profile without hooks, then add reviewed commands with vpn-config-edit."
+      ;;
+    3)
+      _vpn_error "Imported profiles must contain a single [Interface] section."
+      ;;
+    4)
+      _vpn_error "Imported profiles must contain an [Interface] and a [Peer] section."
+      ;;
+  esac
+  return 1
 }
 
 _vpn_expand_import_path() {
@@ -317,9 +362,9 @@ vpn-profile-import() {
   if ! _vpn_validate_profile_file "$resolved"; then
     _vpn_error "That file does not look like a WireGuard profile."
     _vpn_info \
-      "It must be owner-only, at most $_VPN_MAX_PROFILE_BYTES bytes, contain"
+      "It must be owner-only, at most $_VPN_MAX_PROFILE_BYTES bytes, and hold one"
     _vpn_info \
-      "[Interface] and [Peer], and contain no root-executed lifecycle hooks."
+      "[Interface], at least one [Peer], and no root-executed lifecycle hooks."
     return 1
   fi
 

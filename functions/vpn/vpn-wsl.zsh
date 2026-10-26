@@ -194,6 +194,18 @@ _vpn_wsl_existing_hook_state() {
   return 0
 }
 
+# Status 0 when LINE opens a [Peer] section the way wg-quick and the import
+# validator (_vpn_validate_profile_text) read it: after the `#` comment is
+# dropped, the text before the first `=` is [Peer] in any ASCII letter case,
+# with only blanks around it. The classes are explicit, so no locale applies.
+_vpn_wsl_line_opens_peer() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local key="${${1-}%%\#*}" blank=$' \t\r\v\f'
+  key="${key%%=*}"
+  [[ "$key" == [$blank]#'['[Pp][Ee][Ee][Rr]']'[$blank]# ]]
+}
+
 # Patches a WireGuard profile so /etc/resolv.conf is pinned to the tunnel
 # resolver while the tunnel is up and to public fallbacks while it is down.
 #
@@ -309,7 +321,7 @@ _vpn_apply_wsl_dns_hooks() {
       if [[ "$line" =~ '^[[:space:]]*DNS[[:space:]]*=' ]]; then
         continue
       fi
-      if (( ! inserted )) && [[ "$line" =~ '^[[:space:]]*\[Peer\]' ]]; then
+      if (( ! inserted )) && _vpn_wsl_line_opens_peer "$line"; then
         output+=("${(@f)$(_vpn_wsl_hook_lines \
           "$tunnel_dns" "$VPN_DNS_FALLBACK_PRIMARY" \
           "$VPN_DNS_FALLBACK_SECONDARY")}")
@@ -329,8 +341,12 @@ _vpn_apply_wsl_dns_hooks() {
     }
     command chmod -- 600 "$temp_file" 2>/dev/null || return 1
 
-    if ! command grep -q '^\[Interface\]' "$temp_file" \
-      || ! command grep -q '^\[Peer\]' "$temp_file"; then
+    # The import validator's header rule: blanks around the name, any ASCII
+    # letter case, and nothing else before `=`, `#`, or the end of the line.
+    if ! LC_ALL=C command grep -Eiq \
+        '^[[:space:]]*\[interface\][[:space:]]*(=|#|$)' "$temp_file" \
+      || ! LC_ALL=C command grep -Eiq \
+        '^[[:space:]]*\[peer\][[:space:]]*(=|#|$)' "$temp_file"; then
       _vpn_error "WSL DNS hardening produced an invalid profile — aborted."
       return 1
     fi

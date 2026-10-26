@@ -217,3 +217,46 @@ EOF
   "
   [ "$status" -eq 0 ]
 }
+
+@test "vpn: WSL DNS hardening accepts the section headers that import accepts" {
+  run run_zsh "
+    export MOCK_SUDO_WRITE_ETC_RESOLV_CONF=1
+    export MOCK_SUDO_ALLOW='true,test,install,mktemp,mv,rm,wg-quick'
+    export MOCK_LSATTR_ETC_RESOLV_CONF='--------- /etc/resolv.conf'
+    _vpn_resolv_conf_is_symlink() { return 1; }
+
+    local profile_dir=\"\$HOME/wireguard\"
+    command mkdir -p -- \"\$profile_dir\"
+    command chmod -- 700 \"\$profile_dir\"
+    export VPN_CONFIG_DIR=\"\$profile_dir\"
+    printf '[interface]\nPrivateKey = somekey=\nDNS = 8.8.8.8\n\n\t[peer] # provider\nPublicKey = peerkey=\nAllowedIPs = 0.0.0.0/0\n' \
+      > \"\$profile_dir/lower.conf\"
+    printf '  [Interface]\nPrivateKey = somekey=\nDNS = 8.8.8.8\n\n[Peer]\nPublicKey = peerkey=\nAllowedIPs = 0.0.0.0/0\n' \
+      > \"\$profile_dir/indented.conf\"
+    command chmod -- 600 \"\$profile_dir/lower.conf\" \"\$profile_dir/indented.conf\"
+
+    local name conf hook_line peer_line
+    local -i failed=0
+    for name in lower indented; do
+      conf=\"\$profile_dir/\$name.conf\"
+      if ! _vpn_validate_profile_file \"\$conf\"; then
+        print -r -- \"FAIL: import refuses \$name\"
+        failed=1
+        continue
+      fi
+      if ! _vpn_apply_wsl_dns_hooks \"\$conf\"; then
+        print -r -- \"FAIL: hardening refuses \$name\"
+        failed=1
+        continue
+      fi
+      grep -q 'zdx: wsl-dns-hooks v1' \"\$conf\" || { print -r -- \"FAIL: no sentinel in \$name\"; failed=1; }
+      hook_line=\$(grep -n 'PostUp =' \"\$conf\" | head -n 1 | cut -d: -f1)
+      peer_line=\$(grep -niE '^[[:space:]]*\\[peer\\]' \"\$conf\" | head -n 1 | cut -d: -f1)
+      (( hook_line > 0 && hook_line < peer_line )) \
+        || { print -r -- \"FAIL: hooks are not before the peer header in \$name\"; failed=1; }
+    done
+    exit \$failed
+  "
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+}
