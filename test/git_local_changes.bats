@@ -1140,6 +1140,47 @@ EOF
     "$HOME/apply.stderr"
 }
 
+@test "git local changes: stash branch refuses a name that a dangling symbolic ref holds" {
+  run run_zsh "$(local_repo)"'
+    print -r -- "branch work" > a.txt
+    command git stash push -q -m work || return 9
+    # show-ref skips a dangling alias, and git stash branch would create
+    # refs/heads/missing through it instead of the planned branch.
+    command git symbolic-ref refs/heads/from-stash refs/heads/missing || return 9
+    git-stash branch "stash@{0}" from-stash --yes \
+      >"$HOME/plan.stdout" 2>"$HOME/plan.stderr"
+    local -i plan_rc=$?
+    command git show-ref --verify --quiet refs/heads/missing && return 10
+    [[ "$(command git symbolic-ref --quiet refs/heads/from-stash)" \
+      == refs/heads/missing ]] || return 11
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+    [[ "$(command git stash list | wc -l)" -eq 1 ]] || return 13
+
+    # An alias that appears after confirmation is refused before the branch.
+    command git symbolic-ref --delete refs/heads/from-stash || return 14
+    _git_confirm_outcome() {
+      command git symbolic-ref refs/heads/from-stash refs/heads/missing || return 1
+      REPLY=confirmed
+    }
+    git-stash branch "stash@{0}" from-stash \
+      >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    command git show-ref --verify --quiet refs/heads/missing && return 15
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 16
+    [[ "$(command git stash list | wc -l)" -eq 1 ]] || return 17
+    print -r -- "$plan_rc:$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1:1" ]
+  [ ! -s "$HOME/plan.stdout" ]
+  [ ! -s "$HOME/late.stdout" ]
+  grep -Fq "Local branch 'from-stash' already exists as a symbolic ref." \
+    "$HOME/plan.stderr"
+  grep -Fq "Local branch 'from-stash' already exists as a symbolic ref." \
+    "$HOME/late.stderr"
+}
+
 @test "git local changes: the stash manager saves from its first row" {
   export MOCK_FZF_MODE=match
   export MOCK_FZF_MATCH=$'\tsave\t'

@@ -8,7 +8,8 @@
 #
 # git-switch creates a branch only as the local branch that tracks a chosen
 # remote-tracking branch, and git-recover only adds a new branch at a commit
-# that no ref reaches. Neither moves, resets, or deletes an existing ref.
+# that no ref reaches. Both refuse a name that a symbolic ref holds, even a
+# dangling one, and neither moves, resets, or deletes an existing branch.
 #
 
 if [[ -n "${_GIT_BRANCH_SOURCED:-}" ]]; then
@@ -628,6 +629,12 @@ _git_switch_execute() {
   local -a reply=()
   local -i command_code=0
 
+  # git switch -c would write through a symbolic ref created at the name
+  # since planning, so check it again before anything changes.
+  if [[ "$target_kind" == "remote" ]]; then
+    _git_require_not_symbolic_ref "refs/heads/$target_name" branch || return 1
+  fi
+
   _git_blank
   if [[ "$change_mode" == "stash" ]] && (( changed_count > 0 )); then
     _git_stash_inventory_summary || return 1
@@ -890,6 +897,7 @@ git-switch() {
     _git_ref_case_guard planned_refs refs/heads \
       "Rename or delete the local branch that differs only in letter case." ||
       return 1
+    _git_require_not_symbolic_ref "refs/heads/$target_name" branch || return 1
   fi
 
   _git_switch_diff_paths "$repo_root" "$head_oid" "$target_oid" || {
@@ -1199,9 +1207,10 @@ _git_recover_commit_fields() {
   reply=("${commit_fields[@]}")
 }
 
-# Refuses BRANCH when a local branch has that name, would share its loose ref
-# file (a name that is a directory of the other), or differs from it only in
-# letter case under core.ignorecase.
+# Refuses BRANCH when a local branch has that name, when a symbolic ref holds
+# it (even a dangling one), when it would share its loose ref file (a name that
+# is a directory of the other), or when it differs from a branch only in letter
+# case under core.ignorecase.
 _git_recover_require_free_name() {
   emulate -L zsh
 
@@ -1210,6 +1219,7 @@ _git_recover_require_free_name() {
   local -a planned_refs=("$new_ref")
   _git_ref_case_guard planned_refs refs/heads \
     "Choose a branch name that differs by more than letter case." || return 1
+  _git_require_not_symbolic_ref "$new_ref" branch || return 1
   listing=$(command git for-each-ref --format='%(refname)' refs/heads \
     2>/dev/null) || {
     _git_error "Unable to list local branches."
@@ -1239,9 +1249,11 @@ _git_recover_usage() {
   print -u2 -r -- \
     "remote-tracking branch, or tag reaches any more, and restore it as a new"
   print -u2 -r -- \
-    "branch, recover/<short-sha> unless you name it. No existing ref is moved,"
+    "branch, recover/<short-sha> unless you name it. A name that a branch or a"
   print -u2 -r -- \
-    "reset, or deleted. Interactive: the picker needs a terminal and fzf."
+    "symbolic ref holds is refused, and no existing branch is moved, reset, or"
+  print -u2 -r -- \
+    "deleted. Interactive: the picker needs a terminal and fzf."
   print -u2 -r -- \
     "  --deep     Also list dangling commits from git fsck, bounded to ${_GIT_RECOVER_FSCK_SECONDS}s."
   print -u2 -r -- \
@@ -1392,7 +1404,7 @@ git-recover() {
   _git_ui_label "Date" "$commit_date"
   _git_ui_label "Found in" "$recover_source"
   _git_ui_label "New branch" "$branch_name"
-  _git_dim "Creates refs/heads/$branch_name at ${recover_oid[1,12]}; no existing ref is moved or deleted."
+  _git_dim "Creates refs/heads/$branch_name at ${recover_oid[1,12]}; no existing branch is moved or deleted."
   _git_recover_require_free_name "$branch_name" || return 1
 
   if [[ "$dry_run" == "yes" ]]; then
@@ -1419,10 +1431,12 @@ git-recover() {
   fi
   _git_recover_require_free_name "$branch_name" || return 1
 
-  # An empty old value makes the update create-only: Git refuses it when the
-  # ref appeared in the meantime, so no existing ref can be moved.
-  _git_run_captured "git update-ref refs/heads/$branch_name ${recover_oid[1,12]}" \
-    command git update-ref --create-reflog \
+  # An empty old value makes the update create-only: Git refuses it when a
+  # branch appeared in the meantime, so no existing branch can be moved.
+  # --no-deref writes the planned name itself, so an alias there can never
+  # redirect the write to another ref.
+  _git_run_captured "git update-ref --no-deref refs/heads/$branch_name ${recover_oid[1,12]}" \
+    command git update-ref --no-deref --create-reflog \
     -m "git-recover: restore ${recover_oid}" \
     "refs/heads/$branch_name" "$recover_oid" ""
   local -i command_code=$?

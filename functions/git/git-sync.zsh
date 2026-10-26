@@ -349,7 +349,8 @@ _git_sync_cleanup_temp_refs() {
   local -a records=("$@")
   (( ${#records[@]} > 0 )) || return 0
 
-  local -a transaction=(start "option no-deref")
+  # `option no-deref` covers only the next command, so it precedes each one.
+  local -a transaction=(start)
   local record oid ref
   for record in "${records[@]}"; do
     oid="${record%%$'\t'*}"
@@ -360,7 +361,7 @@ _git_sync_cleanup_temp_refs() {
       _git_error "Refusing an invalid temporary-ref cleanup plan."
       return 1
     }
-    transaction+=("delete ${ref} ${oid}")
+    transaction+=("option no-deref" "delete ${ref} ${oid}")
   done
   transaction+=(prepare commit)
 
@@ -974,6 +975,19 @@ _git_push_apply_plan() {
     [[ "$mode" == "force" ]] && push_cmd+=(--force-if-includes)
     push_cmd+=(-- "$push_url" "${local_oid}:${remote_ref}")
 
+    # Git updates the refs that the remote's fetch refspecs map this ref to
+    # after the push, following a symbolic one, so check them right before.
+    local -i tracking_rc=0
+    _git_require_direct_tracking_refs "$remote" "$remote_ref" \
+      || tracking_rc=$?
+    if (( tracking_rc == 130 || tracking_rc == 143 )); then
+      _git_count_noun "$pushed" "ref update"
+      _git_warn "Push interrupted: $REPLY completed before the interruption."
+      return "$tracking_rc"
+    elif (( tracking_rc != 0 )); then
+      failed=$(( failed + 1 ))
+      continue
+    fi
     "${push_cmd[@]}" >&2
     local -i push_rc=$?
     if (( push_rc == 0 )); then
@@ -1124,7 +1138,7 @@ git-push() {
     # Setting the upstream writes this tracking ref after the push.
     local -a case_planned_refs=("$_git_sync_tracking_ref")
     _git_ref_case_guard case_planned_refs refs/remotes \
-      "Push to a branch name that differs by more than letter case, or delete a stale tracking ref with 'git update-ref -d <ref>', then retry." \
+      "Push to a branch name that differs by more than letter case, or delete a stale tracking ref with 'git update-ref --no-deref -d <ref>', then retry." \
       || return 1
   fi
 
@@ -1139,6 +1153,15 @@ git-push() {
     _git_success "The remote already matches every planned ref."
     return 0
   fi
+  # A push to the remote URL updates the refs that the remote's fetch
+  # refspecs map each pushed ref to, and Git would follow a symbolic one to
+  # the ref it points to.
+  local plan_record="" plan_remote_ref=""
+  for plan_record in "${plan[@]}"; do
+    plan_remote_ref="${${plan_record#*$'\t'*$'\t'}%%$'\t'*}"
+    _git_require_direct_tracking_refs "$_git_sync_remote" "$plan_remote_ref" \
+      || return $?
+  done
 
   _git_push_show_plan \
     "$root" "$head_oid" "$_git_push_opt_mode" "$_git_sync_remote" \
@@ -1343,7 +1366,7 @@ _git_pull_build_prune_plan() {
     case_planned_refs+=("${tracking_prefix}${${planned_record#*$'\t'}#refs/heads/}")
   done
   _git_ref_case_guard case_planned_refs refs/remotes \
-    "Rename one of the remote branches, or delete a stale tracking ref with 'git update-ref -d <ref>', then retry." \
+    "Rename one of the remote branches, or delete a stale tracking ref with 'git update-ref --no-deref -d <ref>', then retry." \
     || return 1
 
   local remote_record remote_oid remote_ref tracking_ref
@@ -1430,7 +1453,8 @@ _git_pull_apply_prune_plan() {
   (( ${#plan[@]} > 0 )) || return 0
 
   local tracking_prefix="refs/remotes/${remote}/"
-  local -a transaction=(start "option no-deref")
+  # `option no-deref` covers only the next command, so it precedes each one.
+  local -a transaction=(start)
   local record remainder tracking_ref old_oid remote_ref new_oid
   local expected_old
   for record in "${plan[@]}"; do
@@ -1453,7 +1477,7 @@ _git_pull_apply_prune_plan() {
         _git_error "Refusing an invalid fetch-prune deletion lease."
         return 1
       }
-      transaction+=("delete ${tracking_ref} ${old_oid}")
+      transaction+=("option no-deref" "delete ${tracking_ref} ${old_oid}")
       continue
     fi
 
@@ -1472,6 +1496,7 @@ _git_pull_apply_prune_plan() {
     [[ "$expected_old" != "absent" ]] \
       || expected_old="${new_oid//?/0}"
     transaction+=(
+      "option no-deref"
       "update ${tracking_ref} ${new_oid} ${expected_old}"
     )
   done
@@ -1629,7 +1654,7 @@ git-pull() {
   else
     local -a case_planned_refs=("$_git_sync_tracking_ref")
     _git_ref_case_guard case_planned_refs refs/remotes \
-      "Rename the remote branch, or delete a stale tracking ref with 'git update-ref -d <ref>', then retry." \
+      "Rename the remote branch, or delete a stale tracking ref with 'git update-ref --no-deref -d <ref>', then retry." \
       || return 1
     _git_sync_remote_snapshot \
       "$_git_sync_remote" "$_git_sync_remote_ref" || return $?
@@ -1762,7 +1787,7 @@ git-pull() {
     return 1
   }
   _git_ref_case_guard case_planned_refs refs/remotes \
-    "Rename the remote branch, or delete a stale tracking ref with 'git update-ref -d <ref>', then retry." \
+    "Rename the remote branch, or delete a stale tracking ref with 'git update-ref --no-deref -d <ref>', then retry." \
     || return 1
 
   _git_sync_allocate_temp_prefix || return 1

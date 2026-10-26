@@ -22,6 +22,12 @@ verification, and remaining limitations.
 - Files: 7z creation no longer treats a literal `*` or `?` in a reviewed name
   as a wildcard, so it cannot add unplanned files to the archive; it requires a
   7-Zip that accepts `-spd` and `-sae`.
+- Git: no cleanup, tag, recovery, switch, stash, or push command follows a
+  symbolic ref any more. Before, a `master -> main` alias made
+  `clean-branches`, `clean-remote-merged`, and `git-tag-delete` delete `main`
+  itself, and a push could move `main` through an aliased tracking ref. Remote
+  branch and tag deletion now refuse when the server cannot report its
+  symbolic refs over protocol v2.
 
 ### Fixed
 

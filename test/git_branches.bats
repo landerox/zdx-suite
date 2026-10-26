@@ -528,6 +528,43 @@ show_failure() {
     "$HOME/ignored.stderr"
 }
 
+@test "git branches: switch refuses to create a tracking branch at a name a dangling alias holds" {
+  run run_zsh "$(branch_repo)$(branch_remote)"'
+    # for-each-ref and show-ref skip a dangling alias, and git switch -c would
+    # create refs/heads/missing through it instead of the planned branch.
+    command git symbolic-ref refs/heads/feature refs/heads/missing || return 9
+    git-switch feature >"$HOME/plan.stdout" 2>"$HOME/plan.stderr"
+    local -i plan_rc=$?
+    command git show-ref --verify --quiet refs/heads/missing && return 10
+    [[ "$(command git symbolic-ref --quiet refs/heads/feature)" \
+      == refs/heads/missing ]] || return 11
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+
+    # An alias that appears after confirmation is refused before the switch.
+    command git symbolic-ref --delete refs/heads/feature || return 13
+    print -r -- "edited a" > a.txt
+    _git_confirm_outcome() {
+      command git symbolic-ref refs/heads/feature refs/heads/missing || return 1
+      REPLY=confirmed
+    }
+    git-switch feature --carry >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    command git show-ref --verify --quiet refs/heads/missing && return 14
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 15
+    [[ "$(<a.txt)" == "edited a" ]] || return 16
+    print -r -- "$plan_rc:$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1:1" ]
+  [ ! -s "$HOME/plan.stdout" ]
+  [ ! -s "$HOME/late.stdout" ]
+  grep -Fq "Local branch 'feature' already exists as a symbolic ref." \
+    "$HOME/plan.stderr"
+  grep -Fq "Local branch 'feature' already exists as a symbolic ref." \
+    "$HOME/late.stderr"
+}
+
 @test "git branches: the picker lists local branches before remote-only ones with a constant preview" {
   export MOCK_FZF_MODE=match
   export MOCK_FZF_MATCH=$'\tremote\t'
@@ -674,7 +711,7 @@ show_failure() {
   [ "$status" -eq 0 ] || { show_failure; false; }
   [ "$output" = "1" ]
   grep -Eq "New branch: +rescued/work" "$HOME/dry.stderr"
-  grep -Fq "no existing ref is moved or deleted" "$HOME/dry.stderr"
+  grep -Fq "no existing branch is moved or deleted" "$HOME/dry.stderr"
   grep -Fq "Dry run: 1 branch planned; nothing was created." "$HOME/dry.stderr"
   grep -Fq "Refusing to continue without a terminal; pass --yes after reviewing the plan." \
     "$HOME/refused.stderr"
@@ -714,6 +751,93 @@ show_failure() {
   grep -Fq "rescue/work conflicts with the existing branch rescue." "$HOME/nested.stderr"
   grep -Fq "refs/heads/saved and refs/heads/Saved" "$HOME/case.stderr"
   grep -Fq "Invalid branch name: bad..name" "$HOME/invalid.stderr"
+}
+
+@test "git branches: recover refuses a name that a dangling symbolic ref holds" {
+  export MOCK_FZF_MODE=first
+  run run_zsh "$(branch_repo)$(lost_commit)"'
+    _git_require_interactive() { return 0; }
+    # for-each-ref and show-ref skip a dangling alias, and a write through it
+    # would create refs/heads/missing instead of the planned branch.
+    command git symbolic-ref refs/heads/alias refs/heads/missing || return 9
+    '"$(refs_snapshot)"'
+    _git_read_line() { REPLY="alias"; }
+    git-recover --yes >"$HOME/alias.stdout" 2>"$HOME/alias.stderr"
+    local -i alias_rc=$?
+    command git show-ref --verify --quiet refs/heads/missing && return 10
+    [[ "$(command git symbolic-ref --quiet refs/heads/alias)" \
+      == refs/heads/missing ]] || return 11
+    '"$(refs_unchanged)"'
+    [[ "$(command git for-each-ref --format="%(refname) %(objectname)")" \
+      == "$REFS_BEFORE" ]] || return 12
+
+    # A free name is still recovered as a direct branch.
+    _git_read_line() { REPLY="restored"; }
+    git-recover --yes >"$HOME/restored.stdout" 2>"$HOME/restored.stderr" \
+      || return 13
+    [[ "$(command git rev-parse --verify --quiet refs/heads/restored)" \
+      == "$LOST_OID" ]] || return 14
+    [[ -z "$(command git for-each-ref --format="%(symref)" \
+      refs/heads/restored)" ]] || return 15
+    command git show-ref --verify --quiet refs/heads/missing && return 16
+    [[ "$(command git symbolic-ref --quiet refs/heads/alias)" \
+      == refs/heads/missing ]] || return 17
+    print -r -- "$alias_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/alias.stdout" ]
+  [ ! -s "$HOME/restored.stdout" ]
+  grep -Fq "Local branch 'alias' already exists as a symbolic ref." \
+    "$HOME/alias.stderr"
+  grep -Fq "Created branch restored at" "$HOME/restored.stderr"
+}
+
+@test "git branches: recover writes only the planned name when an alias appears after review" {
+  export MOCK_FZF_MODE=first REAL_GIT
+  REAL_GIT=$(command -v git)
+  # As a concurrent writer could after the final free-name check, the planned
+  # name becomes a dangling alias just before Git creates the branch.
+  cat >"$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == update-ref && ! -e "$HOME/.alias-swap.done" ]]; then
+  : >"$HOME/.alias-swap.done"
+  "$REAL_GIT" symbolic-ref refs/heads/late-alias refs/heads/missing || exit 97
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+  run run_zsh "$(branch_repo)$(lost_commit)"'
+    _git_require_interactive() { return 0; }
+    _git_read_line() { REPLY="late-alias"; }
+    git-recover --yes >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    # The write never lands on the alias target.
+    command git show-ref --verify --quiet refs/heads/missing && return 10
+    if (( late_rc == 0 )); then
+      # Older Git replaces the alias with the planned direct branch.
+      [[ -z "$(command git for-each-ref --format="%(symref)" \
+        refs/heads/late-alias)" ]] || return 11
+      [[ "$(command git rev-parse --verify --quiet refs/heads/late-alias)" \
+        == "$LOST_OID" ]] || return 12
+    else
+      # Newer Git refuses to create over a dangling symbolic ref.
+      [[ "$(command git symbolic-ref --quiet refs/heads/late-alias)" \
+        == refs/heads/missing ]] || return 13
+    fi
+    print -r -- "$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ -e "$HOME/.alias-swap.done" ]
+  [ ! -s "$HOME/late.stdout" ]
+  if [ "$output" = "0" ]; then
+    grep -Fq "Created branch late-alias at" "$HOME/late.stderr"
+  else
+    grep -Fq "The branch was not created (exit $output); nothing else changed." \
+      "$HOME/late.stderr"
+  fi
 }
 
 @test "git branches: recover revalidates the name and the commit after confirmation" {

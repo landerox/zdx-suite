@@ -21,6 +21,8 @@ typeset -gA _GIT_AUTH=()
 # rev-parse --path-format; force pushes use --force-if-includes; and identity
 # planning uses config --show-scope. Each needs Git 2.31.
 typeset -g _GIT_MINIMUM_VERSION="2.31"
+# Seconds that the read-only query for the remote's symbolic refs may take.
+typeset -g _GIT_REMOTE_SYMREF_SECONDS=30
 # Resolved git executables already proven new enough, mapped to their file
 # identity at that time, so a replaced or upgraded binary is checked again.
 typeset -gA _GIT_VERIFIED_BINARIES=()
@@ -1616,6 +1618,276 @@ _git_ref_case_guard() {
     _git_dim "$planned_ref and $other_ref"
   done
   [[ -n "$guidance" ]] && _git_info "$guidance"
+  return 1
+}
+
+# Refuses FULL_REF when a symbolic ref holds it, even a dangling one, which
+# for-each-ref and show-ref skip: a command that creates the ref would write
+# through the alias and create its target instead. KIND (branch or tag) names
+# the ref in the message. Usage: _git_require_not_symbolic_ref FULL_REF KIND
+_git_require_not_symbolic_ref() {
+  emulate -L zsh
+
+  local full_ref="$1"
+  local ref_kind="$2"
+  local short_name="${${full_ref#refs/heads/}#refs/tags/}"
+  local -i symbolic_rc=0
+  command git symbolic-ref --quiet "$full_ref" >/dev/null 2>&1 \
+    || symbolic_rc=$?
+  if (( symbolic_rc == 0 )); then
+    _git_error \
+      "Local $ref_kind '$(_git_display_escape "$short_name")' already exists as a symbolic ref."
+    return 1
+  elif (( symbolic_rc != 1 )); then
+    _git_error \
+      "Unable to inspect the local $ref_kind '$(_git_display_escape "$short_name")'."
+    return 1
+  fi
+  return 0
+}
+
+# Sets reply to the refs matching PATTERN that the remote at URL reports as
+# symbolic, and REPLY to v2 when the remote answered with protocol v2 or to
+# no-v2 otherwise. A server deletes the target of a symbolic ref that a push
+# deletes, so deletion plans leave these refs out. Only protocol v2 reports
+# symbolic refs other than HEAD, so the query asks for it; a remote that
+# answers otherwise reports none. The read is bounded, never prompts, and
+# sends a refs/heads/ or refs/tags/ prefix for those patterns. A failed or
+# timed-out query returns non-zero, which callers treat as a refusal; an
+# interrupted one returns 130 or 143 without a message, and callers stop.
+# Usage: _git_remote_symbolic_refs URL PATTERN
+_git_remote_symbolic_refs() {
+  emulate -L zsh
+
+  local remote_url="$1"
+  local pattern="$2"
+  local output="" record="" ref=""
+  local -a namespace_option=()
+  local -i remote_rc=0 answered_v2=0
+  reply=()
+  REPLY="no-v2"
+  case "$pattern" in
+    refs/heads/*) namespace_option=(--heads) ;;
+    refs/tags/*) namespace_option=(--tags) ;;
+  esac
+  # The packet trace shares the captured stream; its lines all contain
+  # "packet:", and a ref name cannot contain a space, so they never look like
+  # a "ref: <target><TAB><name>" record.
+  output=$(
+    unset SSH_ASKPASS
+    export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="" GCM_INTERACTIVE=never
+    export GIT_TRACE_PACKET=1
+    _git_run_with_timeout "$_GIT_REMOTE_SYMREF_SECONDS" git \
+      -c protocol.version=2 ls-remote --symref --refs "${namespace_option[@]}" \
+      -- "$remote_url" "$pattern" </dev/null 2>&1
+  ) || remote_rc=$?
+  if (( remote_rc == 130 || remote_rc == 143 )); then
+    # The caller reports the interruption and stops.
+    return $remote_rc
+  elif (( remote_rc == 124 )); then
+    _git_error \
+      "The query for symbolic refs on '$(_git_redact_remote_url "$remote_url")' did not finish within ${_GIT_REMOTE_SYMREF_SECONDS}s."
+    return $remote_rc
+  elif (( remote_rc != 0 )); then
+    _git_error \
+      "Unable to inspect symbolic refs on '$(_git_redact_remote_url "$remote_url")' (exit $remote_rc)."
+    return $remote_rc
+  fi
+  for record in "${(@f)output}"; do
+    if [[ "$record" == *'packet:'* ]]; then
+      [[ "$record" == *'< version 2' ]] && answered_v2=1
+      continue
+    fi
+    [[ "$record" == 'ref: '*$'\t'* ]] || continue
+    ref="${record#*$'\t'}"
+    _git_validate_full_ref "$ref" || {
+      _git_error "The remote returned an invalid symbolic ref."
+      return 1
+    }
+    _git_ls_remote_ref_matches "$pattern" "$ref" || continue
+    reply+=("$ref")
+  done
+  (( answered_v2 )) && REPLY="v2"
+  return 0
+}
+
+# Prints why a remote deletion is refused when the remote did not answer in
+# protocol v2, and the safe next step. KIND is branch or tag.
+# Usage: _git_remote_symref_refusal KIND
+_git_remote_symref_refusal() {
+  local ref_kind="$1"
+  local kind_plural="${ref_kind}s"
+  [[ "$ref_kind" != "branch" ]] || kind_plural="branches"
+  _git_error \
+    "The remote did not answer with protocol v2, so it cannot show which $kind_plural are symbolic, and deleting a symbolic one deletes its target there."
+  _git_info \
+    "Enable protocol v2 on the server (for an OpenSSH server, AcceptEnv GIT_PROTOCOL in sshd_config), or check the $ref_kind on the server and delete it there."
+}
+
+# Sets reply to the local refs that the fetch refspecs of REMOTE map
+# REMOTE_REF to, with one '*' on each side of a pattern. After a push to the
+# remote URL, Git updates or deletes the first of them itself. Every match is
+# returned, and negative refspecs (^PATTERN) are not applied: they do not stop
+# that update (verified with Git 2.56). A match that is not a valid ref name
+# returns 2 with REPLY naming it, so callers refuse instead of skipping it; a
+# configuration read that fails returns 2 as well, and an interrupted one
+# returns its status (130 or 143).
+# Usage: _git_remote_tracking_destinations REMOTE REMOTE_REF
+_git_remote_tracking_destinations() {
+  emulate -L zsh
+
+  local remote="$1"
+  local remote_ref="$2"
+  local fetch_output="" refspec="" source_pattern="" destination=""
+  local source_prefix="" source_suffix="" matched_part="" invalid_ref=""
+  local -a refspecs=() destinations=()
+  local -i config_rc=0
+  reply=()
+  REPLY=""
+  # Status 1 means that the remote has no fetch refspec.
+  fetch_output=$(command git config --get-all "remote.${remote}.fetch" \
+    2>/dev/null) || config_rc=$?
+  if (( config_rc == 130 || config_rc == 143 )); then
+    return $config_rc
+  elif (( config_rc != 0 && config_rc != 1 )); then
+    REPLY="remote.${remote}.fetch"
+    return 2
+  fi
+  [[ -n "$fetch_output" ]] && refspecs=("${(@f)fetch_output}")
+
+  for refspec in "${refspecs[@]}"; do
+    [[ "$refspec" != '^'* && "$refspec" == *:* ]] || continue
+    refspec="${refspec#+}"
+    source_pattern="${refspec%%:*}"
+    destination="${refspec#*:}"
+    [[ -n "$source_pattern" && -n "$destination" ]] || continue
+    if [[ "$source_pattern" == *'*'* ]]; then
+      [[ "$destination" == *'*'* ]] || continue
+      source_prefix="${source_pattern%%\**}"
+      source_suffix="${source_pattern#*\*}"
+      [[ "$remote_ref" == "$source_prefix"*"$source_suffix" ]] || continue
+      (( ${#remote_ref} >= ${#source_prefix} + ${#source_suffix} )) || continue
+      matched_part="${remote_ref#$source_prefix}"
+      matched_part="${matched_part%$source_suffix}"
+      destination="${destination%%\**}${matched_part}${destination#*\*}"
+    else
+      [[ "$remote_ref" == "$source_pattern" ]] || continue
+    fi
+    if ! _git_validate_full_ref "$destination"; then
+      [[ -n "$invalid_ref" ]] || invalid_ref="$destination"
+      continue
+    fi
+    destinations+=("$destination")
+  done
+  reply=("${(@u)destinations}")
+  if [[ -n "$invalid_ref" ]]; then
+    REPLY="$invalid_ref"
+    return 2
+  fi
+  return 0
+}
+
+# Checks the local refs that the fetch refspecs of REMOTE map REMOTE_REF to,
+# and every EXTRA_REF: Git updates or deletes the mapped refs itself after a
+# push to the remote URL, through any alias. A mapped ref must be a
+# remote-tracking ref, below refs/remotes/; Git would otherwise change a
+# branch, a tag, or any other ref. With --allow-self-tag, a tag that a
+# refspec maps to itself is accepted too: after a publication push Git writes
+# the value just pushed to that tag. Returns 0 when every ref is a direct one,
+# 1 when one is symbolic, 2 when one cannot be inspected, 3 when a mapped ref
+# lies outside refs/remotes/, and 130 or 143 when a probe was interrupted;
+# REPLY names that ref.
+# Usage: _git_tracking_refs_direct [--allow-self-tag] REMOTE REMOTE_REF
+#          [EXTRA_REF...]
+_git_tracking_refs_direct() {
+  emulate -L zsh
+
+  local -i allow_self_tag=0
+  if [[ "${1:-}" == "--allow-self-tag" ]]; then
+    allow_self_tag=1
+    shift
+  fi
+  local remote="$1"
+  local remote_ref="$2"
+  shift 2
+  local checked_ref=""
+  local -i symbolic_rc=0 mapping_rc=0
+  local -a reply=() checked_refs=("$@")
+  REPLY=""
+  # An invalid mapped name (REPLY) cannot be inspected.
+  _git_remote_tracking_destinations "$remote" "$remote_ref" || mapping_rc=$?
+  (( mapping_rc == 0 )) || return $mapping_rc
+  for checked_ref in "${reply[@]}"; do
+    [[ "$checked_ref" == refs/remotes/?* ]] && continue
+    (( allow_self_tag )) && [[ "$remote_ref" == refs/tags/?* \
+      && "$checked_ref" == "$remote_ref" ]] && continue
+    REPLY="$checked_ref"
+    return 3
+  done
+  checked_refs+=("${reply[@]}")
+  for checked_ref in "${(@u)checked_refs}"; do
+    symbolic_rc=0
+    command git symbolic-ref --quiet "$checked_ref" >/dev/null 2>&1 \
+      || symbolic_rc=$?
+    if (( symbolic_rc == 0 )); then
+      REPLY="$checked_ref"
+      return 1
+    elif (( symbolic_rc == 130 || symbolic_rc == 143 )); then
+      REPLY="$checked_ref"
+      return $symbolic_rc
+    elif (( symbolic_rc != 1 )); then
+      REPLY="$checked_ref"
+      return 2
+    fi
+  done
+  return 0
+}
+
+# Prints why a push of REMOTE_REF to REMOTE is refused for the status STATUS
+# and the ref REF that _git_tracking_refs_direct reported.
+# Usage: _git_tracking_refs_refusal STATUS REMOTE REMOTE_REF REF
+_git_tracking_refs_refusal() {
+  emulate -L zsh
+
+  local -i refusal_rc="$1"
+  local remote="$2"
+  local remote_ref="$3"
+  local checked_ref="$4"
+  local tracking_label="${checked_ref#refs/remotes/}"
+  if (( refusal_rc == 1 )); then
+    _git_error \
+      "Remote-tracking ref '$(_git_display_escape "$tracking_label")' is a symbolic ref; the push would change the ref it points to."
+  elif (( refusal_rc == 3 )); then
+    _git_error \
+      "The fetch refspec of '$(_git_display_escape "$remote")' maps $(_git_display_escape "$remote_ref") to $(_git_display_escape "$checked_ref"), which is not a remote-tracking ref; Git would change it after the push."
+    _git_info \
+      "Map that refspec below refs/remotes/ (remote.$(_git_display_escape "$remote").fetch), then retry."
+  else
+    _git_error \
+      "Unable to inspect the remote-tracking ref '$(_git_display_escape "$tracking_label")'."
+  fi
+}
+
+# Refuses a push of REMOTE_REF to REMOTE when a local ref that the remote's
+# fetch refspecs map it to is symbolic, cannot be inspected, or is not a
+# remote-tracking ref, returning 1; --allow-self-tag also accepts a tag mapped
+# to itself, for tag publication only. An interrupted probe returns its status
+# (130 or 143) for the caller to report.
+# Usage: _git_require_direct_tracking_refs [--allow-self-tag] REMOTE REMOTE_REF
+_git_require_direct_tracking_refs() {
+  emulate -L zsh
+
+  local -a direct_options=()
+  if [[ "${1:-}" == "--allow-self-tag" ]]; then
+    direct_options=(--allow-self-tag)
+    shift
+  fi
+  local REPLY=""
+  local -i direct_rc=0
+  _git_tracking_refs_direct "${direct_options[@]}" "$1" "$2" || direct_rc=$?
+  (( direct_rc == 0 )) && return 0
+  (( direct_rc == 130 || direct_rc == 143 )) && return $direct_rc
+  _git_tracking_refs_refusal "$direct_rc" "$1" "$2" "$REPLY"
   return 1
 }
 
