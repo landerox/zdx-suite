@@ -915,10 +915,11 @@ names, apart from the gaps listed after these controls:
   `git-push` update tracking refs with `--no-deref`, and the fetch-prune and
   temporary-ref transactions of `git-pull` put `option no-deref` before every
   command, because the option covers only the next one. After a push to the
-  remote URL, Git itself updates or deletes, through any alias, the local ref
-  that the first matching fetch refspec of the remote maps the pushed ref to;
-  whether a negative refspec stops that update differs between Git releases,
-  so the check ignores negative refspecs. Every command that pushes
+  remote URL, recent Git releases update or delete, through any alias, the
+  local ref that the first matching fetch refspec of the remote maps the
+  pushed ref to; releases differ on that update and on whether a negative
+  refspec stops it, so the check assumes the update happens and ignores
+  negative refspecs. Every command that pushes
   (`git-push`, `git-pr-create`, `git-tag-push`, `git-tag-create --push`,
   `clean-remote-merged`, and `git-tag-delete`) therefore maps each pushed ref
   through every fetch refspec of the remote, wildcards included and negative

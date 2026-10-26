@@ -1377,7 +1377,7 @@ MOCK
 
     # With a direct ref there, the push goes ahead and Git updates that ref.
     # Drop the negative refspec first: Git releases differ on whether it
-    # stops that update.
+    # stops an update there.
     command git config --fixed-value --unset-all remote.origin.fetch \
       "^refs/heads/feature" || return 17
     command git update-ref --no-deref refs/remotes/cache/feature \
@@ -1388,8 +1388,13 @@ MOCK
       || return 14
     [[ "$(command git --git-dir="$REMOTE_REPO" rev-parse refs/heads/feature)" \
       == "$REFSPEC_LOCAL_OID" ]] || return 15
-    [[ "$(command git rev-parse refs/remotes/cache/feature)" \
-      == "$REFSPEC_LOCAL_OID" ]] || return 16
+    # Whether Git then updates cache/feature differs between releases (Git
+    # 2.56 does after a push to the remote URL, Git 2.55 does not); either
+    # way the alias is gone, so main cannot move.
+    local cache_oid=""
+    cache_oid=$(command git rev-parse refs/remotes/cache/feature) || return 16
+    [[ "$cache_oid" == "$REFSPEC_LOCAL_OID" || "$cache_oid" == "$REFSPEC_MAIN_OID" ]] \
+      || return 16
     print -r -- "$refspec_rc:$negative_rc:$direct_rc"
   '
 
