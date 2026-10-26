@@ -112,6 +112,102 @@ MOCK
   [ -z "$output" ]
 }
 
+# On Ubuntu 26.04, whose coreutils are uutils, cat reported a write-only
+# descriptor as an empty, successful read. This stub prints nothing and exits
+# 0 for every input, and records that it ran, so a capture that still reads
+# through an external cat fails on any host, whatever cat the host has.
+make_silent_cat_stub() {
+  export SILENT_CAT_DIR="$TEST_TEMP_DIR/silent-cat"
+  mkdir -p "$SILENT_CAT_DIR"
+  cat > "$SILENT_CAT_DIR/cat" <<MOCK
+#!/bin/sh
+: > '$TEST_TEMP_DIR/cat-called'
+exit 0
+MOCK
+  chmod +x "$SILENT_CAT_DIR/cat"
+}
+
+@test "git menu capture: a failed descriptor read stays a failure when cat reports success" {
+  make_silent_cat_stub
+  run run_zsh '
+    source "$ZSH_CUSTOM/functions/git-menu.zsh"
+    command mkdir -m 700 "$HOME/picker-root"
+    local TMPDIR="$HOME/picker-root"
+    path=("$SILENT_CAT_DIR" $path)
+    _git_fzf() { print -r -- selected; }
+    sysopen() {
+      if [[ "$1" == -r ]]; then
+        builtin sysopen -w "${@[2,-1]}"
+      else
+        builtin sysopen "$@"
+      fi
+    }
+    local -a remaining=()
+    for copy in core git; do
+      [[ "$copy" == git ]] && unset -f _zdx_picker_capture
+      _git_fzf_capture 2>/dev/null
+      [[ $? == 125 && -z "$REPLY" ]] || return 91
+      remaining=("$TMPDIR"/zdx-git-fzf.*(N))
+      (( ${#remaining} == 0 )) || return 92
+    done
+    [[ ! -e "$TEST_TEMP_DIR/cat-called" ]] || return 93
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# Captures each payload through the Git wrapper, first with the core and then
+# with the Git copy, and compares REPLY with what command substitution makes
+# of the same bytes: every trailing newline removed, all other bytes kept.
+round_trip_program() {
+  cat <<'ZSH'
+    source "$ZSH_CUSTOM/functions/git-menu.zsh" || return 80
+    command mkdir -m 700 "$HOME/picker-root" || return 81
+    local TMPDIR="$HOME/picker-root"
+    path=("$SILENT_CAT_DIR" $path)
+    local -a payloads=(
+      $'row\n'
+      $'first row\nsecond row\nthird row\n'
+      $'kept\n\ninner\n\n\n'
+      'no trailing newline'
+      $'\n\nleading\n'
+      $'carriage\r\n'
+      $'caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x93\x81\n'
+      $'raw \x80\x83\x9f\xa0\xfe\xff bytes\n'
+      $'nul\0inside\n'
+      $'\n\n\n'
+      ''
+    )
+    _git_fzf() { print -rn -- "$GIT_PAYLOAD"; }
+    local copy="" expected="" GIT_PAYLOAD=""
+    local -i index=0 rc=0
+    for copy in core git; do
+      [[ "$copy" == git ]] && unset -f _zdx_picker_capture
+      for index in {1..${#payloads}}; do
+        GIT_PAYLOAD="${payloads[index]}"
+        expected=$(print -rn -- "$GIT_PAYLOAD")
+        _git_fzf_capture </dev/null
+        rc=$?
+        if (( rc != 0 )) || [[ "$REPLY" != "$expected" ]]; then
+          print -r -- "$copy payload $index: status $rc, ${(q+)REPLY} for ${(q+)expected}"
+          return 91
+        fi
+      done
+      print -r -- "$copy: ${#payloads} selections kept"
+    done
+    local -a remaining=("$TMPDIR"/zdx-git-fzf.*(N))
+    (( ${#remaining} == 0 )) || return 92
+    [[ ! -e "$TEST_TEMP_DIR/cat-called" ]] || return 93
+ZSH
+}
+
+@test "git menu capture: selections round-trip byte for byte without an external cat" {
+  make_silent_cat_stub
+  run run_zsh "$(round_trip_program)"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'core: 11 selections kept\ngit: 11 selections kept' ]
+}
+
 @test "git menu capture: failed temporary creation leaves no directory in REPLY" {
   cat > "$TEST_MOCK_BIN/mktemp" <<'MOCK'
 #!/usr/bin/env bash

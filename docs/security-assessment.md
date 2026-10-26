@@ -263,8 +263,12 @@ snippet and executes unintended code.
   The core capture uses a private mode-700 directory and mode-600 result file
   below the validated temporary root, identity checks before and after the
   picker, a byte limit (64 KiB for Git), refusal of data returned with a
-  failed picker status, a checked read, and removal of only the unchanged
-  objects. The size limit is checked after the picker exits; only the
+  failed picker status, a read through the Zsh `sysread` builtin, never an
+  external `cat`, that must return exactly the size checked after the picker
+  exits, and removal of only the unchanged objects. Before, the read went
+  through `cat`, and on a host whose `cat` reports a failed read as an empty
+  success (uutils on Ubuntu 26.04) the capture failed open to an empty
+  selection, not to forged data. The size limit is checked after the picker exits; only the
   Developer suite also caps writes while the picker runs. The local-change
   pickers (`git-unstage`, `git-discard`, `git-stash`, the `git-amend` and
   stash action dialogs, and the `git-pull` mode dialog) and the branch pickers
