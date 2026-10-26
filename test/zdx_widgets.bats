@@ -2,7 +2,8 @@
 # ZLE insert widgets: candidate sources, the shared picker, quoting into
 # LBUFFER, cancellation, missing tools, lazy loading, and the unbound-only
 # key binding rule. Widget bodies run outside ZLE with `zle` replaced by a
-# recorder; LBUFFER is then an ordinary parameter.
+# recorder; LBUFFER is then an ordinary parameter. The Ctrl-G cases press
+# the chord in a real ZLE on a pseudo-terminal.
 # shellcheck disable=SC2016
 
 setup() {
@@ -92,6 +93,92 @@ make_branch_repo() {
   git clone -q "$remote" "$1" 2>/dev/null
   git -C "$1" config user.email "jane@example.com"
   git -C "$1" config user.name "Jane Doe"
+}
+
+# widget_pty WAIT SEND...: an interactive `zsh -f -i` on a pseudo-terminal
+# loads the plugin with git-menu replaced by a probe, then takes each WAIT
+# SEND pair in turn: once the output since the previous pair matches the
+# pattern WAIT, it types SEND. The probe records whether its standard input
+# and error are terminals, asks one line confirmation, and asks one vared
+# text prompt prefilled with a subject, like the amend prompt. Every
+# confirmation is answered y and every probe text prompt Z, each followed by
+# Enter (a CR), as a user does. ^Xm opens a read-from-minibuffer prompt.
+# Prints the pairs completed, then each record the shell printed, in order.
+widget_pty() {
+  local setup_file="$TEST_TEMP_DIR/pty-setup.zsh"
+  cat > "$setup_file" <<'SETUP'
+unset -m 'ZDX_*'
+bindkey -e
+setopt hist_ignore_space
+PS1='ZDXREADY> '
+source "$WIDGET_ROOT/zdx-suite.plugin.zsh" || print -r -- "setup: the plugin failed to load"
+_probe_error() { print -u2 -r -- "probe: $*"; }
+git-menu() {
+  local stdin_state=NOT stderr_state=NOT text="the prefilled subject line"
+  local -i confirm_rc=0 vared_rc=0
+  [[ -t 0 ]] && stdin_state=TTY
+  [[ -t 2 ]] && stderr_state=TTY
+  _zdx_confirm_prompt --style line --error _probe_error -- "Proceed?" \
+    || confirm_rc=$?
+  print -r -- "ASK-TEXT"
+  vared -p "Text: " text || vared_rc=$?
+  print -r -- "RESULT-${1-}:stdin=${stdin_state}:stderr=${stderr_state}:confirm=${confirm_rc}:VARED=${vared_rc}:${text}:END"
+}
+probe_kept() { print -r -- "KEPT:$*"; }
+probe_history() { print -r -- "HISTORY=${#${(@M)${(@v)history}:#( |)git-menu}}"; }
+probe_vared() { local value=""; vared -p "Value: " value; print -r -- "VALUE=[${value}]"; }
+autoload -Uz read-from-minibuffer
+probe_minibuffer() { read-from-minibuffer 'Mini: '; zle -M "MINI=[$REPLY]"; }
+zle -N probe_minibuffer
+bindkey '^Xm' probe_minibuffer
+print -r -- "binding:$(bindkey -M main -- '^G')"
+SETUP
+  WIDGET_PTY_SETUP="$setup_file" zsh -f -c '
+    zmodload zsh/zpty || exit 80
+    zmodload zsh/datetime || exit 79
+    local enter="${(#):-13}" out="" chunk=""
+    local records="(binding:\"[^\"]*\" [a-z-]+|RESULT-[a-z]*:stdin=[A-Z]+:stderr=[A-Z]+:confirm=[0-9]+:VARED=[0-9]+:[A-Za-z ]*:END|KEPT:[a-z ]+|HISTORY=[0-9]+|VALUE=\[[^]]*]|LOOP-[0-9]+|MINI=\[[^]]*])"
+    local -i pairs=$(( $# / 2 )) completed=0 mark=1 confirm_mark=1 text_mark=1
+    zpty ZDXPTY env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME -u EDITOR -u VISUAL \
+      TERM=xterm LC_ALL=C NO_COLOR=1 zsh -f -i || exit 81
+    {
+      zpty -w ZDXPTY "source \"\$WIDGET_PTY_SETUP\""
+      # A wall-clock bound sized for slow hosted runners; the loop ends as
+      # soon as the last pair has been typed.
+      local -F deadline=$(( EPOCHREALTIME + 30 ))
+      while (( completed < pairs && EPOCHREALTIME < deadline )); do
+        if zpty -r -t ZDXPTY chunk 2>/dev/null; then
+          out+="$chunk"
+        else
+          command sleep 0.01
+        fi
+        # Each prompt is answered once, after it appears.
+        if [[ "${out[confirm_mark,-1]}" == *"[y/N]"* ]]; then
+          zpty -n -w ZDXPTY "y$enter"
+          confirm_mark=$(( ${#out} + 1 ))
+        fi
+        if [[ "${out[text_mark,-1]}" == *ASK-TEXT*"Text: "* ]]; then
+          zpty -n -w ZDXPTY "Z$enter"
+          text_mark=$(( ${#out} + 1 ))
+        fi
+        [[ "${out[mark,-1]}" == ${~1} ]] || continue
+        [[ -n "$2" ]] && zpty -n -w ZDXPTY "$2"
+        shift 2
+        (( ++completed ))
+        mark=$(( ${#out} + 1 ))
+      done
+    } always {
+      zpty -d ZDXPTY 2>/dev/null
+    }
+    print -r -- "pairs=$completed/$pairs"
+    local rest="$out"
+    while [[ "$rest" =~ $records ]]; do
+      print -r -- "$MATCH"
+      rest="${rest[MEND+1,-1]}"
+    done
+    (( completed == pairs )) || print -r -- "transcript: ${(V)out[-800,-1]}"
+    return 0
+  ' _ "$@"
 }
 
 @test "widgets: the module loads silently, idempotently, and only edits LBUFFER" {
@@ -492,6 +579,54 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" != *'empty:"^G" git-menu-widget'* ]]
   [[ "$output" == *"git-widget:user:_zdx_git_menu_widget"* ]]
+}
+
+@test "widgets: Ctrl-G runs git-menu as a command line that can prompt and restores the edited line" {
+  # ZLE runs a widget with standard input from /dev/null and cannot reenter
+  # itself for vared, so the chord must run git-menu as a typed command. The
+  # direct call is the control. Then the chord on a half-typed line shorter
+  # than the prefilled answer, and on an empty line: each time the probe must
+  # see the terminal and get both answers with Z appended at the end of the
+  # prefill, the half-typed line must come back and run, and
+  # HIST_IGNORE_SPACE must drop both calls.
+  local answered="confirm=0:VARED=0:the prefilled subject lineZ:END"
+  run widget_pty \
+    '*binding:*ZDXREADY> *' $'git-menu direct\r' \
+    '*RESULT-direct:*:END*ZDXREADY> *' $'probe_kept one two\a' \
+    '*RESULT-:*:END*ZDXREADY> *' $'\r' \
+    '*KEPT:*ZDXREADY> *' $'\a' \
+    '*RESULT-:*:END*ZDXREADY> *' $'probe_history\r' \
+    '*HISTORY=*ZDXREADY> *' ''
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = 'binding:"^G" git-menu-widget' ]
+  [ "${lines[2]}" = "RESULT-direct:stdin=TTY:stderr=TTY:$answered" ]
+  [ "${lines[3]}" = "RESULT-:stdin=TTY:stderr=TTY:$answered" ]
+  [ "${lines[4]}" = "KEPT:one two" ]
+  [ "${lines[5]}" = "RESULT-:stdin=TTY:stderr=TTY:$answered" ]
+  [ "${lines[6]}" = "HISTORY=0" ]
+  [ "${lines[0]}" = "pairs=6/6" ]
+  [ "${#lines[@]}" -eq 7 ]
+}
+
+@test "widgets: Ctrl-G does nothing in vared, a continuation line, or a recursive edit" {
+  # There accept-line would hand ' git-menu' to that read instead of running
+  # the menu, so the chord must do nothing, and the text typed next must reach
+  # the same read. No probe record may appear.
+  run widget_pty \
+    '*binding:*ZDXREADY> *' $'probe_vared\r' \
+    '*Value: *' $'\aok\r' \
+    '*VALUE=*ZDXREADY> *' $'for i in 1; do\r' \
+    '*for> *' $'\aprint -r -- LOOP-$i; done\r' \
+    '*LOOP-1*ZDXREADY> *' $'\x18m' \
+    '*Mini: *' $'\aok\r' \
+    '*MINI=*' ''
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = 'binding:"^G" git-menu-widget' ]
+  [ "${lines[2]}" = "VALUE=[ok]" ]
+  [ "${lines[3]}" = "LOOP-1" ]
+  [ "${lines[4]}" = "MINI=[ok]" ]
+  [ "${lines[0]}" = "pairs=7/7" ]
+  [ "${#lines[@]}" -eq 5 ]
 }
 
 @test "widgets: lazy mode loads the widget module only on first use" {

@@ -32,6 +32,10 @@ verification, and remaining limitations.
   sets. Under an inherited `KSH_ARRAYS`, `NO_UNSET`, `SH_WORD_SPLIT`, or
   `emulate sh`, commands crashed, refused every profile directory, or picked
   the wrong profile to rename or remove.
+- Widgets: `Ctrl-G` runs `git-menu` as a typed command line, so its
+  confirmations and text prompts work, the line you were editing comes back at
+  the next prompt, and the prompt refreshes; before, every confirmation and text
+  prompt reached through `Ctrl-G` failed for lack of a terminal.
 
 ## [0.1.0] — 2026-10-22
 
