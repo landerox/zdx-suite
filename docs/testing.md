@@ -925,6 +925,9 @@ the event it depends on, not from the start of the test: a signal that must
 reach a wait is sent from a `DEBUG` trap when the shell reaches that wait, and a
 stall that must outlast a deadline waits for the event that marks the deadline,
 such as the watchdog's token in its marker, instead of sleeping a fixed time.
+The process that sends such a signal is not the waiting shell's child: a
+child's exit delivers SIGCHLD with the signal, and where SIGCHLD has the lower
+signal number, as for SIGUSR1 on macOS, a Zsh `wait` then keeps waiting.
 
 BATS loads `test/setup_suite.bash` whenever it runs a file from `test/`. It
 checks the Bash floor once and exports `BATS_TEST_TIMEOUT=300` unless the

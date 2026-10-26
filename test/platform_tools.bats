@@ -308,11 +308,18 @@ _platform_stall_before_watchdog_kill() {
     && ! -e "$HOME/caller.signaled" ]]; then
     : >| "$HOME/caller.signaled"
     print -r -- "wait-start $EPOCHREALTIME" >> "$HOME/claim.trace"
+    # The sender is a grandchild of the caller. A child exits right after its
+    # USR1, so its SIGCHLD can reach the caller together with the signal, and
+    # where SIGCHLD has the lower signal number, as on macOS, Zsh's wait then
+    # sees SIGCHLD last and keeps waiting. A grandchild's exit never signals
+    # the caller.
     (
-      zselect -t 100
-      print -r -- "usr1-sent $EPOCHREALTIME" >> "$HOME/claim.trace"
-      builtin kill -USR1 $$
-    ) </dev/null >/dev/null 2>&1 3>&- &
+      (
+        zselect -t 100
+        print -r -- "usr1-sent $EPOCHREALTIME" >> "$HOME/claim.trace"
+        builtin kill -USR1 $$
+      ) </dev/null >/dev/null 2>&1 3>&- &
+    ) </dev/null >/dev/null 2>&1 3>&-
     return 0
   fi
   # Zsh shows an assignment with a trailing space.
