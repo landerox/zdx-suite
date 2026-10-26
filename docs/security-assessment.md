@@ -494,7 +494,13 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   and nested repositories are never deleted, and revalidates the complete
   reviewed state after confirmation;
   `git-unstage` requires confirmation or `--yes` before dropping a staged
-  version that is not in the working tree; history-rewriting plans bind the
+  version that is not in the working tree, and it judges that risk from the
+  index and working tree its picker listed: `git-unstage` and `git-amend` take
+  their snapshot before the inventory, repository-wide even below the root
+  with `diff.relative`, keep the index and working-tree parts apart, and refuse
+  a plan whose state changed while the picker or the action dialog was open
+  (`git_local_changes.bats`). The window between the final check and the
+  write remains. History-rewriting plans bind the
   symbolic branch as well as the commit. Discard, stash deletion, multi-ref
   pushes, tag publication, tag deletion, and remote branch cleanup stop before
   later targets on interruption. A local identity profile writes explicit

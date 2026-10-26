@@ -26,43 +26,56 @@ _git_changes_context_line() {
 
 # --- Private repository state helpers ----------------------------------------
 
+# REPLY: a fingerprint of every unstaged and staged change in the repository,
+# "<working-tree diff hash>:<staged diff hash>". The two diffs are hashed
+# apart because a change has the same diff text in either place: one
+# concatenated hash would not change when a change moves between the index
+# and the working tree. --no-relative keeps both repository-wide when
+# diff.relative is set and the caller runs below the root.
 _git_changes_diff_fingerprint() {
   emulate -L zsh
   setopt localoptions no_aliases
 
   local temp_dir=""
-  local state_file=""
-  local fingerprint=""
+  local worktree_file=""
+  local index_file=""
+  local worktree_hash=""
+  local index_hash=""
   local -i command_code=0
 
   temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-state.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }
-  state_file="$temp_dir/state"
+  worktree_file="$temp_dir/worktree"
+  index_file="$temp_dir/index"
 
   {
-    command git --literal-pathspecs diff \
-      --binary --full-index --no-ext-diff --no-textconv -- >| "$state_file"
+    command git --literal-pathspecs diff --no-relative \
+      --binary --full-index --no-ext-diff --no-textconv -- >| "$worktree_file"
     command_code=$?
 
     if (( command_code == 0 )); then
-      command git --literal-pathspecs diff --cached \
-        --binary --full-index --no-ext-diff --no-textconv -- >> "$state_file"
+      command git --literal-pathspecs diff --cached --no-relative \
+        --binary --full-index --no-ext-diff --no-textconv -- >| "$index_file"
       command_code=$?
     fi
 
     if (( command_code == 0 )); then
-      fingerprint=$(command git hash-object -- "$state_file")
+      worktree_hash=$(command git hash-object -- "$worktree_file")
+      command_code=$?
+    fi
+    if (( command_code == 0 )); then
+      index_hash=$(command git hash-object -- "$index_file")
       command_code=$?
     fi
   } always {
-    command rm -f -- "$state_file" 2>/dev/null
+    command rm -f -- "$worktree_file" "$index_file" 2>/dev/null
     command rmdir -- "$temp_dir" 2>/dev/null
   }
 
   (( command_code == 0 )) || return "$command_code"
-  REPLY="$fingerprint"
+  REPLY="${worktree_hash}:${index_hash}"
 }
 
 # REPLY: a fingerprint of one path's worktree content against the index, or
@@ -457,14 +470,24 @@ git-unstage() {
   fi
 
   local -a reply=()
+  # The snapshot precedes the inventory, so the plan is classified from the
+  # state it binds and any later change refuses it.
+  local -a snapshot=()
+  _git_changes_snapshot || {
+    _git_error "Unable to capture repository state."
+    return 1
+  }
+  snapshot=("${reply[@]}")
+
+  # --no-relative keeps every inventory repository-wide under diff.relative.
   local -a staged_pairs=()
   local -a worktree_pairs=()
-  _git_name_status_pairs --cached -- || {
+  _git_name_status_pairs --cached --no-relative -- || {
     _git_error "Unable to discover staged files."
     return 1
   }
   staged_pairs=("${reply[@]}")
-  _git_name_status_pairs -- || {
+  _git_name_status_pairs --no-relative -- || {
     _git_error "Unable to inspect working-tree changes."
     return 1
   }
@@ -537,6 +560,14 @@ git-unstage() {
     local -a selected_ids=("${reply[@]}")
     (( ${#selected_ids[@]} > 0 )) || return 0
 
+    # The picker showed that inventory; a change made while it was open
+    # refuses the plan instead of rebuilding it.
+    _git_changes_snapshot_matches "${snapshot[@]}" || {
+      _git_error \
+        "Repository state changed while the picker was open; nothing was unstaged. Run git-unstage again."
+      return 1
+    }
+
     if (( ${selected_ids[(Ie)1]} )); then
       target_files=("${staged_files[@]}")
       target_letters=("${staged_letters[@]}")
@@ -549,12 +580,6 @@ git-unstage() {
     fi
   fi
 
-  local -a snapshot=()
-  _git_changes_snapshot || {
-    _git_error "Unable to capture repository state."
-    return 1
-  }
-  snapshot=("${reply[@]}")
   _git_changes_head_label "${snapshot[4]}"
   local head_label="$REPLY"
 
@@ -630,7 +655,7 @@ git-unstage() {
   local -i command_code="${pipeline_codes[2]:-1}"
   (( pipeline_codes[1] == 0 || command_code != 0 )) || command_code=1
 
-  _git_capture_nul diff --cached --name-only --no-renames -z -- || {
+  _git_capture_nul diff --cached --name-only --no-renames --no-relative -z -- || {
     _git_error "Unable to verify the index after unstaging."
     return 1
   }
@@ -1464,8 +1489,23 @@ git-amend() {
       published_refs+=("$published_ref")
   done
 
+  # The snapshot precedes the staged inventory, so the plan lists the state it
+  # binds and any later change refuses it.
+  local -a snapshot=()
+  _git_changes_snapshot || {
+    _git_error "Unable to capture repository state."
+    return 1
+  }
+  snapshot=("${reply[@]}")
+  [[ "${snapshot[4]}" == "$head_identity" ]] || {
+    _git_error "HEAD changed while planning; refusing to amend."
+    return 1
+  }
+
+  # git commit --amend takes the whole index, so the plan lists it
+  # repository-wide even below the root under diff.relative.
   local -a staged_pairs=()
-  _git_name_status_pairs --cached -- || {
+  _git_name_status_pairs --cached --no-relative -- || {
     _git_error "Unable to discover staged changes."
     return 1
   }
@@ -1541,18 +1581,15 @@ git-amend() {
         return 0
       fi
     fi
-  fi
 
-  local -a snapshot=()
-  _git_changes_snapshot || {
-    _git_error "Unable to capture repository state."
-    return 1
-  }
-  snapshot=("${reply[@]}")
-  [[ "${snapshot[4]}" == "$head_identity" ]] || {
-    _git_error "HEAD changed while planning; refusing to amend."
-    return 1
-  }
+    # The dialog showed that inventory; a change made while it was open
+    # refuses the plan instead of rebuilding it.
+    _git_changes_snapshot_matches "${snapshot[@]}" || {
+      _git_error \
+        "Repository state changed while the action dialog was open; nothing was amended. Run git-amend again."
+      return 1
+    }
+  fi
 
   if [[ "$add_staged" == "yes" ]] && (( staged_count == 0 )); then
     _git_error "Nothing is staged; there are no changes to add to the commit."
@@ -1668,7 +1705,8 @@ git-amend() {
     && "${new_identity#* }" == "${head_identity#* }" \
     && "$new_parents" == "$parent_oids" ]] || state_ok=0
   if [[ "$add_staged" == "yes" ]]; then
-    command git diff --cached --quiet "$new_oid" -- 2>/dev/null || state_ok=0
+    command git diff --cached --quiet --no-relative "$new_oid" -- 2>/dev/null ||
+      state_ok=0
   else
     [[ "$new_tree" == "$old_tree" ]] || state_ok=0
   fi
