@@ -239,15 +239,58 @@ _sys_timed() {
   fi
 }
 
+# REPLY is the `ps -Ao pid=,ppid=` listing, read within an absolute two-second
+# deadline. The wait goes in short slices and the remaining time is measured
+# again after every wakeup, so neither a stalled ps nor signals that interrupt
+# the read can stretch it. A listing that is not complete by then is
+# abandoned: the descriptor is closed and its ps, whose PID this shell may no
+# longer own, is never signaled. Status 1 without a complete listing, which
+# includes a shell without zsh/system.
+_sys_timeout_ps_listing() {
+  emulate -L zsh
+  REPLY=""
+  zmodload -F zsh/system b:sysread 2>/dev/null || return 1
+  zmodload -F zsh/datetime p:EPOCHREALTIME 2>/dev/null || return 1
+  local -i listing_fd=-1 read_rc=4 reads=0
+  local -F deadline=$(( EPOCHREALTIME + 2 )) slice=0
+  local chunk="" listing=""
+  {
+    { exec {listing_fd}< <(exec command ps -Ao pid=,ppid= 2>/dev/null) } \
+      2>/dev/null || return 1
+    while (( ++reads <= 4096 )); do
+      slice=$(( deadline - EPOCHREALTIME ))
+      if (( slice <= 0 )); then
+        read_rc=4
+        break
+      fi
+      (( slice > 0.05 )) && slice=0.05
+      sysread -i "$listing_fd" -t "$slice" chunk
+      read_rc=$?
+      # 4: nothing within this slice, or an interrupted wait; 5: end of file.
+      if (( read_rc == 0 )); then
+        listing+="$chunk"
+      elif (( read_rc != 4 )); then
+        break
+      fi
+    done
+  } always {
+    # Closed on every path, an interrupt included.
+    (( listing_fd < 0 )) || exec {listing_fd}<&-
+  }
+  (( read_rc == 5 )) || return 1
+  REPLY="$listing"
+}
+
 # Sets reply to the direct process and every descendant visible in a portable
-# pid/ppid snapshot. The direct PID remains available even if ps fails.
+# pid/ppid listing. The direct PID remains available without a listing.
 _sys_timeout_tree_pids() {
   local root_pid="$1"
   reply=("$root_pid")
   [[ "$root_pid" == <-> ]] || return 2
 
-  local process_output
-  process_output=$(command ps -Ao pid=,ppid= 2>/dev/null) || return 0
+  local REPLY="" process_output
+  _sys_timeout_ps_listing || return 0
+  process_output="$REPLY"
   local -a process_lines=("${(@f)process_output}")
   local -A selected=(["$root_pid"]=1)
   local -i changed=1 pass=0
@@ -270,7 +313,7 @@ _sys_timeout_tree_pids() {
     done
   done
 
-  reply=("${(k)selected}")
+  reply=("${(@k)selected}")
 }
 
 _sys_timeout_signal_tree() {
@@ -280,6 +323,57 @@ _sys_timeout_signal_tree() {
   _sys_timeout_tree_pids "$root_pid" || reply=("$root_pid")
   (( ${#reply[@]} > 0 )) \
     && builtin kill "-$signal_name" "${reply[@]}" 2>/dev/null
+  return 0
+}
+
+# The caller and the watchdog each append their own token to the marker once,
+# and the first token settles the deadline: the caller cancelled it, or the
+# watchdog fired it. Status 0 when <token> is first, 1 when the other side's
+# token is, and 2 when no token can be read.
+_sys_timeout_claim() {
+  emulate -L zsh
+  local marker="${1-}" token="${2-}" first=""
+  { print -r -- "$token" >> "$marker" } 2>/dev/null
+  { IFS= read -r first < "$marker" } 2>/dev/null
+  [[ -n "$first" ]] || return 2
+  [[ "$first" == "$token" ]] || return 1
+  return 0
+}
+
+# Status 0 while <pid> is a running or stopped job of this shell. Zsh drops a
+# job, or marks it done, only once it has reaped the process, so a PID that
+# passes is still this shell's own to signal. Without zsh/parameter every PID
+# passes.
+_sys_timeout_job_running() {
+  emulate -L zsh
+  local pid="${1-}" job=""
+  [[ "$pid" == <1-> ]] || return 1
+  zmodload -F zsh/parameter p:jobstates 2>/dev/null || return 0
+  for job in "${(@k)jobstates}"; do
+    [[ "${jobstates[$job]}" == *":${pid}="(running|suspended)* ]] && return 0
+  done
+  return 1
+}
+
+# Watchdog subshell only: wait at most a minute for the caller to stop the
+# watchdog, so that the caller's signal finds it. The wait ends early once the
+# caller is gone, that is, once <caller-pid>, read by the caller before the
+# fork, is no longer the parent.
+_sys_timeout_linger() {
+  emulate -L zsh
+  setopt TRAPS_ASYNC
+  local caller_pid="${1-}"
+  local -i slice=0
+  while (( slice++ < 60 )); do
+    if [[ "$caller_pid" == <1-> && -n "${sysparams[ppid]-}" ]]; then
+      [[ "${sysparams[ppid]}" == "$caller_pid" ]] || return 0
+    fi
+    if zmodload zsh/zselect 2>/dev/null; then
+      zselect -t 100 2>/dev/null || :
+    else
+      command sleep 1
+    fi
+  done
   return 0
 }
 
@@ -304,27 +398,59 @@ _sys_run_with_timeout() {
     command gtimeout -k 2s "${seconds}s" "$@"
   elif (( seconds > 0 )); then
     setopt LOCAL_OPTIONS NO_MONITOR
-    local timeout_marker
+    # The marker's first token decides whether the watchdog signals, so it
+    # lives only below a validated temporary root, as the core's does.
+    local REPLY="" timeout_parent="" timeout_marker=""
+    _sys_temp_parent_safe "${TMPDIR:-/tmp}" || {
+      _sys_error \
+        "TMPDIR must be an owner-private or root-owned sticky directory for bounded commands."
+      return 1
+    }
+    timeout_parent="$REPLY"
     timeout_marker=$(umask 077; command mktemp \
-      "${TMPDIR:-/tmp}/zdx-timeout.XXXXXX") || return 1
-    local -i command_pid watchdog_pid command_rc=0 timed_out=0
+      "${timeout_parent%/}/zdx-timeout.XXXXXX" 2>/dev/null) || return 1
+    [[ "${timeout_marker:h}" == "$timeout_parent" && -f "$timeout_marker" \
+      && ! -L "$timeout_marker" ]] || return 1
+    local -i command_pid watchdog_pid command_rc=0 timed_out=0 claim_rc=0
+    local caller_pid=""
+    zmodload -F zsh/system p:sysparams 2>/dev/null \
+      && caller_pid="${sysparams[pid]}"
 
     "$@" &
     command_pid=$!
+    # The caller and the watchdog settle the deadline through one claim in the
+    # marker. A watchdog that fires holds the caller's TERM from its claim to
+    # the end of each pass, and every pass is bounded, so a command that exits
+    # on its first signal cannot cut a pass short and the caller never waits
+    # long. Between passes a TERM ends the watchdog at once; the trap stays in
+    # place, so no stop request is lost. A watchdog that does not fire signals
+    # nothing and waits, at most a minute, for the caller's KILL, which a
+    # TRAPTERM inherited from the caller's shell cannot hold either.
     (
+      local -i in_pass=0 stop_requested=0
+      setopt TRAPS_ASYNC
       if zmodload zsh/zselect 2>/dev/null; then
-        zselect -t "$(( seconds * 100 ))" 2>/dev/null || true
+        zselect -t "$(( seconds * 100 ))" 2>/dev/null || :
       else
         command sleep "$seconds"
       fi
-      print -r -- "expired" >| "$timeout_marker" 2>/dev/null || exit 1
-      _sys_timeout_signal_tree "$command_pid" TERM
-      if zmodload zsh/zselect 2>/dev/null; then
-        zselect -t 100 2>/dev/null || true
-      else
-        command sleep 1
+      trap 'if (( in_pass )); then stop_requested=1; else exit 0; fi' TERM
+      in_pass=1
+      if _sys_timeout_claim "$timeout_marker" watchdog; then
+        _sys_timeout_signal_tree "$command_pid" TERM
+        in_pass=0
+        (( stop_requested )) && exit 0
+        if zmodload zsh/zselect 2>/dev/null; then
+          zselect -t 100 2>/dev/null || :
+        else
+          command sleep 1
+        fi
+        in_pass=1
+        _sys_timeout_signal_tree "$command_pid" KILL
       fi
-      _sys_timeout_signal_tree "$command_pid" KILL
+      in_pass=0
+      (( stop_requested )) && exit 0
+      _sys_timeout_linger "$caller_pid"
     ) &
     watchdog_pid=$!
 
@@ -332,10 +458,20 @@ _sys_run_with_timeout() {
       wait "$command_pid" 2>/dev/null
       command_rc=$?
     } always {
-      [[ -s "$timeout_marker" ]] && timed_out=1
-      builtin kill -TERM "$watchdog_pid" 2>/dev/null
+      _sys_timeout_claim "$timeout_marker" caller || claim_rc=$?
+      (( claim_rc == 1 )) && timed_out=1
+      # Only a job this shell has not reaped is signaled.
+      if _sys_timeout_job_running "$watchdog_pid"; then
+        if (( timed_out )); then
+          # Fired: the watchdog honors this TERM once its current pass is over.
+          builtin kill -TERM "$watchdog_pid" 2>/dev/null
+        else
+          # Cancelled, or nothing recorded: the watchdog signals nothing.
+          builtin kill -KILL "$watchdog_pid" 2>/dev/null
+        fi
+      fi
       wait "$watchdog_pid" 2>/dev/null
-      if builtin kill -0 "$command_pid" 2>/dev/null; then
+      if _sys_timeout_job_running "$command_pid"; then
         _sys_timeout_signal_tree "$command_pid" TERM
         wait "$command_pid" 2>/dev/null
       fi

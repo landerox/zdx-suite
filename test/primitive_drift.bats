@@ -50,6 +50,13 @@ assert_identical_bodies() {
   assert_identical_bodies run_with_timeout "Environment VPN" env vpn
 }
 
+@test "primitive drift: the standalone System watchdog helpers are the core's" {
+  local base=""
+  for base in timeout_ps_listing timeout_claim timeout_job_running timeout_linger; do
+    assert_identical_bodies "$base" "" zdx sys || return 1
+  done
+}
+
 @test "primitive drift: every counted noun behaves like the core service" {
   run zsh -f -c '
     source "$1/functions.zsh" 2>/dev/null || exit 90

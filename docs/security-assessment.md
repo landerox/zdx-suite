@@ -2134,8 +2134,20 @@ memory or CPU during inspection.
 - System diagnostic version, package, and startup probes use bounded execution.
 - GNU `timeout` and `gtimeout` use a TERM deadline and KILL grace period, with
   process-group termination for descendants under GNU semantics. BusyBox-style
-  timeout is supported, with a Zsh-native direct-child watchdog when no timeout
-  binary exists. The core `_zdx_run_with_timeout` owns this order; its watchdog
+  timeout is supported, with a Zsh-native watchdog when no timeout binary
+  exists: at the deadline it sends TERM to the command and every descendant
+  visible in one process listing, and KILL one second later while the command
+  still runs. The caller and the watchdog settle the deadline through one
+  claim in the private marker; a signal pass that has begun reaches its whole
+  listing even when the command exits on its first signal; the listing has an
+  absolute two-second deadline, and an abandoned listing's `ps` is never
+  signaled, the pass then signaling the command alone; a watchdog that does
+  not fire signals nothing and is stopped with KILL, so a `TRAPTERM` function
+  in the user's shell cannot hold it; every wait of the watchdog is bounded;
+  the caller signals only processes it has not reaped; and the standalone
+  System copy, like the core, keeps its marker below a validated temporary
+  root (`platform_tools.bats`, `primitive_drift.bats`). The core
+  `_zdx_run_with_timeout` owns this order; its watchdog
   keeps its expiry marker below a validated temporary root and refuses an
   unsafe `TMPDIR` before running the command.
 - System process, port, and service collectors use bounded local probes.
@@ -2431,6 +2443,21 @@ offers no supported override; `--non-interactive` removes prompts, not that
 policy. These external behaviors are not covered by a
 universal no-wait/no-retry guarantee, and an active package mutation is not
 killed by a general watchdog.
+
+The Zsh watchdog signals only the processes in one `ps -Ao pid=,ppid=`
+listing: processes that left the command's tree before it are not signaled,
+and when no complete listing arrives within two seconds of wall-clock time
+(zsh/system missing, or `ps` missing, failing, or stalled) only the command
+is; an abandoned `ps` keeps running until it ends or writes again. As with GNU
+`timeout -k`, KILL follows only while the command runs, so a TERM-ignoring
+descendant of a command that exits on TERM survives. The watchdog is not the
+command's parent, so a command that exits on its own while a fired watchdog
+lists its tree can receive that pass's signal up to two seconds after the
+caller reaped it. When the marker cannot be written, no claim exists and the
+bound is not enforced. Without zsh/parameter the caller signals without its
+reaped-process check, and without zsh/system the watchdog cannot see that its
+caller died and lingers its full minute. After an interrupt past the
+deadline, the caller's own TERM pass and wait have no KILL escalation.
 
 ## Residual-risk priorities
 

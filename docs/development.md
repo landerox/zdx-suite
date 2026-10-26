@@ -426,8 +426,13 @@ moving them into their destination.
   equal its canonical form: on macOS the two always differ.
 - Bound an external command with `_zdx_run_with_timeout <seconds> <command...>`.
   It prefers `timeout`, then `gtimeout`, and otherwise uses a Zsh `zselect`
-  watchdog that signals the command's process tree, so a stock macOS host
-  needs neither. It returns `124` on timeout and `2` for invalid arguments; `0`
+  watchdog, so a stock macOS host needs neither: at the deadline the watchdog
+  sends TERM to the command and every descendant visible in one process
+  listing, and KILL one second later while the command still runs; a pass
+  that has begun reaches its whole listing even when the command exits on the
+  first signal, a listing that is not complete within two seconds is abandoned
+  and only the command is signaled, and the caller never signals a process it
+  has already reaped. It returns `124` on timeout and `2` for invalid arguments; `0`
   seconds runs the command unbounded. A suite that must work without the core
   keeps a private fallback that delegates when the core is loaded, as
   `_sys_run_with_timeout` does. The narrow fallbacks of the Git, Developer,
@@ -459,6 +464,7 @@ forms, and the tests named here keep the copies honest.
 | `_<prefix>_count_noun` | Identical copies; Git keeps its own body | System, Developer, Python, Workspace, Environment, File, and VPN | Text equality, and output parity with `_zdx_count_noun` for every suite |
 | `_<prefix>_duration_label` | Identical copies | System, Developer, and VPN | Text equality |
 | `_<prefix>_run_with_timeout` | Delegates to the core; without it, a narrow variant that fails closed without `timeout` or `gtimeout`, and System's own Zsh watchdog | Identical in Developer, Git, and File, and in Environment and VPN; Python and Workspace report through their own helpers | Text equality per group, and a bounded run without the core for every suite |
+| `_<prefix>_timeout_ps_listing`, `_<prefix>_timeout_claim`, `_<prefix>_timeout_job_running`, `_<prefix>_timeout_linger` | Identical copies of the core watchdog helpers | System | Text equality with the core |
 
 Edit a canonical primitive in `functions.zsh` and run `just sync-primitives`
 to rewrite the generated blocks between the `# >>> zdx-primitive NAME` and

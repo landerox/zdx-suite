@@ -368,8 +368,10 @@ section in snake_case with `null` for an unset value, `withheld_keys`,
 Optional version and package probes have short deadlines. GNU `timeout` or
 `gtimeout` is used with a TERM deadline and KILL grace period; GNU timeout's
 default process-group behavior also targets descendants. BusyBox-compatible
-timeout remains supported, and a Zsh-native watchdog terminates the descendant
-tree and reaps its direct child when neither implementation exists. Startup
+timeout remains supported, and a Zsh-native watchdog signals the command and
+the descendants visible in one process listing, or the command alone when no
+listing completes within two seconds, and reaps its direct child when neither
+implementation exists. Startup
 samples use a 15-second deadline. The ten samples and isolated profile pass
 execute startup files in eleven subprocesses; those files may still perform
 their usual external side effects.
