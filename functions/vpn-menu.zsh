@@ -677,6 +677,7 @@ _vpn_interactive() {
 }
 
 vpn-menu() {
+  emulate -L zsh
   case "${1:-}" in
     "")
       _vpn_interactive

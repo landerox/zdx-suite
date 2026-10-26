@@ -82,6 +82,7 @@ _vpn_rpt_code_block() {
 #   Effects:   read-only.
 #   Status:    0 on success, 1 when the platform or WireGuard is unavailable.
 vpn-summary() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-summary"
@@ -298,6 +299,7 @@ _vpn_details_sections() {
 #   Status:    0 on success or inaccessible live state, 1 when wg is missing,
 #              130 or 143 when authentication is interrupted.
 vpn-details() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-details"
@@ -319,6 +321,7 @@ vpn-details() {
 #   Requires:  curl and jq for the public exit section.
 #   Status:    0 after a best-effort diagnostic, 2 on bad arguments.
 vpn-ip-info() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-ip-info"
@@ -560,6 +563,7 @@ _vpn_dns_leak_hint() {
 #   Requires:  curl and jq.
 #   Status:    0 on success, 1 on failure.
 vpn-report() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-report"

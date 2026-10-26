@@ -248,6 +248,15 @@ each of them works in a new shell and the first call loads the suite.
 commands appear when the suite loads; `vpn-menu <command> [arguments...]`
 works in both cases.
 
+Once the suite is loaded, every public command, the `vpn-menu` router, and
+the `_vpn_dispatch` dispatcher start with `emulate -L zsh`. A caller that sets
+an option `emulate -L zsh` resets, such as `KSH_ARRAYS`, `PIPE_FAIL`,
+`NO_UNSET`, `SH_WORD_SPLIT`, `NO_CLOBBER`, or `POSIX_STRINGS`, or that runs
+`emulate sh`, therefore cannot change how these commands parse arguments,
+validate input, or report results. In a lazy shell, the first call still runs
+the core's lazy stub with the caller's options, so a caller with `KSH_ARRAYS`
+or `emulate sh` fails closed there, before any VPN code runs.
+
 ### Access
 
 | Command | Class | Behavior |
@@ -714,7 +723,7 @@ doing nothing and reporting success.
 | --- | --- |
 | `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, DNS hook idempotency, and hardening of the lower-case and indented headers import accepts |
 | `vpn_contract.bats` | The frozen 22-command fixture, six-way parity including exact dispatcher arms and direct completion bindings, a host-independent command set, dispatcher coverage, cancellation, timing label, argument forwarding, invalid-argument statuses |
-| `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity, the header context block, canonical unavailable marks, and em-dash profile notes |
+| `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity, `emulate -L zsh` on every entry point with safe paths and a clean import that behave alike from default, hostile-option, and `emulate sh` callers, the header context block, canonical unavailable marks, and em-dash profile notes |
 | `vpn_privilege.bats` | DNS hook injection refusal, `sudoedit` instead of a root editor, target revalidation after authentication, the restore undo copy, least privilege on read paths, announcement ordering, destructive controls (`--dry-run`, declined, no-terminal, `--yes` scope), secret redaction in excerpts and panes, state permissions and traversal/symlink refusal, stale pointers, and the platform gate |
 | `vpn_grammar.bats` | Exact completion grammar, identical through `vpn-menu` and as a direct command, parser-before-probe behavior, option terminators, operand cardinality, and safety-flag parity |
 | `vpn_hardening.bats` | Profile-directory boundaries, unsafe profile and import sources, lifecycle-hook and second-`[Interface]` refusal in any letter case, spacing, or section and under default, `PIPE_FAIL`, and `emulate sh` callers, a stated reason for missing sections and an unreadable source, strict DNS literals, picker ambiguity, atomic cache and report publication, cleanup on failure, and no-privilege dry runs |

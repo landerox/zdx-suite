@@ -338,11 +338,18 @@ EOF
 }
 
 @test "vpn regressions: private state writes work under NO_CLOBBER" {
-  write_regression_profile "$VPN_CONFIG_DIR/wg0.conf"
+  # Public commands reset caller options with emulate -L zsh, so the state
+  # writers are called directly under the inherited option: a new entry, a
+  # replaced entry, and the last-used pointer.
   run run_zsh '
+    : > "$HOME/default.stderr"
     setopt NO_CLOBBER
-    vpn-default-set wg0 >/dev/null 2>"$HOME/default.stderr" || return 10
+    _vpn_set_default_iface wg0 2>>"$HOME/default.stderr" || return 10
     [[ "$(_vpn_peek_default_iface)" == wg0 ]] || return 11
+    _vpn_set_default_iface wg1 2>>"$HOME/default.stderr" || return 12
+    [[ "$(_vpn_peek_default_iface)" == wg1 ]] || return 13
+    _vpn_remember_iface wg0 2>>"$HOME/default.stderr" || return 14
+    [[ "$(_vpn_peek_last_iface)" == wg0 ]] || return 15
   '
   [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/default.stderr" >&2; false; }
 }

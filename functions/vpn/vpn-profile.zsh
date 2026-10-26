@@ -206,6 +206,7 @@ _vpn_profile_install() {
 #   Effects:   writes a mode-600 skeleton profile owned by root.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-profile-create() {
+  emulate -L zsh
   local -a positional=()
 
   while (( $# > 0 )); do
@@ -314,6 +315,7 @@ vpn-profile-create() {
 #              under WSL, offers DNS leak hardening.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-profile-import() {
+  emulate -L zsh
   local -a positional=()
 
   while (( $# > 0 )); do
@@ -479,6 +481,7 @@ vpn-profile-import() {
 #              last-used pointers.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-profile-rename() {
+  emulate -L zsh
   local old_iface="" new_iface=""
   local -i auto_yes=0 dry_run=0
   local -a positional=()
@@ -764,6 +767,7 @@ vpn-profile-rename() {
 #   Effects:   deletes the profile and, when requested, its backup.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-profile-remove() {
+  emulate -L zsh
   local -a positional=()
   local -i dry_run=0 auto_yes=0 with_backup=0 backup_flag_given=0
 

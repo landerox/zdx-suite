@@ -758,6 +758,243 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+# --- Caller option isolation --------------------------------------------------
+
+# The public entry points: each fixture command, the vpn-menu router, and the
+# _vpn_dispatch dispatcher it shares with the menu loop.
+vpn_entry_points() {
+  awk -F '\t' '!/^#/ && NF { print $1 }' \
+    "$TEST_SUITE_ROOT/test/fixtures/vpn-public-commands.tsv"
+  printf '%s\n' vpn-menu _vpn_dispatch
+}
+
+@test "vpn interface: every public entry point starts with emulate -L zsh" {
+  local names load_mode
+  names=$(vpn_entry_points | tr '\n' ' ')
+
+  for load_mode in ZDX_EAGER_LOAD ZDX_LAZY_LOAD; do
+    run env \
+      -u TEST_TEMP_DIR \
+      -u BATS_TEST_DIRNAME \
+      -u ZDX_EAGER_LOAD \
+      -u ZDX_LAZY_LOAD \
+      HOME="$HOME" \
+      PATH="$PATH" \
+      ZSH_CUSTOM="$TEST_SUITE_ROOT" \
+      "$load_mode=1" \
+      zsh -f -c '
+        source "$1/functions.zsh" || exit 90
+        if [[ "$2" == ZDX_LAZY_LOAD ]]; then
+          (( ${+functions[_vpn_dispatch]} )) && exit 91
+          vpn-menu --help >/dev/null 2>&1 || exit 92
+        fi
+        local name
+        local -a body=() unguarded=()
+        for name in ${=3}; do
+          body=("${(@f)functions[$name]-}")
+          [[ "${body[1]}" == "$4" ]] || unguarded+=("$name")
+        done
+        print -rl -- "${unguarded[@]}"
+        (( ${#unguarded[@]} == 0 ))
+      ' zsh "$TEST_SUITE_ROOT" "$load_mode" "$names" $'\temulate -L zsh'
+    printf '%s, entry points without the guard:\n%s\n' "$load_mode" "$output"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "vpn interface: emulate -L zsh resets hostile caller options inside every entry point" {
+  # Each entry point calls _vpn_error first for an argument it rejects, so a
+  # probe in its place reports the options in force inside the entry point.
+  local hostile='setopt pipe_fail ksh_arrays no_unset sh_word_split' name
+  local program='_vpn_error() {
+  if [[ ! -o pipefail && ! -o ksharrays && -o unset && ! -o shwordsplit ]]; then
+    print -r -- reset
+  else
+    print -r -- inherited
+  fi
+}
+print -r -- "$ZSH_VERSION" >"$HOME/probe-zsh-version"
+'
+  # Control: called straight from the hostile caller, the probe sees its options.
+  program+="( $hostile; _vpn_error control ) >\"\$HOME/probe-control\""$'\n'
+  while IFS= read -r name; do
+    program+="( $hostile; $name --zdx-unknown-option ) >\"\$HOME/probe-$name\" 2>/dev/null"$'\n'
+  done < <(vpn_entry_points)
+  program+='print -r -- probes-done'
+
+  run run_zsh "$program"
+  printf 'zsh %s\n%s\n' "$(cat "$HOME/probe-zsh-version" 2>/dev/null)" "$output"
+  [ "$status" -eq 0 ]
+  [ "$output" = probes-done ]
+  [ "$(cat "$HOME/probe-control")" = inherited ]
+
+  local -i unguarded=0
+  while IFS= read -r name; do
+    if [ "$(sort -u "$HOME/probe-$name")" != reset ]; then
+      printf '%s probe: %s\n' "$name" "$(tr '\n' ' ' < "$HOME/probe-$name")"
+      unguarded=1
+    fi
+  done < <(vpn_entry_points)
+  [ "$unguarded" -eq 0 ]
+}
+
+# Minimal plain-Linux path MTU mocks, as in vpn_mtu.bats: probes of at most
+# 1364 payload bytes pass behind a 1500-byte eth0.
+install_mtu_probe_mocks() {
+  cat > "$TEST_MOCK_BIN/ping" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == -V ]] && { printf '%s\n' 'ping from iputils 20240117'; exit 0; }
+size=56 target=""
+while (( $# > 0 )); do
+  case "$1" in
+    -s) size="$2"; shift 2 ;;
+    --) target="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf 'PING %s (%s) %d(%d) bytes of data.\n' "$target" "$target" "$size" "$(( size + 28 ))"
+if (( size <= 1364 )); then
+  printf '%d bytes from %s: icmp_seq=1 ttl=55 time=10.0 ms\n' "$(( size + 8 ))" "$target"
+  exit 0
+fi
+printf '\n--- %s ping statistics ---\n1 packets transmitted, 0 received, 100%% packet loss\n' "$target"
+exit 1
+EOF
+  cat > "$TEST_MOCK_BIN/ip" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "-4 route get "*) printf '%s via 192.0.2.1 dev eth0 src 192.0.2.10 uid 1000\n    cache\n' "$4" ;;
+  "-o link show dev eth0") printf '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod 755 "$TEST_MOCK_BIN/ping" "$TEST_MOCK_BIN/ip"
+}
+
+@test "vpn interface: safe paths match the default caller under hostile options and emulate sh" {
+  export TERM=dumb NO_COLOR=1
+  export VPN_CONFIG_DIR="$HOME/wireguard"
+  export VPN_CACHE_DIR="$HOME/.cache/zdx/vpn"
+  export VPN_MENU_REPORT_DIR="$HOME/vpn-stats"
+  unset VPN_MENU_MTU_TARGET VPN_MENU_IP_CROSSCHECK
+  mkdir -p "$VPN_CONFIG_DIR"
+  chmod 700 "$VPN_CONFIG_DIR"
+  printf '[Interface]\nPrivateKey = TEST-PRIVATE-KEY=\nAddress = 10.0.0.2/24\nDNS = 10.0.0.53\n\n[Peer]\nPublicKey = TEST-PEER-KEY=\nAllowedIPs = 0.0.0.0/0\nEndpoint = 203.0.113.10:51820\n' \
+    > "$VPN_CONFIG_DIR/wg0.conf"
+  chmod 600 "$VPN_CONFIG_DIR/wg0.conf"
+  cp -p "$VPN_CONFIG_DIR/wg0.conf" "$VPN_CONFIG_DIR/wg0.conf.bak-vpn-menu"
+  install_mtu_probe_mocks
+
+  # NAME<TAB>COMMAND: every entry point's --help, the normal path of each
+  # read-only command and of the router, and the no-mutation dry runs.
+  local -a cases=()
+  local name
+  while IFS= read -r name; do
+    [[ "$name" == _vpn_dispatch ]] || cases+=("$name-help"$'\t'"$name --help")
+  done < <(vpn_entry_points)
+  cases+=(
+    $'access-status\tvpn-access-status'
+    $'config-dir\tvpn-config-dir'
+    $'details\tvpn-details'
+    $'ip-info\tvpn-ip-info'
+    $'mtu-probe\tvpn-mtu-probe'
+    $'summary\tvpn-summary'
+    $'router-summary\tvpn-menu vpn-summary'
+    $'off-all-dry-run\tvpn-off-all --dry-run'
+    $'remove-dry-run\tvpn-profile-remove --dry-run wg0'
+    $'rename-dry-run\tvpn-profile-rename --dry-run wg0 wg9'
+    $'restore-dry-run\tvpn-config-restore --dry-run wg0'
+  )
+
+  local caller setup entry program
+  for caller in default hostile sh; do
+    case "$caller" in
+      default) setup=':' ;;
+      hostile) setup='setopt ksh_arrays pipe_fail no_unset sh_word_split' ;;
+      sh) setup='emulate sh' ;;
+    esac
+    # A plain Linux host without network access: the WSL detector and the
+    # public IP lookup are pinned, so every caller sees the same facts.
+    program='_vpn_is_wsl() { return 1; }
+_vpn_have_ip_stack() { return 0; }
+_vpn_get_ip_info() { printf "198.51.100.9\t\t\t\t\tfixture.example\n"; }
+'
+    for entry in "${cases[@]}"; do
+      name="${entry%%$'\t'*}"
+      program+="( $setup; ${entry#*$'\t'} ) >\"\$HOME/smoke-$caller/$name.out\" 2>\"\$HOME/smoke-$caller/$name.err\""
+      program+="; print -r -- \$? >\"\$HOME/smoke-$caller/$name.rc\""$'\n'
+    done
+    mkdir -p "$HOME/smoke-$caller"
+    run run_zsh "$program"
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+    # The router's timing footer and the probe count carry a duration.
+    perl -pi -e 's/ (completed in|failed after) \S+/ $1 <duration>/' \
+      "$HOME/smoke-$caller/router-summary.err"
+    perl -pi -e 's/^(\s*Probes:\s+\d+ in )\S+/${1}<duration>/' \
+      "$HOME/smoke-$caller/mtu-probe.err"
+  done
+
+  # The safe paths really ran in the default caller. Every case exits 0 in
+  # this setup, so a failure that all callers share cannot pass as a match.
+  local rc_file case_rc
+  local -a rc_files=("$HOME"/smoke-default/*.rc)
+  [ "${#rc_files[@]}" -eq "${#cases[@]}" ]
+  for rc_file in "${rc_files[@]}"; do
+    case_rc=$(cat "$rc_file")
+    [ "$case_rc" = 0 ] || { printf '%s returned %s\n' "${rc_file##*/}" "$case_rc"; false; }
+  done
+  grep -Fq 'Usage: vpn-summary' "$HOME/smoke-default/vpn-summary-help.err"
+  grep -Fq 'wg0' "$HOME/smoke-default/config-dir.err"
+  grep -Fq 'Dry run: 1 file planned; nothing was removed.' \
+    "$HOME/smoke-default/remove-dry-run.err"
+  grep -Fq 'Dry run: 2 files planned; nothing was renamed.' \
+    "$HOME/smoke-default/rename-dry-run.err"
+  grep -Fq 'Dry run: 1 profile planned; nothing was restored.' \
+    "$HOME/smoke-default/restore-dry-run.err"
+
+  local -i differing=0
+  for caller in hostile sh; do
+    if ! diff -r "$HOME/smoke-default" "$HOME/smoke-$caller" \
+      > "$HOME/smoke-$caller.diff"; then
+      printf '%s caller differs from the default caller:\n' "$caller"
+      cat "$HOME/smoke-$caller.diff"
+      differing=1
+    fi
+  done
+  [ "$differing" -eq 0 ]
+}
+
+@test "vpn interface: a clean import succeeds from hostile and emulate sh callers" {
+  export VPN_CACHE_DIR="$HOME/.cache/zdx/vpn"
+  export MOCK_SUDO_ALLOW='true,__validate__,test,install,mktemp,ln,rm,mv'
+  printf '[Interface]\nPrivateKey = K=\n\n[Peer]\nPublicKey = P=\nAllowedIPs = 0.0.0.0/0\n' \
+    > "$HOME/clean.conf"
+  chmod 600 "$HOME/clean.conf"
+
+  local caller setup
+  for caller in hostile sh; do
+    case "$caller" in
+      hostile) setup='setopt ksh_arrays pipe_fail no_unset sh_word_split' ;;
+      sh) setup='emulate sh' ;;
+    esac
+    export VPN_CONFIG_DIR="$HOME/wireguard-$caller"
+    mkdir -p "$VPN_CONFIG_DIR"
+    chmod 700 "$VPN_CONFIG_DIR"
+
+    # The name prompt is answered with its default.
+    run run_zsh "
+      _vpn_is_wsl() { return 1; }
+      _vpn_read_line() { print -r -- \"\$2\"; }
+      $setup
+      vpn-profile-import \"\$HOME/clean.conf\"
+    "
+    printf '%s caller:\n%s\n' "$caller" "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Imported profile: clean"* ]]
+    [ -f "$VPN_CONFIG_DIR/clean.conf" ]
+  done
+}
+
 @test "vpn interface: a second menu iteration does not print loop-local variables" {
   run run_zsh '
     source "$ZSH_CUSTOM/functions/vpn-menu.zsh" || return 98

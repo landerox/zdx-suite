@@ -17,6 +17,7 @@ fi
 #   Effects:   authenticates with sudo so later reads need no prompt.
 #   Status:    0 when unlocked, 1 when authentication failed.
 vpn-access-unlock() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-unlock"
@@ -44,6 +45,7 @@ vpn-access-unlock() {
 #              Other commands sharing that sudo timestamp are affected too.
 #   Status:    0 on success, 1 when sudo is unavailable or invalidation fails.
 vpn-access-lock() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-lock"
@@ -85,6 +87,7 @@ vpn-access-lock() {
 #   Effects:   read-only.
 #   Status:    0 always.
 vpn-access-status() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-status"

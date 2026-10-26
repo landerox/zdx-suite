@@ -21,6 +21,10 @@ verification, and remaining limitations.
 - Plugins: under Oh My Zsh, lazy plugins load on first use, and eager plugins
   show as active and are counted, because the loaded-plugin list stays global
   when the core is sourced from a function.
+- VPN: every command behaves the same whatever options the calling shell
+  sets. Under an inherited `KSH_ARRAYS`, `NO_UNSET`, `SH_WORD_SPLIT`, or
+  `emulate sh`, commands crashed, refused every profile directory, or picked
+  the wrong profile to rename or remove.
 
 ## [0.1.0] — 2026-10-22
 
