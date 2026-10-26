@@ -213,7 +213,8 @@ generate_tool_probe() {
   [ "$status" -eq 0 ]
 
   # A cold shell resolves the new lazy stub.
-  run zsh -c '
+  run zsh -f -c '
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export ZSH_CUSTOM="$1" HOME="$2"
     source "$ZSH_CUSTOM/functions.zsh" || exit 1

@@ -32,7 +32,8 @@ MOCK
     chmod +x "$TEST_MOCK_BIN/$manager"
   done
   # Mock system binaries by ensuring fzf, git, and jq are present, but pipx and wg-quick are missing
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -64,7 +65,8 @@ MOCK
 }
 
 @test "sys-doctor: OS and Pkg Manager detection is accurate" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'

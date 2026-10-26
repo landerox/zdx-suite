@@ -28,6 +28,7 @@ ns_plugin() {
 
 ns_start() {
   HOME="$NS_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "loaded=${(j:,:)ZDX_LOADED_PLUGINS}"
     '"${1:-}"'
@@ -49,6 +50,7 @@ ns_start() {
 
 @test "plugin namespace: the installer refuses reserved names before fetching" {
   run env HOME="$NS_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     zdx-plugins --install https://example.invalid/repo.git git --yes
   ' _ "$TEST_SUITE_ROOT"

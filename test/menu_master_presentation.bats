@@ -18,6 +18,7 @@ teardown() { cleanup_sandbox; }
 @test "master presentation: real label filtering finds every built-in route" {
   [ -n "$PRESENTATION_REAL_FZF" ] || skip "real fzf is not installed"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     model=$(_zdx_menu_model) || exit
     local route="" filtered=""
@@ -47,6 +48,7 @@ teardown() { cleanup_sandbox; }
 
 @test "master presentation: compact details distinguish sections from commands" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     cd "$HOME" || exit
     zdx-menu >"$HOME/stdout" || exit
@@ -72,6 +74,7 @@ teardown() { cleanup_sandbox; }
 
 @test "master presentation: only dispatchable loaded plugins create a custom section" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     typeset -ga ZDX_LOADED_PLUGINS=(missing git help "bad.name")
     model=$(_zdx_menu_model 2>/dev/null) || exit
@@ -95,6 +98,7 @@ teardown() { cleanup_sandbox; }
 
 @test "master presentation: lazy completion lists only exact loaded available plugins" {
   run zsh -f -c '
+    emulate -R zsh
     typeset -ga ZDX_LOADED_PLUGINS=(sample sample-extra missing git help version sample "bad.name")
     sample-menu() { print -r -- UNEXPECTED_MENU; }
     sample-extra-menu() { print -r -- UNEXPECTED_MENU; }
@@ -120,6 +124,7 @@ teardown() { cleanup_sandbox; }
 
 @test "master presentation: nested plugin completion shares loaded membership checks" {
   run zsh -f -c '
+    emulate -R zsh
     typeset -ga ZDX_LOADED_PLUGINS=(sample missing help "bad.name")
     sample-menu() { print -r -- UNEXPECTED_MENU; }
     orphan-menu() { print -r -- UNEXPECTED_MENU; }

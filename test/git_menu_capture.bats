@@ -256,6 +256,7 @@ exit 130
 MOCK
   chmod +x "$TEST_MOCK_BIN/fzf"
   cat > "$GIT_MENU_PTY_CHILD" <<'CHILD'
+emulate -R zsh
 setopt MONITOR
 source "$ZSH_CUSTOM/functions/git-menu.zsh" || exit 91
 git-menu
@@ -264,6 +265,8 @@ CHILD
   run run_zsh '
     zmodload zsh/zpty || return 80
     zmodload zsh/datetime || return 79
+    # Job control needs an interactive shell (-i) that owns the pseudo-terminal;
+    # -d and -f skip every startup file except the system zshenv.
     zpty -b git-menu-foreground zsh -dfi "$GIT_MENU_PTY_CHILD" || return 81
     {
       # A wall-clock bound sized for slow hosted runners; the loop still ends
@@ -438,6 +441,7 @@ MOCK
   export GIT_CONFIRM_RESULT="$TEST_TEMP_DIR/confirm-result"
   export GIT_CONFIRM_CHILD="$TEST_TEMP_DIR/confirm-child.zsh"
   cat > "$GIT_CONFIRM_CHILD" <<'CHILD'
+emulate -R zsh
 source "$ZSH_CUSTOM/functions/git-menu.zsh" || exit 91
 _git_fzf() {
   [[ "$ZSH_SUBSHELL" == 0 ]] || return 94
@@ -462,6 +466,10 @@ CHILD
   run run_zsh '
     zmodload zsh/zpty || return 80
     zmodload zsh/datetime || return 79
+    # The confirmation needs a terminal on standard input and error, which the
+    # pseudo-terminal provides; -i makes the shell interactive, like the shell
+    # a person types in. -d and -f skip every startup file except the system
+    # zshenv.
     zpty -b git-confirm zsh -dfi "$GIT_CONFIRM_CHILD" || return 81
     {
       local -F deadline=$(( EPOCHREALTIME + 30 ))

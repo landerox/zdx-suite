@@ -14,7 +14,8 @@ teardown() {
   local stdout_file="$TEST_TEMP_DIR/stdout"
   local stderr_file="$TEST_TEMP_DIR/stderr"
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$TEST_SUITE_ROOT/functions/dev-menu.zsh'
@@ -28,7 +29,8 @@ teardown() {
 }
 
 @test "dev interface: standalone sourcing works without the core runtime" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$TEST_SUITE_ROOT/functions/dev-menu.zsh' || exit 1
@@ -47,7 +49,8 @@ teardown() {
 }
 
 @test "dev interface: sourcing opens no fzf and reads no stdin" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     fzf() { print -u2 -r -- 'FZF WAS OPENED'; return 1; }
@@ -78,7 +81,8 @@ teardown() {
   done
   printf 'if true; then\n' > "$broken_root/dev/dev-clean.zsh"
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$broken_root/dev-menu.zsh'
@@ -717,6 +721,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_EAGER_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f _dev_dispatch &>/dev/null || return 2
       print -rl -- ${(ok)functions[(I)dev-*]} > "$2"
@@ -732,6 +737,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_LAZY_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f dev-menu &>/dev/null || return 2
       typeset -f _dev_dispatch &>/dev/null && return 3

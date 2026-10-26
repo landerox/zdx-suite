@@ -26,6 +26,7 @@ teardown() {
     "$TEST_SUITE_ROOT/functions/zdx-menu.zsh"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     first_definition="${functions[zdx]}"
     source "$1/functions/zdx-menu.zsh" || exit
@@ -43,6 +44,7 @@ teardown() {
     "$broken_root/zdx-menu.zsh"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/zdx-menu.zsh"
     loader_rc=$?
     (( loader_rc != 0 )) || exit 1
@@ -55,6 +57,7 @@ teardown() {
 
 @test "zdx contract: a forged common sentinel cannot bypass loader checks" {
   run zsh -f -c '
+    emulate -R zsh
     typeset -g _ZDX_COMMON_SOURCED=1
     source "$1/functions/zdx-menu.zsh"
     loader_rc=$?
@@ -68,6 +71,7 @@ teardown() {
 
 @test "zdx contract: help uses stderr and invalid grammar returns status 2" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     zdx --help >"$2/help.stdout" 2>"$2/help.stderr" || exit
     [[ ! -s "$2/help.stdout" && -s "$2/help.stderr" ]] || exit 1
@@ -129,6 +133,7 @@ teardown() {
   [[ "$release_notes" == *"### Overview"* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     zdx --version
   ' _ "$TEST_SUITE_ROOT"
@@ -307,6 +312,7 @@ teardown() {
   cmp "$template_path" "$installer_home/.config/zdx/config.zsh"
 
   run zsh -f -c '
+    emulate -R zsh
     zmodload zsh/stat || exit 1
     local -A directory_state=() file_state=()
     zstat -LH directory_state -- "$1" || exit 1
@@ -323,6 +329,7 @@ teardown() {
 
 @test "zdx contract: built-in dispatch forwards shell-bearing arguments literally" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     git-menu() {
       printf "count=%d\n" "$#"
@@ -346,6 +353,7 @@ teardown() {
 
 @test "zdx contract: plugin dispatch requires exact loaded membership and a function" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     typeset -ga ZDX_LOADED_PLUGINS=(sample-extra sample)
     sample-menu() {
@@ -378,6 +386,7 @@ teardown() {
 
 @test "zdx contract: custom plugins cannot collide with reserved wrapper names" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     typeset -ga ZDX_LOADED_PLUGINS=(git help)
     help-menu() {
@@ -398,6 +407,7 @@ teardown() {
 
 @test "zdx contract: forged menu selection is outside the exact snapshot" {
   run zsh -f -c '
+    emulate -R zsh
     export PATH="$2:$PATH"
     source "$1/functions/zdx-menu.zsh" || exit
     _zdx_fzf_capture() {
@@ -417,6 +427,7 @@ teardown() {
 
 @test "zdx contract: exact menu row reaches the fixed built-in dispatcher" {
   run zsh -f -c '
+    emulate -R zsh
     export PATH="$2:$PATH"
     source "$1/functions/zdx-menu.zsh" || exit
     _zdx_fzf_capture() {
@@ -446,6 +457,7 @@ teardown() {
   export MOCK_FZF_STATUS="130"
 
   run zsh -f -c '
+    emulate -R zsh
     export HOME="$2"
     export PATH="$3:$PATH"
     export TMPDIR="$HOME/tmp"
@@ -461,6 +473,7 @@ teardown() {
 
 @test "zdx contract: NO_COLOR and dumb-terminal diagnostics contain no ANSI" {
   run zsh -f -c '
+    emulate -R zsh
     export NO_COLOR=1
     source "$1/functions/zdx-menu.zsh" || exit
     _zdx_error "unsafe %s text"
@@ -471,6 +484,7 @@ teardown() {
   [[ "$output" != *$'\033'* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     unset NO_COLOR
     export TERM=dumb
     source "$1/functions/zdx-menu.zsh" || exit
@@ -487,6 +501,7 @@ teardown() {
 
 @test "zdx contract: row helpers reject delimiter and newline injection" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     _zdx_menu_entry "Unsafe|Label" git "description" >/dev/null 2>&1
     (( $? == 2 )) || exit 1
@@ -500,6 +515,7 @@ teardown() {
 
 @test "zdx doctor: loading is silent, idempotent, and completes before its sentinel" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     first_definition="${functions[zdx-doctor]}"
     source "$1/functions/zdx-doctor.zsh" || exit
@@ -516,6 +532,7 @@ teardown() {
 
 @test "zdx doctor: help uses stderr and invalid grammar stops before probes" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     zdx-doctor --help >"$2/help.stdout" 2>"$2/help.stderr" || exit
     [[ ! -s "$2/help.stdout" && -s "$2/help.stderr" ]] || exit 1
@@ -535,6 +552,7 @@ teardown() {
 
 @test "zdx doctor: diagnostics honor plain terminals and render controls visibly" {
   run zsh -f -c '
+    emulate -R zsh
     export NO_COLOR=1
     export TERM=xterm-256color
     source "$1/functions/zdx-doctor.zsh" || exit
@@ -547,6 +565,7 @@ teardown() {
   [[ "$output" != *$'\033'* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     unset NO_COLOR
     export TERM=dumb
     source "$1/functions/zdx-doctor.zsh" || exit
@@ -581,6 +600,7 @@ EOF
 
 doctor_install_prelude() {
   cat <<'ZSH'
+    emulate -R zsh
     source "$ZDX_ROOT/functions/zdx-doctor.zsh" || exit 90
     _zdx_doctor_program_trusted() { [[ "$1" == /* && -x "$1" ]]; }
     _zdx_doctor_confirm() { return 0; }
@@ -644,6 +664,7 @@ ZSH
 @test "zdx doctor: user-owned package managers and sudo are refused" {
   doctor_install_fixture
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit 90
     _zdx_doctor_confirm() { return 0; }
     local -a missing=(zdx-absent-tool)
@@ -733,6 +754,7 @@ ZSH
 
 @test "zdx doctor: --dry-run is the only option and completes" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     zdx-doctor --dry-run extra 2>/dev/null; print -r -- "extra=$?"
     zdx-doctor --help 2>&1 | grep -c -- "--dry-run"

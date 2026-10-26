@@ -587,6 +587,7 @@ teardown() {
     HOME="$HOME" \
     PATH="$PATH" \
     zsh -f -c '
+      emulate -R zsh
       typeset probe_log="$3"
       fzf() { print -r -- "fzf" >>"$probe_log"; return 99; }
       gh() { print -r -- "gh" >>"$probe_log"; return 99; }
@@ -648,6 +649,7 @@ teardown() {
     HOME="$HOME" \
     PATH="$PATH" \
     zsh -f -c '
+      emulate -R zsh
       typeset loader_root="$1"
       export ZSH_CUSTOM="$HOME/.oh-my-zsh/custom"
 
@@ -695,6 +697,7 @@ teardown() {
     "$loader_root/functions/git/git-tags.zsh"
 
   run env HOME="$HOME" PATH="$PATH" zsh -f -c '
+    emulate -R zsh
     source "$1/functions/git-menu.zsh"
   ' zsh "$loader_root"
 
@@ -727,6 +730,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_LAZY_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f git-menu &>/dev/null || return 2
       typeset -f _git_dispatch &>/dev/null && return 3
@@ -755,6 +759,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_EAGER_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f _git_dispatch &>/dev/null || return 2
 

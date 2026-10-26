@@ -71,6 +71,320 @@ teardown() {
   [ "$status" -eq 97 ]
 }
 
+@test "sandbox isolation: the caller's locale, terminal, color, fzf, and ZDX settings never reach a test" {
+  # A real plugin outside the sandbox, as a caller's ZDX_PLUGINS_DIR names it.
+  local developer="$TEST_TEMP_DIR/developer"
+  mkdir -p "$developer/plugins/devplug"
+  chmod -- 700 "$developer" "$developer/plugins" "$developer/plugins/devplug"
+  printf '%s\n' 'print -r -- developer-plugin-ran >> "$DEVPLUG_MARKER"' \
+    'devplug-menu() { :; }' > "$developer/plugins/devplug/devplug-menu.zsh"
+  chmod -- 600 "$developer/plugins/devplug/devplug-menu.zsh"
+  export DEVPLUG_MARKER="$TEST_TEMP_DIR/devplug.marker"
+  cat > "$TEST_TEMP_DIR/probe.zsh" <<'ZSH'
+local text=$'\303\251' colors=plain
+[[ "$(_zdx_fzf_color_opts)" == --no-color ]] || colors=color
+print -r -- "locale=${LANG-unset} chars=${#text}"
+print -r -- "overrides=${LC_ALL-unset},${LC_CTYPE-unset},${LC_COLLATE-unset},${LC_MESSAGES-unset},${LANGUAGE-unset}"
+print -r -- "terminal=${TERM-unset},${NO_COLOR-unset},${COLORTERM-unset} fzf-colors=$colors"
+print -r -- "fzf=${FZF_DEFAULT_OPTS-unset},${FZF_DEFAULT_OPTS_FILE-unset},${FZF_DEFAULT_COMMAND-unset}"
+print -r -- "zdx=${ZDX_FZF_PLAIN-unset},${ZDX_VERBOSE-unset},${ZDX_TELEMETRY-unset},${ZDX_EAGER_LOAD-unset},${ZDX_FZF_TEMPLATES-unset},${ZDX_PLUGINS_DIR-unset}"
+print -r -- "plugin=${+functions[devplug-menu]} discovered=${#ZDX_DISCOVERED_PLUGINS}"
+ZSH
+
+  # The caller's shell is as hostile as a developer's can be: a C locale
+  # with every override, a dumb terminal, color and fzf settings, and suite
+  # settings that would load the plugin above eagerly.
+  run env LC_ALL=C LC_CTYPE=C LC_COLLATE=C LC_MESSAGES=C LANG=C LANGUAGE=es \
+    TERM=dumb NO_COLOR=1 COLORTERM=truecolor \
+    FZF_DEFAULT_OPTS=--no-unicode FZF_DEFAULT_OPTS_FILE="$developer/fzfrc" \
+    FZF_DEFAULT_COMMAND=false \
+    ZDX_FZF_PLAIN=1 ZDX_VERBOSE=1 ZDX_TELEMETRY=1 ZDX_EAGER_LOAD=1 \
+    ZDX_FZF_TEMPLATES=1 ZDX_PLUGINS_DIR="$developer/plugins" \
+    "$BASH" -c '
+      source "$1/test/test_helper.bash" || exit 90
+      run_zsh "$(<"$2")"
+      rc=$?
+      cleanup_sandbox || exit 91
+      exit "$rc"
+    ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/probe.zsh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "locale=$TEST_UTF8_LOCALE chars=1
+overrides=unset,unset,unset,unset,unset
+terminal=xterm-256color,unset,unset fzf-colors=color
+fzf=unset,unset,unset
+zdx=unset,unset,unset,unset,0,unset
+plugin=0 discovered=0" ]
+  [ ! -e "$DEVPLUG_MARKER" ]
+}
+
+@test "sandbox isolation: a caller's BASH_ENV, terminal, Git, uv, Python, suite, and tool settings never reach a test" {
+  # BASH_ENV runs in every Bash that starts without a terminal, so it could
+  # export again what the helper clears. It also brings LOCPATH and
+  # PATH_LOCALE, because it runs after Bash's own startup setlocale: macOS
+  # reads PATH_LOCALE once per process, at that first call, so in the startup
+  # environment it would hide the locales from the whole inner Bash.
+  local outside="$TEST_TEMP_DIR/outside"
+  mkdir -p "$outside/hooks"
+  printf '%s\n' 'export LC_ALL=C TERM=dumb NO_COLOR=1 ZDX_VERBOSE=1' \
+    'export FZF_DEFAULT_OPTS=--no-unicode' \
+    "export LOCPATH='$outside/LOCPATH' PATH_LOCALE='$outside/PATH_LOCALE'" \
+    > "$outside/bash_env"
+  # The caller's real global Git configuration, as GIT_CONFIG_GLOBAL names it:
+  # a hook directory whose pre-commit hook leaves a marker, and an alias.
+  printf '[core]\n\thooksPath = %s\n[alias]\n\tzdxleak = status\n' \
+    "$outside/hooks" > "$outside/gitconfig"
+  printf '#!/bin/sh\n: > "%s"\n' "$outside/hook-ran" > "$outside/hooks/pre-commit"
+  chmod -- 755 "$outside/hooks/pre-commit"
+  local -A hostile=([BASH_ENV]="$outside/bash_env" [ENV]="$outside/bash_env"
+    [COLUMNS]=30 [LINES]=5 [FORCE_COLOR]=3 [CLICOLOR]=1 [CLICOLOR_FORCE]=1
+    [DEV_SUITE_DEBUG]=1 [PY_SUITE_DEBUG]=1 [SYS_APT_AUTOMATIC_TAKEOVER]=1
+    [WS_FETCH_JOBS]=7 [FILE_EXTRACT_MAX_GIB]=7
+    [GIT_CONFIG_GLOBAL]="$outside/gitconfig" [GIT_AUTHOR_NAME]="Hostile Caller"
+    [GIT_TRACE]="$outside/git-trace" [UV_INDEX_URL]=https://leak.invalid/simple)
+  local name
+  for name in TERMINFO TERMINFO_DIRS TERMCAP \
+    VPN_CONFIG_DIR VPN_CACHE_DIR VPN_MENU_REPORT_DIR DEV_BACKUP_DIR \
+    DEV_REPORT_DIR WS_BASE_DIR EDITOR VISUAL SUDO_EDITOR GIT_SSH \
+    GIT_SSH_COMMAND GIT_TEMPLATE_DIR UV_CACHE_DIR PYTHONPATH PYTHONUSERBASE \
+    VIRTUAL_ENV CONDA_PREFIX DISPLAY WAYLAND_DISPLAY CARGO_HOME RUSTUP_HOME; do
+    hostile[$name]="$outside/$name"
+  done
+  local -a assignments=()
+  PROBE_HOSTILE="LOCPATH=$outside/LOCPATH"$'\n'"PATH_LOCALE=$outside/PATH_LOCALE"$'\n'
+  for name in "${!hostile[@]}"; do
+    assignments+=("$name=${hostile[$name]}")
+    PROBE_HOSTILE+="$name=${hostile[$name]}"$'\n'
+  done
+  export PROBE_HOSTILE
+
+  # A commit in a fixture repository must not run the caller's hook, take the
+  # caller's author, or see the caller's alias. A name leaks when it still
+  # has the caller's value, in the Bash that loaded the helper or in a
+  # run_zsh program. run_zsh exports its own WS_BASE_DIR, so only the first
+  # check can catch that one.
+  run env "${assignments[@]}" "$BASH" -c '
+    source "$1/test/test_helper.bash" || exit 90
+    "$BASH" -c '\''printf "bash-child=%s,%s,%s,%s,%s\n" "${LC_ALL-unset}" \
+      "${TERM-unset}" "${NO_COLOR-unset}" "${ZDX_VERBOSE-unset}" \
+      "${FZF_DEFAULT_OPTS-unset}"'\''
+    fixture="$TEST_TEMP_DIR/fixture"
+    git init -q -b main "$fixture" || exit 92
+    git -C "$fixture" -c user.name="Fixture User" \
+      -c user.email=fixture@example.invalid commit -q --allow-empty -m probe \
+      || exit 93
+    printf "git=%s|%s\n" "$(git -C "$fixture" log -1 --format=%an)" \
+      "$(git -C "$fixture" config --get alias.zdxleak || echo none)"
+    leaked=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      name=${line%%=*}
+      [[ "${!name-}" == "${line#*=}" ]] && leaked+=("$name")
+    done <<< "$PROBE_HOSTILE"
+    printf "bash-leaked=%s\n" "${leaked[*]}"
+    run_zsh '\''
+      local -a leaked=()
+      local line name
+      for line in "${(@f)PROBE_HOSTILE}"; do
+        [[ -n "$line" && "$line" != WS_BASE_DIR=* ]] || continue
+        name=${line%%=*}
+        [[ "${(P)name-}" == "${line#*=}" ]] && leaked+=("$name")
+      done
+      print -r -- "zsh-leaked=${(j:,:)${(@o)leaked}}"
+    '\''
+    rc=$?
+    cleanup_sandbox || exit 91
+    exit "$rc"
+  ' _ "$TEST_SUITE_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "bash-child=unset,xterm-256color,unset,unset,unset
+git=Fixture User|none
+bash-leaked=
+zsh-leaked=" ]
+  [ ! -e "$outside/hook-ran" ]
+  [ ! -e "$outside/git-trace" ]
+}
+
+@test "sandbox isolation: run_zsh reads no startup file and starts from default options" {
+  # The sandbox .zshenv stands in for any startup file a plain `zsh -c` reads.
+  printf '%s\n' 'print -u2 -r -- STARTUP-FILE-READ' 'setopt no_glob' > "$HOME/.zshenv"
+
+  # -f turns the rcs option off, so it is set again only when the program
+  # restores the default options, as it must after a system zshenv ran.
+  run run_zsh '
+    [[ -o rcs ]] || exit 3
+    [[ -o glob ]] || exit 4
+    print -r -- body-ran
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = body-ran ]
+}
+
+@test "sandbox isolation: every Zsh program a test starts skips startup files and resets its options" {
+  # A line-based heuristic over test/*.bats and test/*.bash. It joins
+  # backslash continuations, finds each launch of zsh (also /bin/zsh, "zsh",
+  # or a variable such as $INSTALLER_ZSH) whose last option cluster ends in c,
+  # requires f in one of those clusters, and requires a program written after
+  # the option, in any quoting, to start with `emulate -R zsh`. It does not
+  # see -cf, -ci, -o OPT -c, --no-rcs -c, or options held in a variable, and
+  # it does not read a program held in a variable, printed by a function,
+  # written to a file by a heredoc, or fed on standard input; those programs
+  # start with `emulate -R zsh` by review. A string after =, ==, !=, =~, or *,
+  # such as "zsh -c example", is not a launch. A test that must read startup
+  # files puts a comment that starts with `# reads startup files:` and gives
+  # the reason directly above the command; it exempts only the first launch
+  # of that command. In a `run env X=1 \` command, the comment goes above the
+  # `run` line, because a comment inside the continuation would end the
+  # command.
+  cat > "$TEST_TEMP_DIR/scan.pl" <<'PERL'
+use strict;
+use warnings;
+my $quote = qr{'"'"'|'\\''|\$'|\\"|['"]};
+my $command = qr{"zsh"|'zsh'|(?:[\w./-]*/)?zsh|"\$\(command -v zsh\)"|"?\$\{?[A-Z_]*ZSH[A-Z_]*\}?"?};
+my $launch = qr{(?<![^\s;|&(`"'])(?:$command)((?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*c)(?=\s|$)};
+my $violations = 0;
+for my $file (@ARGV) {
+  open my $handle, '<', $file or die "$file: $!\n";
+  chomp(my @lines = <$handle>);
+  close $handle;
+  my $i = 0;
+  while ($i <= $#lines) {
+    my ($first, $text) = ($i, $lines[$i]);
+    while ($i < $#lines && $text =~ s/\\$//) {
+      $text .= ' ' . $lines[++$i];
+    }
+    my $last = $i++;
+    next if $text =~ /^\s*#/;
+    my $above = $first - 1;
+    $above-- while $above > 0 && $lines[$above] =~ /^\s*$/;
+    my $exempt = $above >= 0 && $lines[$above] =~ /^\s*# reads startup files: \S/;
+    while ($text =~ /$launch/g) {
+      my ($flags, $before, $rest) = ($1, substr($text, 0, $-[0]), substr($text, $+[0]));
+      next if $before =~ /(?:[!=]=|=~|[=*])\s*["']$/;
+      if ($exempt) {
+        $exempt = 0;
+        next;
+      }
+      my $where = "$file:" . ($first + 1);
+      if ($flags !~ /-[A-Za-z]*f/) {
+        print "$where: Zsh starts without -f\n";
+        $violations++;
+      }
+      $rest =~ s/^\s+//;
+      next unless $rest =~ s/^(?:$quote)//;
+      if ($rest =~ /^\s*$/) {
+        my $k = $last + 1;
+        $k++ while $k < $#lines && $lines[$k] =~ /^\s*$/;
+        ($rest = $k <= $#lines ? $lines[$k] : '') =~ s/^\s+//;
+      }
+      next if $rest =~ /^\$/;
+      if ($rest !~ /^emulate -R zsh\b/) {
+        print "$where: the program does not start with emulate -R zsh\n";
+        $violations++;
+      }
+    }
+  }
+}
+exit($violations ? 1 : 0);
+PERL
+  # Control: the scan reports each kind of violation in a fixture and skips
+  # the compliant, variable, compared, and opted-in launches. The fixture
+  # spells the command as @zsh@ here, so this file itself holds no launch.
+  perl -pe 's/\@zsh\@/zsh/g' > "$TEST_TEMP_DIR/fixture.bats" <<'FIXTURE'
+run @zsh@ -c "
+  print missing-f
+"
+run @zsh@ -f -c "
+  print missing-emulate
+"
+run @zsh@ -f -c 'print inline-missing-emulate'
+run @zsh@ -f -c "
+  emulate -R zsh
+  print compliant
+"
+run @zsh@ -fc 'emulate -R zsh; print compliant-inline'
+run @zsh@ -f -c "$program"
+# reads startup files: the test checks what a sandbox .zshenv changes.
+run @zsh@ -c "
+  print opted-in
+"
+run /bin/@zsh@ -c 'print absolute-path'
+run "@zsh@" -f -c 'print quoted-command'
+run env PROBE=1 \
+  @zsh@ \
+  -f -c 'print continued'
+run @zsh@ -f -c $'print ansi-c'
+run run_zsh "@zsh@ -f -c \"print escaped\""
+run @zsh@ -f -c $'emulate -R zsh\nprint ansi-c-compliant'
+[[ "$output" == "@zsh@ -c example" ]]
+[[ "$output" == *"@zsh@ -c example"* ]]
+# reads startup files: the comment covers only the first launch below.
+@zsh@ -c 'print first' && @zsh@ -c 'print second'
+FIXTURE
+  run perl "$TEST_TEMP_DIR/scan.pl" "$TEST_TEMP_DIR/fixture.bats"
+  [ "$status" -eq 1 ]
+  [ "$output" = "$TEST_TEMP_DIR/fixture.bats:1: Zsh starts without -f
+$TEST_TEMP_DIR/fixture.bats:1: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:4: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:7: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:18: Zsh starts without -f
+$TEST_TEMP_DIR/fixture.bats:18: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:19: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:20: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:23: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:24: the program does not start with emulate -R zsh
+$TEST_TEMP_DIR/fixture.bats:29: Zsh starts without -f
+$TEST_TEMP_DIR/fixture.bats:29: the program does not start with emulate -R zsh" ]
+
+  run perl "$TEST_TEMP_DIR/scan.pl" "$TEST_SUITE_ROOT"/test/*.bats \
+    "$TEST_SUITE_ROOT"/test/*.bash
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "sandbox isolation: only a working UTF-8 locale passes the probe, and the environment cannot pick the candidates" {
+  [ "$LANG" = "$TEST_UTF8_LOCALE" ]
+  [ -z "${LC_ALL+set}" ]
+  _zdx_test_locale_works "$TEST_UTF8_LOCALE"
+  local name
+  for name in C POSIX xx_YY.UTF-8; do
+    run _zdx_test_locale_works "$name"
+    [ "$status" -ne 0 ]
+  done
+
+  # Only a Bash array names the candidates, and an array never comes from
+  # the environment: an exported value of the same name changes nothing.
+  run env _zdx_test_locale_candidates=xx_YY.UTF-8 "$BASH" -c '
+    source "$1/test/test_helper.bash" || exit 90
+    printf "%s\n" "$LANG"
+    cleanup_sandbox
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$TEST_UTF8_LOCALE" ]
+}
+
+@test "sandbox isolation: a host without a UTF-8 locale fails setup instead of testing under C" {
+  # The candidates model such a host on every platform: C and POSIX are not
+  # UTF-8, and the last name exists nowhere.
+  local nested_tmp="$TEST_TEMP_DIR/nested-tmp"
+  mkdir "$nested_tmp"
+  run env TMPDIR="$nested_tmp" "$BASH" -c '
+    _zdx_test_locale_candidates=(C POSIX xx_YY.UTF-8)
+    source "$1/test/test_helper.bash"
+    printf "helper-status=%s\n" "$?"
+  ' _ "$TEST_SUITE_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "test_helper: no UTF-8 locale works on this host; the tests do not run under C.
+test_helper: install C.UTF-8 or en_US.UTF-8 (Debian and Ubuntu: apt install locales).
+helper-status=1" ]
+  # The helper stops before it creates a sandbox.
+  [ -z "$(find "$nested_tmp" -mindepth 1 -print -quit)" ]
+}
+
 @test "sandbox isolation: portable metadata helpers describe the path itself" {
   local file="$TEST_TEMP_DIR/metadata"
   printf 'abc' > "$file"

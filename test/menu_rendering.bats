@@ -118,6 +118,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: every wrapper isolates inherited defaults and preserves caller state and status" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     export FZF_DEFAULT_OPTS="--header-lines=999 --read0 --no-input"
@@ -144,6 +145,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: standalone suites use paired terminal colors without a core import" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load standalone || exit
     _render_all 0
@@ -155,6 +157,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: core themes remain configurable at invocation time across all wrappers" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     _render_all 0 || exit
@@ -169,6 +172,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: NO_COLOR overrides custom themes and explicit call-site colors" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     export NO_COLOR=1 ZDX_FZF_THEME="16,fg:0,bg:7,fg+:7,bg+:0"
@@ -181,6 +185,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: plain mode and dumb terminals override call-site Unicode and colors" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     local mode=""
@@ -197,6 +202,7 @@ teardown() { cleanup_sandbox; }
 
 @test "menu rendering: C and POSIX locale fallback respects locale precedence" {
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     local mode=""
@@ -224,6 +230,7 @@ teardown() { cleanup_sandbox; }
   [ -n "$RENDER_REAL_FZF" ] || skip "real fzf is not installed"
   export RENDER_EXEC_FZF="$RENDER_REAL_FZF"
   run zsh -f -c '
+    emulate -R zsh
     source "$RENDER_DIR/fixture.zsh" || exit
     _render_load core || exit
     export FZF_DEFAULT_OPTS="--header-lines=999 --read0 --print0"

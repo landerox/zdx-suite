@@ -40,6 +40,7 @@ lazy_shell() {
   env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$LAZY_HOME" \
     PATH="$TEST_TEMP_DIR/zsh-recorder:$PATH" ZDX_LAZY_LOAD=1 \
     "$(command -v zsh)" -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || exit 90
       '"$1"'
     ' _ "$TEST_SUITE_ROOT"
@@ -120,6 +121,7 @@ lazy_shell() {
 
 @test "lazy plugins: eager shells keep loading plugins at startup" {
   run env HOME="$LAZY_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     print -r -- "loaded=${(j:,:)ZDX_LOADED_PLUGINS} discovered=${(j:,:)ZDX_DISCOVERED_PLUGINS}"
   ' _ "$TEST_SUITE_ROOT"
@@ -132,6 +134,7 @@ lazy_shell() {
   # so the loaded-plugin list must stay global after that function returns.
   run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$LAZY_HOME" \
     PATH="$TEST_TEMP_DIR/zsh-recorder:$PATH" "$(command -v zsh)" -f -c '
+      emulate -R zsh
       unset -m "ZDX_*"
       ZDX_LAZY_LOAD=1 NO_COLOR=1
       _omz_source() {

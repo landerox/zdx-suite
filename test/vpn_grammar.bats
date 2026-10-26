@@ -21,6 +21,7 @@ capture_completion_specs() {
   local mode="${2:-nested}"
 
   run zsh -f -c '
+    emulate -R zsh
     typeset -g _vpn_probe_command="$1"
     if [[ "$3" == direct ]]; then
       typeset -ga words=("$_vpn_probe_command")
@@ -68,6 +69,7 @@ run_vpn_grammar() {
   rm -f "$VPN_GRAMMAR_MARKER"
 
   run zsh -f -c '
+    emulate -R zsh
     export HOME="$1"
     export PATH="$2"
     source "$3" || exit 1
@@ -228,6 +230,7 @@ assert_grammar_rejects() {
   chmod 600 "$profile_dir"/*.conf
 
   run zsh -f -c '
+    emulate -R zsh
     _arguments() { return 0; }
     _describe() {
       print -rl -- "${profiles[@]}"

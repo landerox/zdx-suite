@@ -104,6 +104,7 @@ _platform_expect() {
 # stdout: uid:octal-mode of a path without following a final link.
 _platform_owner_mode() {
   zsh -f -c '
+    emulate -R zsh
     zmodload -F zsh/stat b:zstat || exit 1
     local -A state=()
     zstat -LH state -- "$1" 2>/dev/null || exit 1
@@ -283,6 +284,7 @@ _platform_labels=(zdx-core zdx-menu env file py git sys dev ws vpn \
 
 @test "platform paths: every private resolver copy matches the core rule" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-common.zsh" || exit 90
     print -r -- "${functions[_zdx_resolve_trusted_dir]}"
   ' _ "$TEST_SUITE_ROOT"

@@ -256,6 +256,7 @@ SH
   printf '#!/bin/sh\nexit 2\n' > "$mock_bin/xcode-select"
   chmod +x "$mock_bin/xcode-select"
   run "$INSTALLER_ZSH" -f -c '
+    emulate -R zsh
     source "$1" || exit 90
     PATH="$2:$PATH"
     OSTYPE=darwin23.0
@@ -276,6 +277,7 @@ SH
   printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$TEST_TEMP_DIR/CommandLineTools" \
     > "$mock_bin/xcode-select"
   run "$INSTALLER_ZSH" -f -c '
+    emulate -R zsh
     source "$1" || exit 90
     PATH="$2:$PATH"
     OSTYPE=darwin23.0
@@ -689,7 +691,7 @@ PY
   run _installer_exec --yes
   [ "$status" -eq 0 ]
   local quoted_profile
-  quoted_profile=$("$INSTALLER_ZSH" -f -c 'print -r -- "${(q)1}/.zshrc"' _ "$INSTALLER_ZDOTDIR")
+  quoted_profile=$("$INSTALLER_ZSH" -f -c 'emulate -R zsh; print -r -- "${(q)1}/.zshrc"' _ "$INSTALLER_ZDOTDIR")
   grep -Fq "$quoted_profile" "$INSTALLER_STDERR"
   cmp "$INSTALLER_ZDOTDIR/.zshrc" "$TEST_TEMP_DIR/zdotdir.before"
   cmp "$HOME/.zshrc" "$TEST_TEMP_DIR/zshrc.before"
@@ -825,6 +827,7 @@ PY
 @test "installer: sourcing the Zsh implementation is passive and preserves caller options" {
   run "$INSTALLER_ENV" -i "HOME=$HOME" "PATH=$INSTALLER_PATH" \
     "$INSTALLER_ZSH" -f -c '
+      emulate -R zsh
       before=$-
       source "$1" --yes || exit
       [[ "$-" == "$before" ]] || exit 9

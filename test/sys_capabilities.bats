@@ -10,6 +10,7 @@ teardown() {
 
 @test "sys capabilities: standalone loader is silent and core-independent" {
   run env HOME="$HOME" PATH="$PATH" zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || return 1
     source "$1/functions/sys-menu.zsh" || return 1
 
@@ -27,6 +28,7 @@ teardown() {
 
 @test "sys capabilities: standalone timing fallback preserves command status" {
   run env HOME="$HOME" PATH="$PATH" zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || return 1
     _sys_dispatch() { return 7; }
     sys-menu sys-info
@@ -45,6 +47,7 @@ teardown() {
     > "$partial_root/sys/sys-capabilities.zsh"
 
   run env HOME="$HOME" PATH="$PATH" zsh -f -c '
+    emulate -R zsh
     source "$1/sys-menu.zsh"
     load_rc=$?
 
@@ -62,6 +65,7 @@ teardown() {
 
 @test "sys capabilities: detection remains lazy until first access" {
   run env HOME="$HOME" PATH="$PATH" zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || return 1
     print -r -- "$_SYS_CAPABILITIES_READY"
     _sys_capability_value os >/dev/null || return 2

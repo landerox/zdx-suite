@@ -31,6 +31,89 @@ export TEST_SUITE_ROOT
 TEST_HOST_OS=$(uname -s 2>/dev/null || true)
 export TEST_HOST_OS
 
+# A caller's BASH_ENV runs again in every Bash mock and nested `bash -c`, and
+# ENV in every interactive POSIX shell; either can export what this helper
+# clears. Unsetting LOCPATH and PATH_LOCALE keeps them from child processes.
+# This process may already have read them: macOS reads PATH_LOCALE once per
+# process, so a caller that starts BATS with a PATH_LOCALE that hides the
+# locales gets the no-UTF-8 error below.
+unset BASH_ENV ENV LOCPATH PATH_LOCALE
+
+# --- Locale and terminal ------------------------------------------------------
+# The product degrades on purpose under a C or POSIX locale, under TERM=dumb,
+# and under NO_COLOR, and it sizes banners from COLUMNS, so the caller's values
+# would change what every test observes. Every test starts from one UTF-8
+# locale and a capable terminal; a test of those branches exports its own
+# values after setup.
+
+# _zdx_test_locale_works NAME: true when NAME switches Bash to UTF-8 text. A
+# locale the host lacks leaves C in force, where the two-byte character below
+# counts as two characters.
+_zdx_test_locale_works() {
+  (
+    LC_ALL=C
+    LC_ALL="$1"
+    _zdx_test_text=$'\303\251'
+    (( ${#_zdx_test_text} == 1 ))
+  ) 2>/dev/null
+}
+
+# _zdx_test_utf8_locale: print the first UTF-8 locale that works here:
+# C.UTF-8, then en_US.UTF-8 on Linux; en_US.UTF-8, then C.UTF-8 on macOS; then
+# any other UTF-8 locale that `locale -a` lists. A test of the failure below
+# defines the indexed array _zdx_test_locale_candidates before it sources this
+# file, and only those names are tried. The environment cannot carry a Bash
+# array, so a caller cannot choose the candidates.
+_zdx_test_utf8_locale() {
+  local -a preferred=(C.UTF-8 en_US.UTF-8)
+  local -i scan_listed=1
+  # shellcheck disable=SC2154 # the sourcing test defines it, if anything does
+  if [[ "$(declare -p _zdx_test_locale_candidates 2>/dev/null)" == "declare -a "* ]]; then
+    preferred=("${_zdx_test_locale_candidates[@]}")
+    scan_listed=0
+  elif [[ "$TEST_HOST_OS" == Darwin ]]; then
+    preferred=(en_US.UTF-8 C.UTF-8)
+  fi
+  local name
+  for name in "${preferred[@]}"; do
+    if _zdx_test_locale_works "$name"; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  (( scan_listed )) || return 1
+  while IFS= read -r name; do
+    [[ "$name" =~ \.[Uu][Tt][Ff]-?8$ ]] || continue
+    if _zdx_test_locale_works "$name"; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done < <(locale -a 2>/dev/null)
+  return 1
+}
+
+# A host without a UTF-8 locale fails every test here, instead of running
+# them under C and reporting the product's C-locale output as failures.
+if ! TEST_UTF8_LOCALE=$(_zdx_test_utf8_locale); then
+  printf 'test_helper: no UTF-8 locale works on this host; the tests do not run under C.\n' >&2
+  printf 'test_helper: install C.UTF-8 or en_US.UTF-8 (Debian and Ubuntu: apt install locales).\n' >&2
+  # No sandbox exists yet, so teardown has nothing to remove.
+  cleanup_sandbox() { :; }
+  return 1
+fi
+export TEST_UTF8_LOCALE
+# LC_ALL and each LC_* category override LANG, and LANGUAGE overrides the
+# message language of a UTF-8 locale, so LANG alone decides here. A test can
+# still narrow one category, such as LC_COLLATE=C, or set LC_ALL itself.
+unset LC_ALL LANGUAGE "${!LC_@}"
+export LANG="$TEST_UTF8_LOCALE"
+export TERM=xterm-256color
+# The terminal size and database, and the color switches that tools honor.
+unset COLUMNS LINES TERMINFO TERMINFO_DIRS TERMCAP
+unset NO_COLOR COLORTERM FORCE_COLOR CLICOLOR CLICOLOR_FORCE
+# fzf reads its FZF_DEFAULT_* variables in every picker a test runs.
+unset "${!FZF_DEFAULT_@}"
+
 # Setup temp directory for sandbox. Resolve it physically: macOS reaches its
 # per-user TMPDIR through the /var -> /private/var symlink, and production
 # code correctly refuses symlinked temporary, state, and home paths. A
@@ -61,7 +144,8 @@ mkdir -m 700 "$TMPDIR" || return 1
 unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
 unset XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS
 
-# An exported ZDOTDIR would make every `zsh -c` read the caller's .zshenv.
+# An exported ZDOTDIR points every Zsh that a test starts without -f at the
+# caller's startup files.
 unset ZDOTDIR
 
 # Neutralize package-manager controls injected by developer shells and hosted
@@ -71,18 +155,55 @@ unset HOMEBREW_CURL_RETRIES HOMEBREW_NO_ANALYTICS HOMEBREW_NO_AUTO_UPDATE
 unset HOMEBREW_NO_ENV_HINTS SUDO_ASKPASS SYS_APT_KEY_RENEWAL
 # Tool homes that the System cleanup resolves: a developer shell's values
 # point outside the sandbox HOME.
-unset NVM_DIR CODEX_HOME PRE_COMMIT_HOME
+unset NVM_DIR CODEX_HOME PRE_COMMIT_HOME CARGO_HOME RUSTUP_HOME
 
-# Git exports repository variables such as GIT_DIR to its hooks. Inherited by
-# the pre-push `just check`, they redirect every fixture repository a test
-# creates into the real one; from a linked worktree that rewrites its shared
-# config and refs. Clear the complete set Git itself reports as repository-local.
-# shellcheck disable=SC2046
-unset $(command git rev-parse --local-env-vars 2>/dev/null)
+# Clear every GIT_* variable the caller exports, before the helper sets its
+# own. Git exports repository variables such as GIT_DIR to its hooks:
+# inherited by the pre-push `just check`, they redirect every fixture
+# repository a test creates into the real one, and from a linked worktree that
+# rewrites its shared config and refs. Every name that
+# `git rev-parse --local-env-vars` reports starts with GIT_. The other GIT_*
+# variables reach around the sandbox HOME: GIT_CONFIG_GLOBAL names the
+# caller's real global configuration, with its hooks, signing, URL rewrites,
+# and templates, and GIT_AUTHOR_*, GIT_COMMITTER_*, GIT_TEMPLATE_DIR,
+# GIT_SSH_COMMAND, and GIT_TRACE* change fixture commits, transports, or
+# stderr. Tests and suite helpers export their own values after setup.
+unset "${!GIT_@}"
 
 # HOME already isolates global Git configuration; also ignore the system file.
 # Homebrew's Git ships one that selects the macOS keychain credential helper.
 export GIT_CONFIG_NOSYSTEM=1
+# The caller's suite settings, such as ZDX_VERBOSE, ZDX_FZF_PLAIN, or
+# ZDX_TELEMETRY, would change what tests observe, and a caller's
+# ZDX_PLUGINS_DIR would let the loader run the caller's real plugins. Clear
+# every ZDX_* variable: the plugin root then resolves to the sandbox default,
+# $HOME/.config/zdx/plugins, and follows a test that changes HOME. Tests
+# export their own values after setup.
+unset "${!ZDX_@}"
+# Other settings the suites read from the environment, as their code and
+# contracts name them. Report and backup directories would also send writes
+# outside the sandbox. A test that needs one sets it after setup.
+unset VPN_CONFIG_DIR VPN_CACHE_DIR VPN_MENU_REPORT_DIR VPN_MENU_REPORT_RETENTION
+unset VPN_MENU_WSL_IPV6_FIX VPN_MENU_MTU_TARGET VPN_MENU_IP_CROSSCHECK
+unset VPN_MENU_IPINFO_URL VPN_MENU_IPINFO_URLS VPN_MENU_IPINFO_PLAIN_URLS
+unset VPN_MENU_IPINFO_TRACE_URLS VPN_DNS_FALLBACK_PRIMARY VPN_DNS_FALLBACK_SECONDARY
+unset DEV_SUITE_DEBUG DEV_REPORT_DIR DEV_BACKUP_DIR DEV_BACKUP_RETENTION
+unset DEV_SCAN_DEPTH DEV_CLEAN_DEPTH DEV_CLEAN_MAX_TARGETS DEV_ALLOW_EPHEMERAL
+unset DEV_PYPI_JOBS DEV_PYPI_RETRIES DEV_PYPI_TIMEOUT
+unset DEV_ACTIONS_TIMEOUT DEV_ACTIONS_COOLDOWN_DAYS
+unset PY_SUITE_DEBUG SYS_APT_AUTOMATIC_TAKEOVER SYS_COMMAND_CAPTURE_MAX_BYTES
+unset SYS_HEALTH_INCLUDE_APPLE_JOBS SYS_TELEMETRY_MAX_READ_BYTES
+unset WS_BASE_DIR WS_MAX_DEPTH WS_FETCH_JOBS WS_EXCLUDE FILE_EXTRACT_MAX_GIB
+# Tool settings the suites read: editors, the pager, the active Python
+# environment, and the display that picks a clipboard tool.
+unset EDITOR VISUAL SUDO_EDITOR LESS VIRTUAL_ENV CONDA_PREFIX
+unset DISPLAY WAYLAND_DISPLAY
+# Tests run a real uv and python3, which read every UV_* and PYTHON*
+# variable: UV_CACHE_DIR or PYTHONPYCACHEPREFIX would write outside the
+# sandbox, UV_INDEX_URL would change where uv resolves packages, and
+# PYTHONPATH, PYTHONHOME, or PYTHONUSERBASE would load the caller's modules.
+# No test runs a real pip, so PIP_* variables are left as they are.
+unset "${!UV_@}" "${!PYTHON@}"
 # Suites probe fzf for template support once per shell; mocked fzf scripts that
 # answer each call differently would see that probe, so tests opt in explicitly.
 export ZDX_FZF_TEMPLATES=0
@@ -397,6 +518,7 @@ file_stat() {
   local path="$1"
   shift
   zsh -fc '
+    emulate -R zsh
     zmodload -F zsh/stat b:zstat || exit 2
     local target="$1" element
     shift
@@ -505,11 +627,17 @@ cleanup_sandbox() {
   rm -rf -- "$sandbox_root"
 }
 
-# Run code in Zsh subshell with sandbox environment variables
+# Run code in a Zsh subshell with sandbox environment variables. -f reads no
+# startup files except the system-wide zshenv (/etc/zshenv, or /etc/zsh/zshenv
+# on Debian and Ubuntu), which Zsh always reads first. emulate -R then gives
+# every option its Zsh default again, except the options that describe the
+# interactive environment; functions, aliases, and variables that file defines
+# remain.
 run_zsh() {
   local cmd="$1"
   # shellcheck disable=SC2016,SC2140
-  zsh -c "
+  zsh -f -c "
+    emulate -R zsh
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
     export HOME='$HOME'
     export PATH='$PATH'
@@ -562,6 +690,7 @@ normalized_function_body() {
   local prefix="$1" base="$2"
   shift 2
   zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     local common
     for common in "$1"/functions/*-common.zsh; do

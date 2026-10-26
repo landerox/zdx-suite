@@ -722,6 +722,7 @@ write_grammar_fixture() {
 @test "env dotenv: direct and nested completion offer the same grammar" {
   run env COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_env-menu" \
     zsh -f -c '
+      emulate -R zsh
       capture_specs() {
         local service="$1"
         shift

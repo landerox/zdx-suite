@@ -9,7 +9,8 @@ teardown() {
 }
 
 @test "py: sourcing twice is silent and performs no capability probes" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     fzf() { print -r -- fzf >>'$HOME/probes'; }
@@ -34,7 +35,8 @@ teardown() {
   cp "$TEST_SUITE_ROOT/functions/py/"*.zsh "$broken_root/py/"
   printf 'if true; then\n' > "$broken_root/py/py-pypi.zsh"
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$broken_root/py-menu.zsh'

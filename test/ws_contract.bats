@@ -54,6 +54,7 @@ assert_contract_matches() {
   local command_list
   command_list=$(contract_commands | tr '\n' ' ')
   run zsh -f -c "
+    emulate -R zsh
     source '$TEST_SUITE_ROOT/functions/ws-menu.zsh' || exit 1
     for command_name in $command_list; do
       typeset -f \"\$command_name\" >/dev/null || exit 2
@@ -109,6 +110,7 @@ assert_contract_matches() {
   local registration_log="$TEST_TEMP_DIR/completion-registrations"
   : > "$registration_log"
   run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export HOME='$HOME' PATH='$PATH' ZDX_KEYBINDINGS=0 ZDX_LAZY_LOAD=1
     compdef() {

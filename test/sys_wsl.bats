@@ -546,6 +546,7 @@ write_clean_fixture() {
 @test "sys wsl: sys-info and sys-wsl complete --json" {
   run env COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_sys-menu" \
     zsh -f -c '
+      emulate -R zsh
       capture_specs() {
         local -a words=("$@")
         local -i CURRENT=${#words[@]}

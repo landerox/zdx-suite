@@ -49,7 +49,7 @@ test/
 ├── vpn_test_helper.bash   VPN kernel pin and macOS Homebrew fixtures
 ├── plugins_test_helper.bash local bare Git origins for the plugin-manager tests
 ├── fixtures/              frozen public-command inventories and gh fixtures
-├── sandbox_isolation.bats sandbox isolation, canonical roots, and portable helpers
+├── sandbox_isolation.bats sandbox isolation, caller environment, startup-file scan, and portable helpers
 ├── lazy_loading.bats      core lazy/eager loading parity and conditional compatibility names
 ├── output.bats            core command-output services
 ├── platform_paths.bats    temporary roots and operation bases behind aliases
@@ -446,17 +446,117 @@ askpass controls. A test that exercises those boundaries exports its hostile
 values explicitly after setup rather than depending on the developer or runner
 environment.
 
-The helper also clears every repository-local Git variable that
+The helper also pins the locale and the terminal, because the product
+degrades on purpose under a C or POSIX locale, under `TERM=dumb`, and under
+`NO_COLOR`, and it sizes banners from `COLUMNS`. It exports `LANG`, and
+`TEST_UTF8_LOCALE`, as the first UTF-8 locale that works on the host:
+`C.UTF-8` and then `en_US.UTF-8` on Linux, `en_US.UTF-8` and then `C.UTF-8`
+on macOS, then any UTF-8 locale that `locale -a` lists. A candidate counts
+only when it really switches the shell to UTF-8 text, so a host without one
+fails every test with an error that names the cause instead of running the
+suite under C. The helper unsets `LC_ALL`, `LANGUAGE`, and every `LC_*`
+variable, so `LANG` alone decides and a test can still narrow one category,
+such as `LC_COLLATE=C`. It exports `TERM=xterm-256color` and unsets
+`COLUMNS`, `LINES`, `TERMINFO`, `TERMINFO_DIRS`, `TERMCAP`, `NO_COLOR`,
+`COLORTERM`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, and every
+`FZF_DEFAULT_*` variable. Before it chooses the locale, it unsets `BASH_ENV`,
+which every Bash mock and nested `bash -c` would run again, and `ENV`, which
+every interactive POSIX shell would, since either could export what the
+helper clears. It also unsets `LOCPATH` and `PATH_LOCALE`, which keeps them
+from child processes. macOS reads `PATH_LOCALE` once per process, so a
+caller that starts BATS with a `PATH_LOCALE` that hides the locales gets the
+no-UTF-8 error. A test of the C-locale, `TERM=dumb`, or `NO_COLOR` behavior
+exports its values after setup.
+
+`sandbox_isolation.bats` covers a host without a UTF-8 locale on every
+platform. Before it sources the helper, the test defines the Bash array
+`_zdx_test_locale_candidates` with names that never work, `C`, `POSIX`, and a
+locale that exists nowhere, and the helper then tries only those names. The
+environment cannot carry a Bash array, so a caller cannot choose the
+candidates; an exported variable of that name changes nothing.
+
+The helper unsets every `ZDX_*` variable and then pins
+`ZDX_FZF_TEMPLATES=0`. A caller's suite settings, such as `ZDX_VERBOSE` or
+`ZDX_FZF_PLAIN`, would change what tests observe, and a caller's
+`ZDX_PLUGINS_DIR` would let the loader run the caller's real plugins. The
+plugin root then resolves to the sandbox default, `$HOME/.config/zdx/plugins`,
+and follows a test that changes `HOME`. The helper also unsets an explicit
+list of the other settings that the suites read from the environment, such as
+`VPN_CONFIG_DIR`, `DEV_BACKUP_DIR`, `WS_BASE_DIR`, and
+`SYS_APT_AUTOMATIC_TAKEOVER`; the tool settings they read, `EDITOR`,
+`VISUAL`, `SUDO_EDITOR`, `LESS`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `DISPLAY`,
+and `WAYLAND_DISPLAY`; and the tool homes that the System cleanup resolves,
+`NVM_DIR`, `CODEX_HOME`, `PRE_COMMIT_HOME`, `CARGO_HOME`, and `RUSTUP_HOME`.
+A report or backup directory among them would also send writes outside the
+sandbox. A suite that starts reading a new setting adds it to that list, and
+a test that needs one sets it after setup.
+
+Tests run a real `uv` and `python3`, so the helper also unsets every `UV_*`
+and `PYTHON*` variable: `UV_CACHE_DIR` or `PYTHONPYCACHEPREFIX` would write
+outside the sandbox, `UV_INDEX_URL` would change where uv resolves packages,
+and `PYTHONPATH`, `PYTHONHOME`, or `PYTHONUSERBASE` would load the caller's
+modules into a test's interpreter. No test runs a real pip, and the product
+sets the pip variables that its own pip calls need, so `PIP_*` variables pass
+through unchanged.
+
+The helper also unsets every `GIT_*` variable that the caller exports, before
+it sets its own. That covers every repository-local variable that
 `git rev-parse --local-env-vars` reports, such as `GIT_DIR` and
 `GIT_INDEX_FILE`. Git exports them to hooks, so without this the pre-push
 `just check` would redirect every fixture repository into the real one; from a
-linked worktree, that rewrites its shared configuration and refs.
+linked worktree, that rewrites its shared configuration and refs. It also
+covers the variables that reach around the redirected `$HOME`:
+`GIT_CONFIG_GLOBAL` would make every test read the caller's real global
+configuration, with its hooks, signing, URL rewrites, and templates, and
+`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_TEMPLATE_DIR`, `GIT_SSH_COMMAND`, and
+`GIT_TRACE*` would change fixture commits, transports, or standard error. A
+test or suite helper that needs one of them exports it after setup.
 `sandbox_isolation.bats` guards this boundary.
 
 The redirected `$HOME` already isolates global Git configuration. The helper
 also exports `GIT_CONFIG_NOSYSTEM=1`, because Homebrew's Git ships a system file
 that selects the macOS keychain credential helper, and unsets `ZDOTDIR`, which
-would otherwise make every `zsh -c` read the caller's `.zshenv`.
+would otherwise point every Zsh that a test starts without `-f` at the
+caller's startup files.
+
+Apart from the mock executables described below, no Zsh program a test
+writes reads a user startup file. `run_zsh` and every direct `-c` program
+start Zsh with `-f`, and every program begins with `emulate -R zsh`, as do
+the child programs that a test writes to a file or a variable and runs under
+`zsh -f`, `zpty`, or `script`. Mock executables that stand in for external
+tools keep their `#!/usr/bin/env zsh` line, so they still read the system
+zshenv and the sandbox `HOME`'s `.zshenv`. `-f` skips `.zshenv` and every
+later startup file, but not the system-wide zshenv (`/etc/zshenv`, or
+`/etc/zsh/zshenv` on Debian and Ubuntu), which Zsh always reads first.
+`emulate -R zsh` then resets every option except those that describe the
+interactive environment, so the job control and line editor of an
+interactive test shell survive; it does not remove the functions, aliases,
+or variables that file defines. A command string that the product generates,
+such as an fzf preview, runs unchanged. A test that needs an interactive
+shell, to bind widgets, install the identity guard, or own a pseudo-terminal
+under `zpty` or `script`, adds `-i` (`zsh -f -i -c`, or `zsh -dfi FILE` under
+`zpty`) and says why in a comment, and a test that depends on job control
+checks `[[ -o monitor ]]` or sets `MONITOR`. util-linux `script` runs its
+command through `$SHELL -c`, so a test that uses it exports `SHELL=/bin/sh`.
+A test that must read startup files starts Zsh without `-f` and gives the
+reason directly above the command, in a comment that begins with
+`# reads startup files:`. In a `run env X=1 \` command, that comment goes
+above the `run` line, because a comment inside the continuation would end the
+command.
+
+`sandbox_isolation.bats` scans `test/*.bats` and `test/*.bash` line by line
+and joins backslash continuations. It finds each launch of `zsh`,
+`/bin/zsh`, `"zsh"`, or a variable such as `$INSTALLER_ZSH` whose last option
+cluster ends in `c`, as in `-c`, `-fc`, or `-f -i -c`; it fails when none of
+those clusters contains `f`, and when a program written after the option, in
+any quoting, does not begin with `emulate -R zsh`. A `# reads startup files:`
+comment exempts only the first launch of the command below it. The scan is a
+heuristic. It does not see a launch whose last cluster does not end in `c`,
+such as `-cf`, `-ci`, `-o OPT -c`, or `--no-rcs -c`, or whose options sit in
+a variable; it does not read a program held in a variable, printed by a
+function, written to a file by a heredoc, or fed on standard input, so those
+programs rely on review; and it treats a string after `=`, `==`, `!=`, `=~`,
+or `*`, such as `"zsh -c example"`, as text.
 
 OpenSSH reads the account's home from the password database, not `$HOME`, so
 the real client would consult the operator's or runner's configuration. The
@@ -498,8 +598,10 @@ helper provides portable replacements:
 | `host_is_darwin`, `skip_on_darwin REASON` | The host kernel recorded at load, so a `uname` mock cannot change it |
 
 `sandbox_isolation.bats` proves these helpers' results, the canonical root
-under a symlinked `TMPDIR` parent, the private `TMPDIR`, and the Git and SSH
-isolation on every host that runs the suite.
+under a symlinked `TMPDIR` parent, the private `TMPDIR`, the Git and SSH
+isolation, the pinned locale and terminal, and the cleared caller settings on
+every host that runs the suite, and it checks the startup-file rule for the
+launches it can read.
 
 Inside Zsh code under `run_zsh`, read metadata with `zmodload -F zsh/stat
 b:zstat` and `zstat -LH`. Rewrite files with `perl -pi -e` (or a first-match

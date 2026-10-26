@@ -616,6 +616,7 @@ SH
   mock_7z 7z
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/file-common.zsh" || exit 90
     source "$1/functions/file/file-archive.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91

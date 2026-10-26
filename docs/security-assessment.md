@@ -1595,6 +1595,10 @@ executes arbitrary code in the user's shell.
 - The plugin contract requires namespacing and source safety.
 - `zdx-plugins` is the single lifecycle owner; no suite maintains a second
   implementation or a delegating bridge.
+- The BATS helper unsets every `ZDX_*` variable before a test runs, so a
+  contributor's `ZDX_PLUGINS_DIR` cannot make the suite load, install into,
+  or remove from the contributor's real plugin root; the root resolves inside
+  the sandbox `HOME` (`sandbox_isolation.bats`).
 
 **Residual risk.** There is no sandbox. Obtaining a checkout from mutable
 `main` does not by itself authenticate its source; review, the release
@@ -1857,8 +1861,11 @@ or a backdoor.
   gates through locked uv operations. A stale lock fails without being rewritten after the commit.
   Every file hook is explicitly restricted to `pre-commit`; pre-push executes
   only the single complete aggregate regardless of upstream manifest defaults.
-- The shared test sandbox clears inherited package-manager control variables;
-  System regressions inject hostile values explicitly and mock the fixed
+- The shared test sandbox clears inherited package-manager control variables
+  and every `GIT_*`, `UV_*`, and `PYTHON*` variable, so a contributor's Git
+  configuration, hooks, and identity, and the uv and Python settings that a
+  real uv or python3 in a test would read, never reach a test; System
+  regressions inject hostile values explicitly and mock the fixed
   unattended-upgrade program validator instead of depending on host packages.
 - The `DCO` workflow checks every pull-request commit for a `Signed-off-by`
   trailer. Web commit sign-off is required, and squash merges combine the

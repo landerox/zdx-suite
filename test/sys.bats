@@ -177,7 +177,7 @@ EOF
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 
-  run run_zsh "_sys_run_bounded_probe 1 64 zsh -c 'sleep 5; print late'"
+  run run_zsh "_sys_run_bounded_probe 1 64 zsh -f -c 'emulate -R zsh; sleep 5; print late'"
   [ "$status" -eq 124 ]
   [ -z "$output" ]
 }
@@ -185,7 +185,7 @@ EOF
 @test "sys: _sys_run_bounded_probe can merge stderr within the same bound" {
   run run_zsh '
     _sys_run_bounded_probe --merge-stderr 2 64 \
-      zsh -fc "print -r -- out; print -u2 -r -- err; exit 3"
+      zsh -fc "emulate -R zsh; print -r -- out; print -u2 -r -- err; exit 3"
     print -r -- "rc:$?"
   '
   [ "$status" -eq 0 ]
@@ -193,14 +193,14 @@ EOF
 
   run run_zsh '
     _sys_run_bounded_probe --merge-stderr 2 64 \
-      zsh -fc "print -r -- out; print -u2 -r -- err"
+      zsh -fc "emulate -R zsh; print -r -- out; print -u2 -r -- err"
   '
   [ "$status" -eq 0 ]
   [ "$output" = $'out\nerr' ]
 
   run run_zsh '
     _sys_run_bounded_probe --merge-stderr 2 8 \
-      zsh -fc "print -u2 -r -- stderr-is-too-large"
+      zsh -fc "emulate -R zsh; print -u2 -r -- stderr-is-too-large"
   '
   [ "$status" -eq 1 ]
   [ -z "$output" ]
@@ -317,8 +317,8 @@ EOF
 
   run run_zsh "
     export TMPDIR='$capture_tmp'
-    _sys_run_logged test_cmd zsh -c \
-      'echo success-out; echo success-err >&2'
+    _sys_run_logged test_cmd zsh -f -c \
+      'emulate -R zsh; echo success-out; echo success-err >&2'
   "
   [ "$status" -eq 0 ]
   [[ "$output" == *'$ test_cmd  (output shown on failure)'* ]]
@@ -328,8 +328,8 @@ EOF
 
   run run_zsh "
     export TMPDIR='$capture_tmp'
-    _sys_run_logged test_cmd zsh -c \
-      'echo failure-out; echo some-error >&2; exit 5'
+    _sys_run_logged test_cmd zsh -f -c \
+      'emulate -R zsh; echo failure-out; echo some-error >&2; exit 5'
   "
   [ "$status" -eq 5 ]
   [[ "$output" == *"failure-out"* ]]
@@ -338,8 +338,8 @@ EOF
 
   run run_zsh "
     export TMPDIR='$capture_tmp'
-    _sys_run_logged bounded zsh -c \
-      'for i in {1..100}; do printf \"bounded-%03d\\n\" \"\$i\"; done; exit 9'
+    _sys_run_logged bounded zsh -f -c \
+      'emulate -R zsh; for i in {1..100}; do printf \"bounded-%03d\\n\" \"\$i\"; done; exit 9'
   "
   [ "$status" -eq 9 ]
   [[ "$output" != *"bounded-001"* ]]
@@ -355,7 +355,7 @@ EOF
   run run_zsh "
     export TMPDIR='$capture_tmp'
     print -r -- 'must-not-reach-command' | _sys_run_logged stdin-check \
-      zsh -c 'if IFS= read -r input; then print -r -- \"unexpected:\$input\"; exit 97; fi'
+      zsh -f -c 'emulate -R zsh; if IFS= read -r input; then print -r -- \"unexpected:\$input\"; exit 97; fi'
   "
 
   [ "$status" -eq 0 ]
@@ -407,7 +407,7 @@ EOF
   run run_zsh "
     export TMPDIR='$capture_tmp'
     umask 022
-    _sys_run_logged umask-check zsh -c 'umask >\"\$HOME/wrapped.umask\"; : >\"\$HOME/created\"' \
+    _sys_run_logged umask-check zsh -f -c 'emulate -R zsh; umask >\"\$HOME/wrapped.umask\"; : >\"\$HOME/created\"' \
       || exit 1
     [[ \"\$(umask)\" == 022 ]]
   "

@@ -129,6 +129,7 @@ printf 'renderer-environment:ok\n' > "$fixture_dir/renderer.checks"
 
 # Exercise the real session initializer under the renderer's closed environment.
 zsh -f > "$fixture_dir/session.stdout" 2> "$fixture_dir/session.stderr" <<'ZSH'
+emulate -R zsh
 builtin source "$ZDX_DEMO_SOURCE_ROOT/.demo/session.zsh" || exit
 _zdx_demo_session || exit
 [[ "$PWD" == "$ZDX_DEMO_ROOT/home/workspace/zdx-demo" ]] || exit 93
@@ -328,7 +329,7 @@ teardown() { cleanup_sandbox; }
 }
 
 @test "demo recording: sourcing the recorder defines its helpers without recording" {
-  run zsh -fc 'source "$1" && (( ${+functions[_zdx_demo_record]} )) && print -r -- sourced' \
+  run zsh -fc 'emulate -R zsh; source "$1" && (( ${+functions[_zdx_demo_record]} )) && print -r -- sourced' \
     zsh "$DEMO_REPO/.demo/record.zsh"
 
   [ "$status" -eq 0 ]

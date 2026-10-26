@@ -237,8 +237,12 @@ guard_fixture() {
 ZSH
 }
 
+# The plugin installs the guard only in an interactive shell ([[ -o interactive ]]),
+# so the guard tests start `zsh -f -i`; -f skips every startup file but the
+# system zshenv.
 @test "git identity guard: it is off by default and in non-interactive shells" {
   run zsh -f -i -c "
+    emulate -R zsh
     export HOME='$HOME' PATH='$PATH' ZDX_KEYBINDINGS=0
     source '$TEST_SUITE_ROOT/zdx-suite.plugin.zsh' || exit 1
     (( \${chpwd_functions[(Ie)_zdx_git_identity_guard]:-0} == 0 )) || exit 2
@@ -247,6 +251,7 @@ ZSH
   [ "$status" -eq 0 ]
 
   run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME' PATH='$PATH' ZDX_KEYBINDINGS=0 ZDX_GIT_IDENTITY_GUARD=1
     source '$TEST_SUITE_ROOT/zdx-suite.plugin.zsh' || exit 1
     (( \${chpwd_functions[(Ie)_zdx_git_identity_guard]:-0} == 0 )) || exit 2
@@ -256,6 +261,7 @@ ZSH
 
 @test "git identity guard: it warns once per repository and stays silent elsewhere" {
   run zsh -f -i -c "
+    emulate -R zsh
     export HOME='$HOME' PATH='$PATH' ZDX_KEYBINDINGS=0 ZDX_GIT_IDENTITY_GUARD=1
     export WS_BASE_DIR='$HOME/workspaces'
     source '$TEST_SUITE_ROOT/zdx-suite.plugin.zsh' || exit 1
@@ -291,6 +297,7 @@ ZSH
 
 @test "git identity guard: a lazy shell loads the Git suite only when a repository needs a check" {
   run zsh -f -i -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export HOME='$HOME' PATH='$PATH' ZDX_KEYBINDINGS=0 ZDX_GIT_IDENTITY_GUARD=1
     export WS_BASE_DIR='$HOME/workspaces' ZDX_LAZY_LOAD=1
