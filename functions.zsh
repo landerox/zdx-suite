@@ -1775,8 +1775,9 @@ unset _zdx_core_dir _zdx_eager_load
 
 # --- Safe Plugin Loader ------------------------------------------------------
 # Scans external directories under ~/.config/zdx/plugins/ and sources
-# their entrypoint scripts safely.
-typeset -a ZDX_LOADED_PLUGINS
+# their entrypoint scripts safely. The loader state is global because Oh My
+# Zsh sources this file from inside its _omz_source function.
+typeset -ga ZDX_LOADED_PLUGINS
 ZDX_LOADED_PLUGINS=()
 
 # Private: REPLY is the canonical plugin root. The configured path may reach it
