@@ -214,6 +214,34 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "ws: the cleared Git variables cover every name the installed Git reports" {
+  run zsh -f -c '
+    source "$1/functions/ws-menu.zsh" || exit 90
+    print -rl -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  local -a cleared=("${lines[@]}") reported=()
+  mapfile -t reported < <(git rev-parse --local-env-vars)
+  [ "${#reported[@]}" -gt 0 ]
+  local name missing="" unexpected=""
+  for name in "${reported[@]}"; do
+    printf '%s\n' "${cleared[@]}" | grep -Fqx -- "$name" || missing+=" $name"
+  done
+  # Git releases before 2.40 also report GIT_INTERNAL_SUPER_PREFIX, and
+  # GIT_NAMESPACE selects the refs that a local remote serves to a fetch.
+  for name in "${cleared[@]}"; do
+    if [[ ! "$name" =~ ^GIT_[A-Z_]+$ ]] \
+      || ! printf '%s\n' "${reported[@]}" GIT_INTERNAL_SUPER_PREFIX GIT_NAMESPACE \
+        | grep -Fqx -- "$name"; then
+      unexpected+=" $name"
+    fi
+  done
+  printf 'git=%s missing:%s unexpected:%s\n' \
+    "$(git --version)" "$missing" "$unexpected" >&2
+  [ -z "$missing" ]
+  [ -z "$unexpected" ]
+}
+
 @test "ws: zdx routes ws to the suite and reserves the name for plugins" {
   run zsh -f -c '
     source "$1/functions/zdx-menu.zsh" || exit

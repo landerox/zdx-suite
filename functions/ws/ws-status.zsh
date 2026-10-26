@@ -42,7 +42,9 @@ _ws_status_usage() {
 #   (state branch detached head upstream upstream-state ahead behind
 #    changes stashes last-commit-epoch error)
 # state is ok or error, detached is 0 or 1, upstream-state is none,
-# tracking, or gone, and an unknown number is empty.
+# tracking, or gone, and an unknown number is empty. Every probe runs without
+# the repository-local Git variables, so an inherited GIT_DIR cannot make it
+# describe another repository.
 # Usage: _ws_status_probe <git> <repository-directory>
 _ws_status_probe() {
   emulate -L zsh
@@ -52,7 +54,7 @@ _ws_status_probe() {
   local -i rc=0 changes=0 have_ab=0
 
   # --no-optional-locks keeps status from rewriting the index.
-  output=$(_ws_run_with_timeout "$_WS_GIT_TIMEOUT" "$git_path" \
+  output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
     --no-optional-locks -C "$repository" status --porcelain=v2 --branch \
     --untracked-files=normal </dev/null 2>/dev/null) || rc=$?
   if (( rc != 0 )); then
@@ -107,7 +109,7 @@ _ws_status_probe() {
   if [[ "$oid" != '(initial)' ]]; then
     rc=0
     # log.showSignature would print verification lines before the time.
-    probe_output=$(_ws_run_with_timeout "$_WS_GIT_TIMEOUT" "$git_path" \
+    probe_output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
       -C "$repository" -c log.showSignature=false log -1 --format=%ct \
       </dev/null 2>/dev/null) || rc=$?
     probe_output="${probe_output%%$'\n'*}"
@@ -117,7 +119,7 @@ _ws_status_probe() {
   fi
   # refs/stash is absent until the first stash; git reports that as a failure.
   rc=0
-  probe_output=$(_ws_run_with_timeout "$_WS_GIT_TIMEOUT" "$git_path" \
+  probe_output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
     -C "$repository" rev-list --walk-reflogs --count refs/stash \
     </dev/null 2>/dev/null) || rc=$?
   probe_output="${probe_output%%$'\n'*}"
@@ -159,8 +161,9 @@ _ws_status_age() {
 }
 
 # Fetches every repository that has a remote, at most WS_FETCH_JOBS at a
-# time, each bounded by _WS_FETCH_TIMEOUT. Fetches run without prompts and
-# with closed stdin. The caller's fetch_outcomes association receives ok,
+# time, each bounded by _WS_FETCH_TIMEOUT. Fetches run without prompts, with
+# closed stdin, and, like the remote listing, without the repository-local
+# Git variables. The caller's fetch_outcomes association receives ok,
 # failed, timed-out, or skipped (no remote) per relative path, and REPLY the
 # number of fetches that failed or timed out. A started fetch is stopped and
 # waited for on every exit path.
@@ -178,7 +181,7 @@ _ws_status_fetch() {
   REPLY=0
 
   for relative in "${repositories[@]}"; do
-    remotes=$(_ws_run_with_timeout "$_WS_PROBE_TIMEOUT" "$git_path" \
+    remotes=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
       -C "$root/$relative" remote </dev/null 2>/dev/null) || remotes=""
     if [[ -n "$remotes" ]]; then
       fetchable+=("$relative")
@@ -203,6 +206,11 @@ _ws_status_fetch() {
     for relative in "${fetchable[@]}"; do
       (( ++index ))
       (
+        # The job is already a subshell, so it removes the repository-local
+        # Git variables itself and the bounded fetch stays its direct child.
+        # A read-only one aborts the job here, before it fetches, and the
+        # missing status reports the fetch as failed.
+        unset -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"
         export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
         local -i fetch_rc=0
         _ws_run_with_timeout "$_WS_FETCH_TIMEOUT" "$git_path" \
@@ -314,7 +322,7 @@ ws-status() {
     }
     jq_path="$REPLY"
   fi
-  _ws_git_command || return 1
+  _ws_git_program || return 1
   local git_path="$REPLY"
   _ws_workspace_root || return 1
   local root_literal="${reply[1]}" root="${reply[2]}"

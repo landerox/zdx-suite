@@ -63,6 +63,9 @@ build_workspace() {
 }
 
 # A git that records fetches and runs every other command with the real Git.
+# Each fetch line names the repository-local variables that reached it and,
+# when WS_STATUS_SHELL_PID names the ws-status shell, how many processes
+# separate the fetch from that shell.
 install_fetch_mock() {
   cat > "$TEST_MOCK_BIN/git" <<'EOF'
 #!/usr/bin/env bash
@@ -81,9 +84,26 @@ if [[ "${arguments[index]:-}" == fetch ]]; then
   marker="$MOCK_FETCH_DIR/running.$$"
   : > "$marker"
   running=$(find "$MOCK_FETCH_DIR" -name 'running.*' | wc -l | tr -d ' ')
-  printf 'fetch|%s|%s|prompt=%s|running=%s\n' "${directory##*/}" \
-    "${arguments[*]:index}" "${GIT_TERMINAL_PROMPT:-unset}" "$running" \
-    >> "$MOCK_GIT_LOG"
+  inherited=""
+  for name in $("$REAL_GIT" rev-parse --local-env-vars) GIT_NAMESPACE; do
+    [[ -n "${!name+set}" ]] && inherited+="${inherited:+,}$name"
+  done
+  depth=unknown
+  if [[ "${WS_STATUS_SHELL_PID:-}" =~ ^[0-9]+$ ]]; then
+    ps_program=/bin/ps
+    [[ -x "$ps_program" ]] || ps_program=/usr/bin/ps
+    depth=0
+    ancestor="$PPID"
+    while [[ "$ancestor" =~ ^[0-9]+$ && "$ancestor" != "$WS_STATUS_SHELL_PID" ]] \
+      && (( ancestor > 1 && depth < 8 )); do
+      depth=$((depth + 1))
+      ancestor=$("$ps_program" -o ppid= -p "$ancestor" | tr -d ' ')
+    done
+    [[ "$ancestor" == "$WS_STATUS_SHELL_PID" ]] || depth=lost
+  fi
+  printf 'fetch|%s|%s|prompt=%s|inherited=%s|depth=%s|running=%s\n' \
+    "${directory##*/}" "${arguments[*]:index}" "${GIT_TERMINAL_PROMPT:-unset}" \
+    "${inherited:-none}" "$depth" "$running" >> "$MOCK_GIT_LOG"
   sleep "${MOCK_FETCH_SLEEP:-0.3}"
   rm -f "$marker"
   case ",${MOCK_FETCH_FAIL:-}," in
@@ -96,6 +116,14 @@ EOF
   chmod +x "$TEST_MOCK_BIN/git"
   export MOCK_FETCH_DIR="$TEST_TEMP_DIR/fetches"
   mkdir -p "$MOCK_FETCH_DIR"
+}
+
+# A repository outside the workspace on another branch: an inherited GIT_DIR
+# or GIT_WORK_TREE would make Git describe it instead of the one named by -C.
+make_outside_repository() {
+  export WS_OUTSIDE="$TEST_TEMP_DIR/outside"
+  git init -q -b elsewhere "$WS_OUTSIDE"
+  git -C "$WS_OUTSIDE" commit -q --allow-empty -m outside
 }
 
 @test "ws status: text report lists every state with attention first" {
@@ -209,6 +237,120 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"⚠ Fetch timed out: github/personal/clean"* ]]
   [[ "$output" == *"(fetch failed)"* ]]
+}
+
+@test "ws status: an inherited GIT_DIR, GIT_WORK_TREE, or GIT_CONFIG_PARAMETERS never redirects the probes" {
+  # Git exports these to its hooks and to git rebase --exec, and vcsh and
+  # yadm export them in their shells; Git then ignores -C <repository>.
+  make_outside_repository
+  mkdir -p "$TEST_TEMP_DIR/foreign-tree"
+  printf 'foreign\n' > "$TEST_TEMP_DIR/foreign-tree/foreign"
+  printf '*\n' > "$TEST_TEMP_DIR/ignore-everything"
+  run run_zsh 'ws-status --json 2>/dev/null'
+  [ "$status" -eq 0 ]
+  local expected="$output"
+  printf '%s\n' "$expected" | jq -e '
+    .counts == {repositories: 6, attention: 4, errors: 0}
+    and ([.repositories[] | select(.branch == "elsewhere")] | length) == 0
+  ' >/dev/null
+  WS_DIRTY_STATUS=$(git --no-optional-locks -C "$WS/github/personal/dirty" status --porcelain)
+  export WS_DIRTY_STATUS
+  local name value mismatches=""
+  for name in GIT_DIR GIT_WORK_TREE GIT_CONFIG_PARAMETERS; do
+    case "$name" in
+      GIT_DIR) value="$WS_OUTSIDE/.git" ;;
+      GIT_WORK_TREE) value="$TEST_TEMP_DIR/foreign-tree" ;;
+      GIT_CONFIG_PARAMETERS) value="'core.excludesFile=$TEST_TEMP_DIR/ignore-everything'" ;;
+    esac
+    export WS_INHERITED_NAME="$name" WS_INHERITED_VALUE="$value"
+    run run_zsh '
+      typeset -gx "$WS_INHERITED_NAME=$WS_INHERITED_VALUE" || exit 3
+      # The value is hostile: it changes what a plain Git call reports.
+      [[ "$(command git --no-optional-locks -C "$WS/github/personal/dirty" \
+        status --porcelain 2>&1)" != "$WS_DIRTY_STATUS" ]] || exit 4
+      ws-status --json 2>/dev/null
+    '
+    printf '%s: status=%s %s\n' "$name" "$status" "$output" >&2
+    [[ "$status" -eq 0 && "$output" == "$expected" ]] || mismatches+=" $name"
+  done
+  printf 'mismatches:%s\n' "$mismatches" >&2
+  [ -z "$mismatches" ]
+}
+
+@test "ws status: --fetch lists and fetches each repository, not an inherited one" {
+  install_fetch_mock
+  make_outside_repository
+  # An inherited -c option can also name a remote no repository has.
+  export WS_INJECTED_REMOTE="'remote.injected.url=https://example.invalid/injected.git'"
+  run run_zsh '
+    export WS_STATUS_SHELL_PID=$$
+    export GIT_DIR="$WS_OUTSIDE/.git" GIT_WORK_TREE="$WS_OUTSIDE"
+    export GIT_CONFIG_PARAMETERS="$WS_INJECTED_REMOTE"
+    NO_COLOR=1 ws-status --fetch --json 2>"$HOME/stderr"
+  '
+  sed 's/^/stderr: /' "$HOME/stderr" >&2
+  sed 's/^/log: /' "$MOCK_GIT_LOG" >&2
+  [ "$status" -eq 0 ]
+  grep -Fq '⚠ Fetching 3 repositories over the network' "$HOME/stderr"
+  [ "$(grep '^fetch|' "$MOCK_GIT_LOG" | cut -d '|' -f 2 | sort | tr '\n' ' ')" = "clean dirty diverged " ]
+  ! grep '^fetch|' "$MOCK_GIT_LOG" | grep -vF '|inherited=none|' || false
+  # Each job stays one subshell whose child is the bound (timeout or
+  # gtimeout), so stopping the job addresses the same tree as before.
+  if command -v timeout >/dev/null || command -v gtimeout >/dev/null; then
+    ! grep '^fetch|' "$MOCK_GIT_LOG" | grep -vF '|depth=2|' || false
+  fi
+  printf '%s\n' "$output" | jq -e '
+    [.repositories[] | {repository, branch, fetch}] | sort_by(.repository)
+    == [
+      {repository: "clean", branch: "main", fetch: "ok"},
+      {repository: "detached", branch: null, fetch: "skipped"},
+      {repository: "dirty", branch: "main", fetch: "ok"},
+      {repository: "diverged", branch: "main", fetch: "ok"},
+      {repository: "scratch", branch: "main", fetch: "skipped"},
+      {repository: "stashed", branch: "main", fetch: "skipped"}
+    ]
+  ' >/dev/null
+}
+
+@test "ws status: a read-only repository variable stops each fetch job before it fetches" {
+  install_fetch_mock
+  make_outside_repository
+  run run_zsh '
+    typeset -rx GIT_DIR="$WS_OUTSIDE/.git"
+    # Every repository lists a remote, so each fetch job starts and must
+    # refuse the variable on its own.
+    functions[_ws_test_git_command]="${functions[_ws_git_command]}"
+    _ws_git_command() {
+      [[ "${@[-1]}" == remote ]] && { print -r -- origin; return 0; }
+      _ws_test_git_command "$@"
+    }
+    NO_COLOR=1 ws-status --fetch --json 2>"$HOME/stderr"
+  '
+  sed 's/^/stderr: /' "$HOME/stderr" >&2
+  sed 's/^/log: /' "$MOCK_GIT_LOG" >&2
+  [ "$status" -eq 1 ]
+  grep -Fq '⚠ Fetching 6 repositories over the network' "$HOME/stderr"
+  grep -Fq '⚠ Fetched 0 of 6 repositories; 6 failed.' "$HOME/stderr"
+  ! grep -q '^fetch|' "$MOCK_GIT_LOG" || false
+  printf '%s\n' "$output" | jq -e '
+    (.repositories | length) == 6
+    and ([.repositories[] | select(.fetch != "failed")] | length) == 0
+  ' >/dev/null
+}
+
+@test "ws status: a read-only inherited GIT_DIR fails closed instead of redirecting" {
+  make_outside_repository
+  run run_zsh '
+    typeset -rx GIT_DIR="$WS_OUTSIDE/.git"
+    ws-status --json 2>/dev/null
+  '
+  printf 'status=%s %s\n' "$status" "$output" >&2
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | jq -e '
+    .counts.errors == 6
+    and ([.repositories[] | select(.error == null or .branch == "elsewhere")]
+      | length) == 0
+  ' >/dev/null
 }
 
 @test "ws status: an unreadable repository is an error row and status 1" {
