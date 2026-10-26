@@ -166,6 +166,56 @@ make_awscli() {
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
 
+@test "sys cleanup versions: the dry run names every superseded version it plans" {
+  make_claude_store 2.1.303 2.1.290 2.1.291 2.1.292 2.1.293 2.1.294 2.1.300 \
+    2.1.303 2.1.304
+  make_codex_package standalone 0.162.0-x86 0.157.0-x86 0.158.0-x86 \
+    0.159.0-x86 0.160.0-x86 0.161.0-x86 0.162.0-x86
+  local store="$HOME/.local/share/claude/versions" version
+
+  run run_cleanup_zsh 'clean-system --quick --dry-run'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Claude CLI versions"*"~/.local/share/claude/versions (superseded: 2.1.290, 2.1.291, 2.1.292, 2.1.293, 2.1.294)"* ]]
+  [[ "$output" == *"Codex releases"*"~/.codex/packages (superseded: standalone/0.157.0-x86, standalone/0.158.0-x86, standalone/0.159.0-x86, standalone/0.160.0-x86)"* ]]
+  [[ "$output" != *" more)"* ]]
+  for version in 2.1.290 2.1.291 2.1.292 2.1.293 2.1.294 2.1.300 2.1.303 2.1.304; do
+    [ -f "$store/$version" ]
+  done
+  [ -d "$HOME/.codex/packages/standalone/releases/0.157.0-x86" ]
+}
+
+@test "sys cleanup versions: clean-system removes exactly the superseded versions its plan names" {
+  make_claude_store 2.1.303 2.1.290 2.1.291 2.1.292 2.1.293 2.1.294 2.1.300 \
+    2.1.303 2.1.304
+  local store="$HOME/.local/share/claude/versions" version
+
+  run run_cleanup_zsh 'clean-system --quick --yes'
+
+  [ "$status" -eq 0 ]
+  # The plan precedes the step and names every version that the step removes.
+  [[ "${output%%Removed:*}" == *"~/.local/share/claude/versions (superseded: 2.1.290, 2.1.291, 2.1.292, 2.1.293, 2.1.294)"* ]]
+  [[ "$output" == *"Removed: 2.1.290, 2.1.291, 2.1.292, 2.1.293, 2.1.294"$'\n'* ]]
+  [[ "$output" == *"Claude CLI versions — done: 5 superseded versions removed"* ]]
+  for version in 2.1.290 2.1.291 2.1.292 2.1.293 2.1.294; do
+    [ ! -e "$store/$version" ]
+  done
+  for version in 2.1.300 2.1.303 2.1.304; do
+    [ -f "$store/$version" ]
+  done
+}
+
+@test "sys cleanup versions: the plan display keeps every name of a long record" {
+  run run_zsh '
+    source "$ZSH_CUSTOM/functions/sys-menu.zsh" || exit 98
+    _sys_clean_names_display "n01 n02 n03 n04 n05 n06 n07 n08 n09 n10 n11 standalone/releases/0.1.0"
+    print -r -- "$REPLY"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "n01, n02, n03, n04, n05, n06, n07, n08, n09, n10, n11, standalone/0.1.0" ]
+}
+
 @test "sys cleanup versions: Codex packages are planned with store-relative names" {
   make_codex_package standalone 0.162.0-x86 0.160.0-x86 0.161.0-x86 0.162.0-x86
   make_codex_package app-server-daemon 0.162.0-x86 0.161.0-x86 0.162.0-x86

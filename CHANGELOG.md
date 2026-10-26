@@ -4,6 +4,14 @@ This document records user-visible changes by release. The `0.1.0` entry
 describes the complete initial release: its implemented behavior,
 verification, and remaining limitations.
 
+## [Unreleased]
+
+### Fixed
+
+- System: `clean-system` plans and dry runs list every superseded Codex,
+  Cursor Agent, Claude CLI, AWS CLI bundle, and nvm runtime version they
+  remove, instead of the first three and a count.
+
 ## [0.1.0] — 2026-10-22
 
 ### Overview
@@ -545,4 +553,5 @@ system, files, the shell environment, Python environments, and WireGuard VPN.
 - The VPN menu captures its selection into its own private result file, and
   its profile and interface picker still reads through command substitution.
 
+[Unreleased]: https://github.com/landerox/zdx-suite/compare/0.1.0...HEAD
 [0.1.0]: https://github.com/landerox/zdx-suite/releases/tag/0.1.0
