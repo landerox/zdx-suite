@@ -98,6 +98,124 @@ ZSH
   [ "${lines[1]}" = "leftovers=0" ]
 }
 
+@test "primitive sync: the canonical capture refuses a result that changes size before it is read" {
+  run zsh -f -c "$(capture_fixture)"'
+    sysopen() {
+      if [[ "$1" == -r ]]; then
+        case "${CHANGE-}" in
+          grow) print -rn -- late >> "${@[-1]}" ;;
+          shrink) : > "${@[-1]}" ;;
+        esac
+      fi
+      builtin sysopen "$@"
+    }
+    CHANGE=grow PICK_OUTPUT=$'"'"'row\n'"'"' capture --; print -r -- "grown=$? [$REPLY]"
+    CHANGE=shrink PICK_OUTPUT=$'"'"'row\n'"'"' capture --; print -r -- "shrunk=$? [$REPLY]"
+    CHANGE="" PICK_OUTPUT=$'"'"'row\n'"'"' capture --; print -r -- "unchanged=$? [$REPLY]"
+    local -a leftovers=("$TMPDIR"/*(N))
+    print -r -- "leftovers=${#leftovers}"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "error: Could not read the Fixture picker result.
+grown=125 []
+error: Could not read the Fixture picker result.
+shrunk=125 []
+unchanged=0 [row]
+leftovers=0" ]
+}
+
+# Runs the canonical capture and every generated copy with a stub cat first on
+# PATH. The stub prints nothing and exits 0 for every input, as the uutils cat
+# of Ubuntu 26.04 did for a write-only descriptor, and records that it ran.
+# For each capture, every payload must come back as command substitution
+# makes it (all trailing newlines removed, every other byte kept), and a
+# result opened write-only must fail with 125 and the read error.
+builtin_read_fixture() {
+  cat <<'ZSH'
+    source "$1/functions.zsh" 2>/dev/null || exit 90
+    local suite=""
+    for suite in git sys dev py ws env file zdx; do
+      source "$1/functions/$suite-common.zsh" 2>/dev/null || exit 91
+    done
+    command mkdir -m 700 "$HOME/picker-root" || exit 92
+    export TMPDIR="$HOME/picker-root"
+    path=("$2" $path)
+    local errors="$HOME/capture-errors"
+    _fixture_error() { print -r -- "$1" >> "$errors"; }
+    _fixture_picker() { print -rn -- "$FIXTURE_PAYLOAD"; }
+    local -a payloads=(
+      $'row\n'
+      $'first row\nsecond row\n'
+      $'kept\n\ninner\n\n\n'
+      'no trailing newline'
+      $'\n\nleading\n'
+      $'carriage\r\n'
+      $'caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x93\x81\n'
+      $'raw \x80\x83\x9f\xa0\xfe\xff bytes\n'
+      $'nul\0inside\n'
+      $'\n\n\n'
+      ''
+    )
+    local capture="" expected="" FIXTURE_PAYLOAD="" read_result=""
+    local -i index=0 rc=0 kept=0
+    local -a leftovers=()
+    for capture in _zdx_picker_capture _git_picker_capture _sys_picker_capture \
+      _dev_picker_capture _py_picker_capture _ws_picker_capture \
+      _env_picker_capture _file_picker_capture _zdx_menu_picker_capture; do
+      (( ${+functions[$capture]} )) || exit 93
+      kept=0
+      for index in {1..${#payloads}}; do
+        FIXTURE_PAYLOAD="${payloads[index]}"
+        expected=$(print -rn -- "$FIXTURE_PAYLOAD")
+        "$capture" --tag fixture --noun Fixture --error _fixture_error \
+          --picker _fixture_picker --temp-root _zdx_capture_parent_safe -- </dev/null
+        rc=$?
+        (( rc == 0 )) && [[ "$REPLY" == "$expected" ]] && kept+=1
+      done
+      sysopen() {
+        if [[ "$1" == -r ]]; then
+          builtin sysopen -w "${@[2,-1]}"
+        else
+          builtin sysopen "$@"
+        fi
+      }
+      FIXTURE_PAYLOAD=$'selected\n'
+      "$capture" --tag fixture --noun Fixture --error _fixture_error \
+        --picker _fixture_picker --temp-root _zdx_capture_parent_safe -- </dev/null
+      rc=$?
+      unfunction sysopen
+      read_result="$rc [$REPLY]"
+      if [[ -f "$errors" ]]; then
+        read_result+=" ${(j:|:)${(@f)$(<"$errors")}}"
+        command rm -f -- "$errors"
+      fi
+      leftovers=("$TMPDIR"/*(N))
+      print -r -- "$capture: kept=$kept/${#payloads} failed-read=$read_result leftovers=${#leftovers}"
+    done
+    [[ ! -e "$HOME/cat-called" ]] || print -r -- "an external cat ran"
+ZSH
+}
+
+@test "primitive sync: every capture copy reads its result without an external cat" {
+  local stub_dir="$TEST_TEMP_DIR/silent-cat"
+  mkdir -p "$stub_dir"
+  cat > "$stub_dir/cat" <<MOCK
+#!/bin/sh
+: > '$HOME/cat-called'
+exit 0
+MOCK
+  chmod +x "$stub_dir/cat"
+  run zsh -f -c "$(builtin_read_fixture)" _ "$TEST_SUITE_ROOT" "$stub_dir"
+  [ "$status" -eq 0 ]
+  local capture expected=""
+  for capture in _zdx_picker_capture _git_picker_capture _sys_picker_capture \
+    _dev_picker_capture _py_picker_capture _ws_picker_capture \
+    _env_picker_capture _file_picker_capture _zdx_menu_picker_capture; do
+    expected+="$capture: kept=11/11 failed-read=125 [] Could not read the Fixture picker result. leftovers=0"$'\n'
+  done
+  [ "$output" = "${expected%$'\n'}" ]
+}
+
 @test "primitive sync: the canonical confirmation accepts only an explicit yes" {
   printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_MOCK_BIN/fzf"
   chmod +x "$TEST_MOCK_BIN/fzf"

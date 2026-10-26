@@ -60,6 +60,12 @@ verification, and remaining limitations.
 - Files: 7z and zip outputs keep exactly the reviewed name and `--format`
   alone selects the format; an output name without an extension no longer
   fails after confirmation.
+- Pickers: every suite reads the picker result with the Zsh `sysread`
+  builtin instead of an external `cat`, so a result that cannot be read fails
+  with status 125 on every host; on Ubuntu 26.04, whose uutils `cat` reported
+  the failure as an empty success, the capture returned 0 with an empty
+  selection. A result whose size changes after the post-picker check is
+  refused too.
 
 ## [0.1.0] — 2026-10-22
 

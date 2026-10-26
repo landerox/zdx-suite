@@ -357,10 +357,10 @@ _zdx_menu_picker_capture() {
     return 125
   }
 
-  local zpc_capture_dir="" zpc_capture_file="" zpc_selection=""
+  local zpc_capture_dir="" zpc_capture_file="" zpc_selection="" zpc_chunk=""
   local zpc_directory_identity="" zpc_file_identity=""
   local -i zpc_write_fd=-1 zpc_read_fd=-1 zpc_picker_rc=125 zpc_operation_rc=125
-  local -i zpc_read_rc=0 zpc_cleanup_failed=0
+  local -i zpc_read_rc=0 zpc_read_bytes=0 zpc_chunk_bytes=0 zpc_cleanup_failed=0
   local -A zpc_directory_state=() zpc_file_state=()
 
   zpc_capture_dir=$(umask 077; command mktemp -d \
@@ -439,9 +439,38 @@ _zdx_menu_picker_capture() {
       "$zpc_error_function" "Could not read the $zpc_noun picker result safely."
       return 125
     fi
-    zpc_selection=$(<&$(( zpc_read_fd ))) || zpc_read_rc=$?
+    # The sysread builtin reads the result: $(<&fd) would run the host's
+    # external cat, and not every cat reports a failed read. Status 5 marks
+    # the end of the file. No read asks for more than one byte past the size
+    # checked above, and a result of any other size counts as a failed read.
+    while (( zpc_read_rc == 0 )); do
+      zpc_chunk=""
+      zpc_chunk_bytes=0
+      sysread -c zpc_chunk_bytes -i "$zpc_read_fd" \
+        -s "$(( zpc_file_state[size] - zpc_read_bytes + 1 ))" \
+        zpc_chunk 2>/dev/null || zpc_read_rc=$?
+      if (( zpc_read_rc == 0 )); then
+        zpc_read_bytes+=zpc_chunk_bytes
+        zpc_selection+="$zpc_chunk"
+        (( zpc_chunk_bytes > 0 && zpc_read_bytes <= zpc_file_state[size] )) \
+          || zpc_read_rc=1
+      fi
+    done
+    (( zpc_read_rc == 5 && zpc_read_bytes == zpc_file_state[size] )) && zpc_read_rc=0
     exec {zpc_read_fd}>&-
     zpc_read_fd=-1
+    if (( zpc_read_rc == 0 )); then
+      # Remove every trailing newline, as command substitution does.
+      () {
+        setopt LOCAL_OPTIONS EXTENDED_GLOB NO_MULTIBYTE
+        local -a match=() mbegin=() mend=()
+        if [[ "$zpc_selection" == (#b)(*[^$'\n'])$'\n'# ]]; then
+          zpc_selection="${match[1]}"
+        else
+          zpc_selection=""
+        fi
+      }
+    fi
     if (( zpc_read_rc != 0 )); then
       "$zpc_error_function" "Could not read the $zpc_noun picker result."
       zpc_selection=""
