@@ -907,6 +907,28 @@ New tests must keep that property: write only inside the sandbox, share no
 files with other tests, and leave enough slack in any timing assertion for a
 fully loaded host.
 
+Slack alone does not remove a race. A test that checks that a process stopped
+polls for its exit for a bounded time, such as up to 10 seconds in
+20-millisecond steps, instead of probing `kill -0` once: signal delivery and
+reaping are asynchronous, and a zombie still answers `kill -0`. A bounded
+command that must start a descendant or write a readiness file before its
+deadline does that first, under a bound of at least 3 seconds, and the
+descendant redirects its standard streams and closes descriptor 3, so that a
+survivor cannot hold the BATS pipes open. A date fixture for an age that the
+product floors sits in the middle of the unit, such as `N` days and 12 hours
+ago, because the realtime clock can step between the fixture and the product:
+WSL2 steps it back about 2 seconds every 30 seconds. A test that a time budget
+stops a loop sizes the budget so that the iterations it asserts still fit after
+one program is charged its whole deadline, as a clock step causes, and it
+asserts the count the run reports instead of assuming one. A delay counts from
+the event it depends on, not from the start of the test: a signal that must
+reach a wait is sent from a `DEBUG` trap when the shell reaches that wait, and a
+stall that must outlast a deadline waits for the event that marks the deadline,
+such as the watchdog's token in its marker, instead of sleeping a fixed time.
+The process that sends such a signal is not the waiting shell's child: a
+child's exit delivers SIGCHLD with the signal, and where SIGCHLD has the lower
+signal number, as for SIGUSR1 on macOS, a Zsh `wait` then keeps waiting.
+
 BATS loads `test/setup_suite.bash` whenever it runs a file from `test/`. It
 checks the Bash floor once and exports `BATS_TEST_TIMEOUT=300` unless the
 caller already set a value, so a hung test fails instead of blocking the run.

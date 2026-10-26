@@ -105,21 +105,33 @@ SH
   export PLATFORM_CANONICAL
   PLATFORM_CANONICAL=$(cd -P "$TEST_TEMP_DIR/physical/tmp" && pwd -P)
 
+  # The command records its descendant first, so a loaded host has the whole
+  # bound to start it, and the descendant outlives the bound and the wait
+  # below. Its streams never hold the BATS pipes open.
   run run_zsh '
     source "$PLATFORM_NO_TIMEOUT" || return 90
+    zmodload zsh/zselect || return 93
     export TMPDIR="$TEST_TEMP_DIR/alias/tmp"
-    _zdx_run_with_timeout 1 zsh -fc "
+    _zdx_run_with_timeout 3 zsh -fc "
+      sleep 60 </dev/null >/dev/null 2>&1 3>&- &
+      print -r -- \$! > \"\$HOME/descendant.pid\"
       markers=(\"\$PLATFORM_CANONICAL\"/zdx-timeout.*(N))
       print -r -- \${#markers} > \"\$HOME/markers\"
-      sleep 20 &
-      print -r -- \$! > \"\$HOME/descendant.pid\"
       wait
     "
     local -i timeout_rc=$?
     local descendant_pid=""
     descendant_pid=$(<"$HOME/descendant.pid") || return 91
+    [[ "$descendant_pid" == <-> ]] || return 91
+    # A signaled process dies and is reaped asynchronously: wait up to 10 s.
+    local -i attempt=0
+    while builtin kill -0 "$descendant_pid" 2>/dev/null \
+      && (( ++attempt <= 500 )); do
+      zselect -t 2
+    done
     if builtin kill -0 "$descendant_pid" 2>/dev/null; then
       builtin kill -KILL "$descendant_pid" 2>/dev/null
+      print -r -- "descendant still ran 10 s after the timeout (rc=$timeout_rc)"
       return 92
     fi
     print -r -- "rc=$timeout_rc markers=$(<"$HOME/markers")"
@@ -276,24 +288,56 @@ _platform_tree_outcome() {
   [[ "$fate" == stopped ]] || return 92
 }
 
-# A DEBUG trap body. Right before the caller first waits for the command, it
-# starts a sender that sends USR1 to the caller one second later, so that a
-# slow start cannot deliver the signal before the wait begins; the caller
-# traps USR1. Right before the caller KILLs the watchdog, that is, right after
-# it decided the deadline had not passed, it stalls the caller for
-# <centiseconds>, then records in $HOME/watchdog.state whether the watchdog is
-# still there to receive that KILL. Usage:
+# A DEBUG trap body for the claim-race tests, which bound the tree at 8 s.
+# Right before the caller first waits for the command, it starts a sender
+# that sends USR1 to the caller one second later, so that a slow start cannot
+# deliver the signal before the wait begins; the caller traps USR1. Right
+# before the caller KILLs the watchdog, that is, right after it decided the
+# deadline had not passed, it stalls the caller past the deadline: until the
+# watchdog has tried its claim, which adds its token to the marker, and half
+# a second more, in which a watchdog that ignored the claim would begin its
+# pass. It then records in $HOME/watchdog.state whether the watchdog is still
+# there to receive that KILL. Each step is logged with its time in
+# $HOME/claim.trace for the failure report. Usage:
 #   trap ":" USR1
-#   trap "_platform_stall_before_watchdog_kill 350" DEBUG
+#   trap _platform_stall_before_watchdog_kill DEBUG
 _platform_stall_before_watchdog_kill() {
+  local -i last_status=$? attempt=0
+  local -a tokens=()
   if [[ "$ZSH_DEBUG_CMD" == 'wait "$command_pid"'* \
     && ! -e "$HOME/caller.signaled" ]]; then
     : >| "$HOME/caller.signaled"
-    ( zselect -t 100; builtin kill -USR1 $$ ) </dev/null >/dev/null 2>&1 3>&- &
+    print -r -- "wait-start $EPOCHREALTIME" >> "$HOME/claim.trace"
+    # The sender is a grandchild of the caller. A child exits right after its
+    # USR1, so its SIGCHLD can reach the caller together with the signal, and
+    # where SIGCHLD has the lower signal number, as on macOS, Zsh's wait then
+    # sees SIGCHLD last and keeps waiting. A grandchild's exit never signals
+    # the caller.
+    (
+      (
+        zselect -t 100
+        print -r -- "usr1-sent $EPOCHREALTIME" >> "$HOME/claim.trace"
+        builtin kill -USR1 $$
+      ) </dev/null >/dev/null 2>&1 3>&- &
+    ) </dev/null >/dev/null 2>&1 3>&-
+    return 0
+  fi
+  # Zsh shows an assignment with a trailing space.
+  if [[ "$ZSH_DEBUG_CMD" == 'command_rc=$?'* ]]; then
+    tokens=("${(@f)$(<"$timeout_marker")}")
+    print -r -- "wait-end status=$last_status marker=${(j:,:)tokens}" \
+      "$EPOCHREALTIME" >> "$HOME/claim.trace"
     return 0
   fi
   [[ "$ZSH_DEBUG_CMD" == 'builtin kill -KILL "$watchdog_pid"'* ]] || return 0
-  zselect -t "$1" 2>/dev/null
+  while (( ++attempt <= 1500 )); do
+    tokens=("${(@f)$(<"$timeout_marker")}")
+    (( ${#tokens} >= 2 )) && break
+    zselect -t 2 2>/dev/null
+  done
+  zselect -t 50 2>/dev/null
+  print -r -- "stall-end marker=${(j:,:)tokens} $EPOCHREALTIME" \
+    >> "$HOME/claim.trace"
   if builtin kill -0 "$watchdog_pid" 2>/dev/null; then
     print -r -- alive >| "$HOME/watchdog.state"
   else
@@ -302,7 +346,25 @@ _platform_stall_before_watchdog_kill() {
   return 0
 }
 
+# Prints the watchdog's state at the caller's KILL, then the tree outcome,
+# and the timed trace whenever the watchdog was not there or the caller's
+# wait did not end on USR1. Usage: _platform_claim_outcome <timeout-rc>
+_platform_claim_outcome() {
+  local -i timeout_rc="$1" outcome_rc=0
+  local state=""
+  [[ -f "$HOME/watchdog.state" ]] && state=$(<"$HOME/watchdog.state")
+  print -r -n -- "watchdog=$state "
+  _platform_tree_outcome $timeout_rc || outcome_rc=$?
+  if [[ "$state" != alive ]] \
+    || (( timeout_rc != 128 + ${signals[(i)USR1]} - 1 )); then
+    [[ -f "$HOME/claim.trace" ]] \
+      && print -r -- "trace: ${(j:; :)${(@f)$(<"$HOME/claim.trace")}}"
+  fi
+  return $outcome_rc
+}
+
 zmodload zsh/zselect
+zmodload zsh/datetime
 ZSH
 }
 
@@ -438,12 +500,13 @@ ZSH
 }
 
 # A trapped signal ends the caller's wait while the command still runs, one
-# second after the wait begins and two seconds before the deadline, however
+# second after the wait begins and seven seconds before the deadline, however
 # slowly the bounded call starts. The caller then stalls right before it KILLs
-# the watchdog, past the deadline, while the watchdog would fire and start a
-# slow pass. The caller must not cut that pass: the watchdog stands down, the
-# caller signals the tree itself, and the watchdog is still there for the
-# caller's KILL, so that no released PID is ever signaled.
+# the watchdog until the watchdog has passed its deadline and tried its claim,
+# when a watchdog that ignored the claim would start a slow pass. The caller
+# must not cut that pass: the watchdog stands down, the caller signals the
+# tree itself, and the watchdog is still there for the caller's KILL, so that
+# no released PID is ever signaled.
 @test "platform tools: a caller stopped before the deadline cannot cut the watchdog's late pass" {
   _platform_pass_helpers
 
@@ -456,12 +519,11 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=300
     trap ":" USR1
-    trap "_platform_stall_before_watchdog_kill 350" DEBUG
-    _zdx_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
+    trap _platform_stall_before_watchdog_kill DEBUG
+    _zdx_run_with_timeout 8 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
     trap - DEBUG
-    print -r -n -- "watchdog=$(<"$HOME/watchdog.state") "
-    _platform_tree_outcome $timeout_rc
+    _platform_claim_outcome $timeout_rc
   '
 
   [ "$status" -eq 0 ]
@@ -483,12 +545,11 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=300
     trap ":" USR1
-    trap "_platform_stall_before_watchdog_kill 350" DEBUG
-    _sys_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
+    trap _platform_stall_before_watchdog_kill DEBUG
+    _sys_run_with_timeout 8 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
     trap - DEBUG
-    print -r -n -- "watchdog=$(<"$HOME/watchdog.state") "
-    _platform_tree_outcome $timeout_rc
+    _platform_claim_outcome $timeout_rc
   ' _ "$TEST_SUITE_ROOT" "$PLATFORM_NO_TIMEOUT" "$PLATFORM_PASS_HELPERS" \
     "$PLATFORM_TMP"
 

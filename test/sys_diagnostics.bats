@@ -856,13 +856,28 @@ EOF
       builtin command "$@"
     }
 
-    _sys_run_with_timeout 1 zsh -c \
-      "sleep 20 & print -r -- \$! > '$HOME/descendant.pid'; wait"
+    zmodload zsh/zselect || return 97
+
+    # The descendant is recorded first, so a loaded host has the whole bound
+    # to start it, and it outlives the bound and the wait below. Its streams
+    # never hold the BATS pipes open.
+    _sys_run_with_timeout 3 zsh -fc \
+      "sleep 60 </dev/null >/dev/null 2>&1 3>&- &
+      print -r -- \$! > \"\$HOME/descendant.pid\"
+      wait"
     local timeout_rc=$?
     local descendant_pid
     descendant_pid=$(<"$HOME/descendant.pid") || return 98
+    [[ "$descendant_pid" == <-> ]] || return 98
+    # A signaled process dies and is reaped asynchronously: wait up to 10 s.
+    local -i attempt=0
+    while builtin kill -0 "$descendant_pid" 2>/dev/null \
+      && (( ++attempt <= 500 )); do
+      zselect -t 2
+    done
     if builtin kill -0 "$descendant_pid" 2>/dev/null; then
       builtin kill -KILL "$descendant_pid" 2>/dev/null
+      print -r -- "descendant still ran 10 s after the timeout (rc=$timeout_rc)"
       return 99
     fi
     return $timeout_rc
