@@ -1372,6 +1372,9 @@ large-file inspection, a recoverable trash, and junk-file cleanup. Run
   require `--overwrite`; the reviewed file is fingerprinted before
   replacement. A format whose tool is missing is refused before the plan,
   and the format picker marks it, such as `○ tar.zst (missing: zstd)`.
+  Inherited `TAR_OPTIONS`, `ZIPOPT`, `GZIP`, and similar default-option
+  variables are ignored. If the inputs change while the archive is created,
+  the unpublished archive is kept and reported as a recovery path.
 - **Extract (`file-extract`)**: The hardened extractor intentionally accepts
   only GNU TAR archives (`.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.bz2`,
   `.tar.zst`, and `.tzst`) and needs GNU tar as `tar` or `gtar`; on macOS,
@@ -1455,8 +1458,8 @@ For example, `file-find-large --min-size 100M --delete --dry-run` shows the
 exact deletion plan; run it again with `--yes` instead of `--dry-run` to apply
 it. To keep a way back, move the files with `file-trash put` instead and
 purge them once you are sure. An interrupted batch stops before later targets and reports a non-zero
-status; completed changes remain. If deletion reports a recovery path, inspect
-that quarantine before retrying the original operation.
+status; completed changes remain. If deletion or compression reports a
+recovery path, inspect it before retrying the original operation.
 
 ### ⚙️ Configuration
 

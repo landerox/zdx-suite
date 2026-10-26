@@ -49,6 +49,11 @@ verification, and remaining limitations.
   the whole repository when run from a subdirectory with `diff.relative`;
   before, an unstage could drop the only copy of a staged version without the
   confirmation, and an amend could commit files its plan never listed.
+- Files: `file-compress` and `file-extract` ignore inherited `TAR_OPTIONS`,
+  `ZIPOPT`, `GZIP`, and similar default-option variables, so
+  `TAR_OPTIONS=--remove-files` can no longer delete the inputs; when the inputs
+  change during creation, the unpublished archive is kept and reported as a
+  recovery path instead of deleted.
 
 ## [0.1.0] — 2026-10-22
 

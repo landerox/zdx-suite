@@ -384,6 +384,30 @@ AppleDouble `._*` members nor extended-attribute headers. 7z archives use the
 first of `7z`, `7zz` (7-Zip 21 and newer, as Homebrew's `sevenzip` installs
 it), and `7za`.
 
+Archive tools run without the default-option variables they read from the
+environment, so only the reviewed command line decides what they do: an
+inherited `TAR_OPTIONS=--remove-files` or `ZIPOPT=-m` would otherwise delete
+the inputs once they are archived, and an inherited `--exclude` would narrow
+the reviewed listing and the extraction alike. The hidden variables are GNU
+tar's `TAR_OPTIONS`; bsdtar's `TAR_READER_OPTIONS` and `TAR_WRITER_OPTIONS`;
+`TAPE`, which both tars read when no archive is named; Info-ZIP's `ZIPOPT` and
+`ZIP`, and the `UNZIP` and `UNZIPOPT`, or in its zipinfo mode the `ZIPINFO`
+and `ZIPINFOOPT`, of the unzip that zip can run to test an archive; and the
+`GZIP`, `XZ_DEFAULTS`, `XZ_OPT`, `BZIP2`, `BZIP`, `LBZIP2`, `LZOP`,
+`ZSTD_CLEVEL`, and `ZSTD_NBTHREADS` of the compressors that tar runs,
+including lzop and lbzip2, the bzip2 fallback, which its content detection
+can select. lzip, compress, and 7-Zip document none. This applies to
+creation, to every tar capability and version probe, and to the extraction
+listing and extraction. A read-only value is hidden too, and the shell keeps
+its own values.
+
+After the archive tool succeeds, the inputs are revalidated before
+publication. When they changed, the unpublished archive could hold the only
+copy of their data, so it is not deleted: it stays in its private staging
+directory, a `.zdx-file-archive.` directory beside the output, a
+`Recovery path:` key-value fact after the error names it, and `file-compress`
+returns `1`. Inspect or move the archive, then remove that directory.
+
 ### zstd TAR archives
 
 `tar.zst` archives are created and extracted only with GNU tar, never bsdtar,
@@ -401,10 +425,13 @@ either requirement gets an error that names every missing one, such as
 zstd).`, followed by the installation step; the same check refuses a
 `.tar.zst` or `.tzst` extraction before its snapshot is taken.
 
-Extraction takes no separate zstd path. GNU tar recognizes gzip, xz, bzip2,
-and zstd compression from the archive content rather than its name, so a
-zstd archive is listed, preflighted, extracted, and validated by exactly the
-steps below, with the same refusals and bounds as every other TAR archive.
+Extraction takes no separate zstd path. GNU tar recognizes compress, gzip,
+bzip2, lzip, lzma, lzop, xz, and zstd compression from the archive content
+rather than its name and runs the matching program from `PATH`, falling back
+to gzip when compress is missing, to lbzip2 when bzip2 is, and to xz when
+lzma is. A zstd archive is therefore listed, preflighted, extracted, and
+validated by exactly the steps below, with the same refusals and bounds as
+every other TAR archive.
 
 ### Extraction
 
@@ -524,7 +551,15 @@ retain scan failures. Recovery tests execute a real multi-file large-file
 deletion and real GNU TAR round trips in disposable trees, one of them through
 `tar.zst` and `.tzst`; the round trips and the interrupted extraction skip
 when the host has no GNU tar as `tar` or `gtar`, and the zstd round trip also
-when that GNU tar lacks `--zstd` or `zstd` is missing. Junk-file tests
+when that GNU tar lacks `--zstd` or `zstd` is missing. Recovery tests also
+export hostile default options for every archive tool, a read-only
+`TAR_OPTIONS` among them, and prove that no mocked tar, zip, or 7z and no real
+GNU tar or gzip receives them, that the inputs and the archive content stay
+exact, that an inherited bsdtar writer option misleads neither the metadata
+probe nor creation, that an inherited `--exclude` cannot narrow a real
+extraction, and that inputs changed during creation retain and report the
+unpublished archive; the real GNU tar cases skip like the round trips.
+Junk-file tests
 cover the empty result, dry run, non-interactive refusal, decline, exact names
 including colon and leading-dash names, names the plan cannot represent, links
 and directories named like junk, pruned Git metadata and generated trees,

@@ -260,6 +260,43 @@ _file_wsl_drive_hint() {
   _file_dim "Work in the Linux filesystem, such as ~/projects, or add [automount] options=\"metadata,umask=22,fmask=11\" to /etc/wsl.conf and restart WSL."
 }
 
+# Runs one archive tool, such as tar, zip, or 7-Zip, without the default-option
+# variables that archive tools read from the environment, so the reviewed
+# command line alone decides what the tool does: an inherited
+# TAR_OPTIONS=--remove-files or ZIPOPT=-m would delete the inputs it archives.
+# Each tool documents its own: GNU tar reads TAR_OPTIONS, bsdtar reads
+# TAR_READER_OPTIONS and TAR_WRITER_OPTIONS, and both read TAPE when no
+# archive is named; Info-ZIP zip reads ZIPOPT and ZIP, and the unzip it can
+# run to test an archive reads UNZIP and UNZIPOPT, or ZIPINFO and ZIPINFOOPT
+# in its zipinfo mode. The compressors that tar runs read GZIP, XZ_DEFAULTS
+# and XZ_OPT, BZIP2 and BZIP, and ZSTD_CLEVEL and ZSTD_NBTHREADS. GNU tar
+# picks a decompressor from the archive content, so it can also run lzop,
+# which reads LZOP, and lbzip2, its fallback for bzip2, which reads LBZIP2;
+# lzip and compress read none. 7-Zip reads none. --timeout SECONDS, from 1 to
+# 600, bounds the tool through _file_run_with_timeout. Status 2 means an
+# invalid timeout or no program, and nothing runs.
+# Usage: _file_run_archive_tool [--timeout SECONDS] <program> [argument...]
+_file_run_archive_tool() {
+  emulate -L zsh
+  local seconds=""
+  if [[ "${1-}" == --timeout ]]; then
+    seconds="${2-}"
+    [[ "$seconds" == <1-600> && ${#seconds} -le 3 ]] || return 2
+    shift 2
+  fi
+  (( $# > 0 )) || return 2
+  # Unexported locals hide each inherited value from the tool, a read-only
+  # one too, and the caller's values return with the function.
+  local TAR_OPTIONS TAR_READER_OPTIONS TAR_WRITER_OPTIONS TAPE \
+    ZIPOPT ZIP UNZIP UNZIPOPT ZIPINFO ZIPINFOOPT \
+    GZIP XZ_DEFAULTS XZ_OPT BZIP2 BZIP LBZIP2 LZOP ZSTD_CLEVEL ZSTD_NBTHREADS
+  if [[ -n "$seconds" ]]; then
+    _file_run_with_timeout "$seconds" "$@"
+  else
+    command "$@"
+  fi
+}
+
 # REPLY is the absolute path of GNU tar, found as tar or as gtar (Homebrew's
 # gnu-tar on macOS). Hardened extraction depends on GNU listing options, so
 # bsdtar is never used for it.
@@ -269,7 +306,7 @@ _file_gnu_tar_command() {
   for candidate in tar gtar; do
     resolved=$(whence -p "$candidate" 2>/dev/null) || continue
     [[ "$resolved" == /* && -x "$resolved" ]] || continue
-    version_text=$(LC_ALL=C command "$resolved" --version \
+    version_text=$(LC_ALL=C _file_run_archive_tool "$resolved" --version \
       </dev/null 2>/dev/null) || continue
     [[ "${version_text%%$'\n'*}" == *"GNU tar"* ]] || continue
     REPLY="$resolved"
@@ -293,7 +330,7 @@ _file_tar_zstd_command() {
   if _file_gnu_tar_command; then
     tar_command="$REPLY"
     REPLY=""
-    _file_run_with_timeout 10 "$tar_command" --zstd --version \
+    _file_run_archive_tool --timeout 10 "$tar_command" --zstd --version \
       </dev/null >/dev/null 2>&1 || {
       missing+=("GNU tar with --zstd")
       tar_command=""
@@ -343,7 +380,7 @@ _file_tar_create_command() {
   tar_command=$(whence -p tar 2>/dev/null) || tar_command=""
   [[ "$tar_command" == /* && -x "$tar_command" ]] || return 1
   # Capability probe: an empty archive written to /dev/null.
-  if command "$tar_command" --no-mac-metadata --no-xattrs \
+  if _file_run_archive_tool "$tar_command" --no-mac-metadata --no-xattrs \
     -cf /dev/null -T /dev/null </dev/null >/dev/null 2>&1; then
     reply=("$tar_command" --no-mac-metadata --no-xattrs)
   else

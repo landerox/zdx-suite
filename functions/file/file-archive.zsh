@@ -323,6 +323,7 @@ _file_compress_execute() {
   done
 
   local -i archive_rc=1 operation_rc=1 cleanup_rc=0
+  local keep_stage=no
   local -a archive_command=()
   {
     case "$format" in
@@ -362,7 +363,7 @@ _file_compress_execute() {
     (
       builtin cd -- "$base_dir" || return 1
       export COPYFILE_DISABLE=1
-      command "${archive_command[@]}" "${archive_operands[@]}"
+      _file_run_archive_tool "${archive_command[@]}" "${archive_operands[@]}"
     ) >&2
     archive_rc=$?
 
@@ -378,7 +379,11 @@ _file_compress_execute() {
       if (( operation_rc == 0 )); then
         _file_archive_revalidate_inputs inputs "$identities_text" || {
           operation_rc=$?
-          _file_error "Archive inputs changed during creation."
+          # The inputs may be gone, so the unpublished archive could hold the
+          # only copy of their data: its private staging directory stays.
+          keep_stage=yes
+          _file_error "Archive inputs changed during creation; the unpublished archive was retained."
+          _file_label "Recovery path" "$staged_file"
         }
       fi
       if (( operation_rc == 0 )); then
@@ -391,7 +396,7 @@ _file_compress_execute() {
       fi
     fi
   } always {
-    if [[ -d "$stage_dir" ]]; then
+    if [[ "$keep_stage" != yes && -d "$stage_dir" ]]; then
       _file_archive_cleanup_stage "$stage_dir" "$stage_identity" \
         || cleanup_rc=$?
     fi
@@ -552,7 +557,7 @@ _file_tar_preflight() {
     _file_require_cmd head "bounded TAR preflight" || return 1
     setopt local_options pipefail
     local -i producer_rc=1
-    LC_ALL=C command "$tar_command" --list --file="$archive_file" \
+    LC_ALL=C _file_run_archive_tool "$tar_command" --list --file="$archive_file" \
       --quoting-style=escape 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
         > "$names_file"
@@ -569,7 +574,7 @@ _file_tar_preflight() {
       _file_error "Could not produce a bounded TAR name inventory."
       return 1
     }
-    LC_ALL=C command "$tar_command" --list --verbose --numeric-owner \
+    LC_ALL=C _file_run_archive_tool "$tar_command" --list --verbose --numeric-owner \
       --file="$archive_file" --quoting-style=escape 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
         > "$verbose_file"
@@ -901,7 +906,7 @@ _file_extract_snapshot_run() {
   local stage_identity="${reply[2]}"
   local -i operation_rc=1 cleanup_rc=0
   {
-    LC_ALL=C command "$tar_command" --extract --file="$archive_snapshot" \
+    LC_ALL=C _file_run_archive_tool "$tar_command" --extract --file="$archive_snapshot" \
       --directory="$stage_dir" \
       --no-same-owner --no-same-permissions >&2 || {
       operation_rc=$?
