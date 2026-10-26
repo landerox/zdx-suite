@@ -20,9 +20,12 @@ teardown() {
 
 # Runs Zsh with the System suite on a Linux host without systemd or a package
 # manager. Cleanup tools are hidden unless named in CLEAN_SHOW_TOOLS, and
-# running executables are the colon-separated CLEAN_RUNNING paths.
+# running executables are the colon-separated CLEAN_RUNNING paths. The
+# program starts in the sandbox root, so a cleanup resolves the Git
+# repository of its working directory, never the checkout under test.
 run_cleanup_zsh() {
   run_zsh "
+    builtin cd -q -- \"\$TEST_TEMP_DIR\" || return 95
     source \"\$ZSH_CUSTOM/functions/sys-menu.zsh\" || return 98
     _SYS_CAPABILITIES=(
       architecture x86_64

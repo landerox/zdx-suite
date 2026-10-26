@@ -515,6 +515,23 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   resources. It names the steps that use `sudo` before authorization and
   leaves lock arbitration to the package manager: no process-name scan gates
   it, and a held APT lock fails only the APT cache step.
+- System cleanup resolves the npm, uv, pip, and Go caches and runs their
+  cleans from `/` in a subshell, and Go with `GOTOOLCHAIN=local`, so project
+  configuration in the working directory (`uv.toml` or `[tool.uv]`, `.npmrc`,
+  `go.mod`) never chooses a deletion target. A uv cache must be uv's default
+  directory or carry uv's `CACHEDIR.TAG` signature, read through the timeout
+  service so a FIFO cannot block it, and a Go module cache must have a
+  `cache/download` directory that no symbolic link reaches; otherwise the plan
+  omits it with one warning. No cache path, release root, or store may be or
+  contain the ZDX suite root or a directory of the repository that contains
+  the working directory: the nearest `.git` holder or Git directory, as in a
+  bare repository, plus the Git directory and top level that a bounded
+  `git rev-parse --absolute-git-dir --show-toplevel` reports, resolved once
+  per run. `sys_maintenance.bats` covers project configuration, the toolchain
+  pin, the layout signatures, and the protected roots. Residual risk: the
+  user's environment and own tool configuration still choose these caches,
+  the tools run by name from `PATH` rather than as the validated executable,
+  and `pre-commit gc` still runs in the caller's directory.
 - Superseded tool versions (CLI release stores, AWS CLI v2 bundles, and nvm
   runtimes) are planned by exact name below a validated root. Execution
   resolves them again and removes only planned names that are still
@@ -1310,8 +1327,11 @@ in a compromised release channel and then installed, potentially as root.
   exists for hosts where pip lives only there, so it does not use `-I`; on
   Python older than 3.11 only the neutral directory protects it.
   `sys_maintenance.bats` plants pip code next to a real pip-less interpreter
-  and records the directory and environment of every pip call. The uv, npm,
-  and Go cache probes still run in the caller's directory.
+  and records the directory and environment of every pip call.
+- System cleanup never downloads or switches a Go toolchain: every Go probe
+  and `go clean -modcache` runs from `/` with `GOTOOLCHAIN=local`, so a
+  `toolchain` line in a `go.mod` cannot fetch and run another toolchain, not
+  even during `--dry-run`.
 - The Py suite never bootstraps a package backend or invokes ambient `pip`.
   Project package and isolated-tool mutations disclose that index content is
   executable code, require an explicit reviewed plan, and bind execution to the

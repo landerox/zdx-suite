@@ -5,51 +5,194 @@
 #
 # Loaded by sys-menu.zsh after sys-common.zsh, sys-capabilities.zsh, and the
 # platform adapters.
-# Safe to re-source; defines functions only.
+# Safe to re-source; defines functions and the suite root it protects.
 #
 
 if [[ -n "${_SYS_CLEAN_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# The suite root that cleanup never removes, from this file's location in
+# functions/sys/. It stands in for the core's root in a standalone suite.
+typeset -g _SYS_CLEAN_SUITE_ROOT="${${(%):-%x}:A:h:h:h}"
+
 # =============================================================================
 # CLEAN STEPS (internal helpers)
 # =============================================================================
 
+# REPLY: <path> for display, with a leading home directory shown as ~.
+# Usage: _sys_clean_display_path <path>
+_sys_clean_display_path() {
+  local path_text="${1:-}" home_abs="${HOME:A}"
+  if [[ -n "$HOME" && "$HOME" != / && "$path_text" == "$HOME"/* ]]; then
+    path_text="~/${path_text#"$HOME"/}"
+  elif [[ "$home_abs" != / && "$path_text" == "$home_abs"/* ]]; then
+    path_text="~/${path_text#"$home_abs"/}"
+  fi
+  REPLY="$path_text"
+}
+
+# True when <dir> is itself a Git directory, as a bare repository or a .git
+# directory is: it has the HEAD, objects/, and refs/ entries Git checks for.
+# Usage: _sys_clean_is_git_dir <dir>
+_sys_clean_is_git_dir() {
+  local dir="${1:-}"
+  [[ ( -e "$dir/HEAD" || -L "$dir/HEAD" ) && -d "$dir/objects" \
+    && -d "$dir/refs" ]]
+}
+
+# reply: the canonical directories of the Git repository that contains the
+# working directory, empty outside one. The nearest directory at or above it
+# that holds a .git entry or is itself a Git directory, as a bare repository
+# is, always counts. The bounded Git reader adds the Git directory and the
+# work tree top level it reports, which a planted core.worktree can move
+# elsewhere. Git is not run outside a repository, and a failed probe keeps
+# the directory found on disk. rev-parse reads no index, so no fsmonitor or
+# other configured command runs.
+_sys_clean_repository_roots() {
+  local directory="${PWD:A}" answer="" line
+  reply=()
+  until [[ -e "$directory/.git" || -L "$directory/.git" ]] \
+    || _sys_clean_is_git_dir "$directory"; do
+    [[ "$directory" == / ]] && return 0
+    directory="${directory:h}"
+  done
+  if (( ${+functions[_sys_update_git_read]} )) && _sys_tool_available git; then
+    answer=$(_sys_update_git_read -C "${PWD:A}" rev-parse --absolute-git-dir \
+      --show-toplevel </dev/null 2>/dev/null) || answer=""
+  fi
+  reply=("$directory")
+  for line in "${(@f)answer}"; do
+    [[ "$line" == /* && "$line" != *[[:cntrl:]]* ]] && reply+=("${line:A}")
+  done
+  reply=("${(@u)reply}")
+  return 0
+}
+
+# reply: "<label>|<root>" records of the canonical directories that no
+# cleanup target may be or contain: the suite root, both the core's and this
+# suite's own, and the top levels of the repository that contains the
+# working directory.
+_sys_clean_resolve_protected_roots() {
+  local root
+  local -a roots=() repository_roots=()
+  [[ -n "${_ZDX_FUNCTIONS_DIR:-}" ]] \
+    && roots+=("the ZDX suite|${_ZDX_FUNCTIONS_DIR:h:A}")
+  [[ -n "${_SYS_CLEAN_SUITE_ROOT:-}" ]] \
+    && roots+=("the ZDX suite|${_SYS_CLEAN_SUITE_ROOT:A}")
+  _sys_clean_repository_roots
+  repository_roots=("${reply[@]}")
+  for root in "${repository_roots[@]}"; do
+    roots+=("the current repository|$root")
+  done
+  reply=("${(@u)roots}")
+}
+
+# reply: the protected-root records of this cleanup run, which
+# _sys_clean_system_main resolves once before any probe; a direct call
+# resolves them now.
+_sys_clean_protected_roots() {
+  if (( ${_sys_clean_protected_ready:-0} )); then
+    reply=("${_sys_clean_protected_cache[@]}")
+  else
+    _sys_clean_resolve_protected_roots
+  fi
+}
+
+# REPLY: the canonical <path> when it may be a cleanup target: an absolute
+# path below HOME, never HOME itself, that crosses no symbolic link, is not
+# and does not contain a protected root (_sys_clean_protected_roots), and is
+# a user-owned directory when it exists. A refusal prints an error and
+# returns 1; with --quiet it prints nothing and REPLY holds the displayed
+# path and the reason, for the caller's single warning.
+# Usage: _sys_clean_validate_user_path [--quiet] <path>
 _sys_clean_validate_user_path() {
-  local candidate="$1"
+  local -i quiet=0
+  [[ "${1:-}" == --quiet ]] && { quiet=1; shift; }
+  local candidate="${1:-}"
   local home_abs="${HOME:A}"
   local current="$HOME"
-  local relative_path
+  local relative_path target record root shown
+  local -a reply=()
 
   [[ "$candidate" == /* && "$candidate" != *$'\n'* \
     && "$candidate" != *$'\r'* && "$candidate" != *$'\t'* \
     && "$candidate" != *'|'* ]] || {
-    _sys_error "Cleanup target is not a safe absolute path."
+    _sys_clean_path_refused $quiet "$candidate" \
+      "Cleanup target is not a safe absolute path." \
+      "is not a safe absolute path."
     return 1
   }
   [[ "${candidate:A}" == "$home_abs"/* \
     && "${candidate:A}" != "$home_abs" ]] || {
-    _sys_error "Cleanup target is outside the protected user boundary."
+    _sys_clean_path_refused $quiet "$candidate" \
+      "Cleanup target is outside the protected user boundary." \
+      "is outside the protected user boundary."
     return 1
   }
+  target="${candidate:A}"
+  _sys_clean_protected_roots
+  for record in "${reply[@]}"; do
+    root="${record#*|}"
+    [[ -n "$root" ]] \
+      && [[ "$target" == "$root" || "$root" == "$target"/* ]] || continue
+    _sys_clean_display_path "$target"
+    shown="$REPLY"
+    _sys_clean_path_refused $quiet "$target" \
+      "Cleanup target $shown is or contains ${record%%|*}." \
+      "is or contains ${record%%|*}."
+    return 1
+  done
 
   relative_path="${candidate#$HOME/}"
   local component
   for component in "${(@s:/:)relative_path}"; do
     current+="/$component"
     [[ ! -L "$current" ]] || {
-      _sys_error "Cleanup target crosses a symbolic link."
+      _sys_clean_path_refused $quiet "$candidate" \
+        "Cleanup target crosses a symbolic link." \
+        "crosses a symbolic link."
       return 1
     }
   done
   if [[ -e "$candidate" ]]; then
     [[ -d "$candidate" && ! -L "$candidate" && -O "$candidate" ]] || {
-      _sys_error "Cleanup target must be a user-owned directory."
+      _sys_clean_path_refused $quiet "$candidate" \
+        "Cleanup target must be a user-owned directory." \
+        "is not a user-owned directory."
       return 1
     }
   fi
   REPLY="${candidate:A}"
+}
+
+# Reports one refused cleanup target: <error> as an error, or with <quiet> 1
+# nothing, leaving REPLY as the displayed <path> followed by <reason>.
+# Usage: _sys_clean_path_refused <quiet> <path> <error> <reason>
+_sys_clean_path_refused() {
+  if (( ${1:-0} )); then
+    _sys_clean_display_path "${2:-}"
+    REPLY+=" ${4:-}"
+  else
+    _sys_error "${3:-}"
+  fi
+}
+
+# Prints the validated form of <dir> (_sys_clean_validate_user_path). Status 1
+# after the validator's error; with --quiet, status 3 and the refusal reason
+# printed instead, so the plan can warn once.
+# Usage: _sys_clean_print_validated [--quiet] <dir>
+_sys_clean_print_validated() {
+  local REPLY
+  if [[ "${1:-}" == --quiet ]]; then
+    _sys_clean_validate_user_path --quiet "${2:-}" || {
+      print -r -- "$REPLY"
+      return 3
+    }
+  else
+    _sys_clean_validate_user_path "${1:-}" || return 1
+  fi
+  print -r -- "$REPLY"
 }
 
 # Runs one command from the root directory in a subshell, so a cache probe or
@@ -65,21 +208,65 @@ _sys_clean_in_neutral_dir() {
   )
 }
 
+# The npm, uv, and Go probes and cleans run through _sys_clean_in_neutral_dir,
+# so a project .npmrc, uv.toml, [tool.uv] table, or go.mod in the working
+# directory never chooses a target; the user's own configuration and
+# environment still apply. Each probe prints its validated directory, with
+# status 1 when it fails or, after the validator's error, when the directory
+# is refused; with --quiet a refusal prints its reason and returns 3.
+# Usage: _sys_clean_npm_cache_dir [--quiet]
 _sys_clean_npm_cache_dir() {
-  local REPLY
   local cache_dir
-  cache_dir=$(_sys_run_with_timeout 5 npm config get cache 2>/dev/null) \
-    || return 1
-  _sys_clean_validate_user_path "$cache_dir" || return 1
-  print -r -- "$REPLY"
+  cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
+    npm config get cache 2>/dev/null) || return 1
+  _sys_clean_print_validated "$@" "$cache_dir"
 }
 
+# Usage: _sys_clean_uv_cache_dir [--quiet]
 _sys_clean_uv_cache_dir() {
-  local REPLY
   local cache_dir
-  cache_dir=$(_sys_run_with_timeout 5 uv cache dir 2>/dev/null) || return 1
-  _sys_clean_validate_user_path "$cache_dir" || return 1
-  print -r -- "$REPLY"
+  cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
+    uv cache dir 2>/dev/null) || return 1
+  _sys_clean_print_validated "$@" "$cache_dir"
+}
+
+# True when <dir> is a uv cache root: uv's default
+# ${XDG_CACHE_HOME:-~/.cache}/uv, or a directory holding the CACHEDIR.TAG that
+# uv writes, a regular file of at most 4096 bytes that starts with the
+# 43-byte signature of the Cache Directory Tagging Specification.
+# Usage: _sys_clean_uv_cache_layout <dir>
+_sys_clean_uv_cache_layout() {
+  local dir="${1:-}" cache_home="${XDG_CACHE_HOME:-}" default_dir tag
+  local signature=""
+  local -A tag_state=() read_state=()
+  [[ "$dir" == /* ]] || return 1
+  # uv, like the XDG specification, ignores a relative XDG_CACHE_HOME.
+  [[ "$cache_home" == /* ]] || cache_home="$HOME/.cache"
+  default_dir="$cache_home/uv"
+  [[ "${dir:A}" == "${default_dir:A}" ]] && return 0
+  tag="$dir/CACHEDIR.TAG"
+  [[ -f "$tag" && ! -L "$tag" && -r "$tag" ]] || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null \
+    && zstat -L -H tag_state -- "$tag" 2>/dev/null || return 1
+  (( tag_state[size] <= 4096 )) || return 1
+  # The name can be swapped for a FIFO after these checks, so the read is
+  # bounded in time and size, and the file must still be the one checked.
+  signature=$(_sys_run_bounded_probe 2 64 head -c 43 -- "$tag" \
+    </dev/null 2>/dev/null) || return 1
+  zstat -L -H read_state -- "$tag" 2>/dev/null || return 1
+  [[ -f "$tag" && ! -L "$tag" \
+    && "${read_state[device]}:${read_state[inode]}" \
+      == "${tag_state[device]}:${tag_state[inode]}" ]] || return 1
+  [[ "$signature" == "Signature: 8a477f597d28d172789f06886806bc55" ]]
+}
+
+# True when <dir> has the Go module cache layout: a cache/download directory
+# that no symbolic link reaches.
+# Usage: _sys_clean_go_cache_layout <dir>
+_sys_clean_go_cache_layout() {
+  local dir="${1:-}"
+  [[ "$dir" == /* && -d "$dir/cache" && ! -L "$dir/cache" \
+    && -d "$dir/cache/download" && ! -L "$dir/cache/download" ]]
 }
 
 # reply: the argv of the pip whose cache the cleanup manages: pip, then pip3,
@@ -122,13 +309,14 @@ _sys_clean_pip_cache_dir() {
   print -r -- "$REPLY"
 }
 
+# GOTOOLCHAIN=local keeps every Go probe and clean on the installed
+# toolchain: a toolchain line can never make cleanup download or switch one.
+# Usage: _sys_clean_go_cache_dir [--quiet]
 _sys_clean_go_cache_dir() {
-  local REPLY
   local cache_dir
-  cache_dir=$(_sys_run_with_timeout 5 go env GOMODCACHE 2>/dev/null) \
-    || return 1
-  _sys_clean_validate_user_path "$cache_dir" || return 1
-  print -r -- "$REPLY"
+  cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
+    env GOTOOLCHAIN=local go env GOMODCACHE 2>/dev/null) || return 1
+  _sys_clean_print_validated "$@" "$cache_dir"
 }
 
 # The pre-commit cache follows PRE_COMMIT_HOME, then XDG_CACHE_HOME, as
@@ -832,8 +1020,8 @@ _sys_clean_step_npm_cache() {
     _sys_error "The confirmed npm cache directory is no longer available."
     return 1
   }
-  _sys_run_logged "npm cache clean --force" \
-    env npm_config_cache="$cache_dir" npm cache clean --force
+  _sys_run_logged "npm cache clean --force" _sys_clean_in_neutral_dir \
+    command env npm_config_cache="$cache_dir" npm cache clean --force
 }
 
 _sys_clean_step_uv_cache() {
@@ -856,7 +1044,12 @@ _sys_clean_step_uv_cache() {
     _sys_error "The confirmed uv cache directory is no longer available."
     return 1
   }
-  _sys_run_logged "uv cache clean" env UV_CACHE_DIR="$cache_dir" uv cache clean
+  _sys_clean_uv_cache_layout "$cache_dir" || {
+    _sys_error "The confirmed uv cache directory no longer has its CACHEDIR.TAG."
+    return 1
+  }
+  _sys_run_logged "uv cache clean" _sys_clean_in_neutral_dir \
+    command env UV_CACHE_DIR="$cache_dir" uv cache clean
 }
 
 _sys_clean_step_pip_cache() {
@@ -1206,7 +1399,12 @@ _sys_clean_step_go_modcache() {
     _sys_error "The confirmed Go module cache is no longer available."
     return 1
   }
-  env GOMODCACHE="$cache_dir" go clean -modcache >&2
+  _sys_clean_go_cache_layout "$cache_dir" || {
+    _sys_error "The confirmed Go module cache no longer has its cache/download directory."
+    return 1
+  }
+  _sys_clean_in_neutral_dir command env GOTOOLCHAIN=local \
+    GOMODCACHE="$cache_dir" go clean -modcache >&2
 }
 
 _sys_clean_step_journal() {
@@ -1249,6 +1447,33 @@ _sys_clean_step_temp_files() {
   command rm -rf -- "$REPLY"/*(ND) 2>/dev/null
 }
 
+# Prints the "<label>|<dir>" plan record of one probed cache, or one warning
+# that says why it is skipped: the probe failed, the validator refused the
+# directory, which it reports with --quiet, or the directory lacks its
+# layout signature. An absent cache has nothing to clean and is skipped
+# silently.
+# Usage: _sys_clean_plan_cache <label> <dir-function> [<layout-function> <signature>]
+_sys_clean_plan_cache() {
+  local label="${1:-}" dir_function="${2:-}" layout_function="${3:-}"
+  local signature="${4:-}" cache_dir REPLY
+  local -i cache_rc=0
+  cache_dir=$("$dir_function" --quiet) || cache_rc=$?
+  if (( cache_rc == 3 )); then
+    _sys_warn "Skipping $label: $cache_dir"
+    return 0
+  elif (( cache_rc != 0 )); then
+    _sys_warn "Skipping $label: its directory could not be resolved."
+    return 0
+  fi
+  [[ -d "$cache_dir" ]] || return 0
+  if [[ -n "$layout_function" ]] && ! "$layout_function" "$cache_dir"; then
+    _sys_clean_display_path "$cache_dir"
+    _sys_warn "Skipping $label: $REPLY has no $signature."
+    return 0
+  fi
+  print -r -- "$label|$cache_dir"
+}
+
 _sys_clean_plan() {
   local REPLY
   local -a reply=()
@@ -1261,20 +1486,11 @@ _sys_clean_plan() {
   # Nothing is removed for a cache whose directory cannot be resolved.
   # A Windows npm that WSL reaches through its appended Windows PATH is not
   # this host's npm.
-  if _sys_tool_available npm; then
-    if cache_dir=$(_sys_clean_npm_cache_dir); then
-      [[ -d "$cache_dir" ]] && print -r -- "npm cache|$cache_dir"
-    else
-      _sys_warn "Skipping npm cache: its directory could not be resolved."
-    fi
-  fi
-  if command -v uv &>/dev/null; then
-    if cache_dir=$(_sys_clean_uv_cache_dir); then
-      [[ -d "$cache_dir" ]] && print -r -- "uv cache|$cache_dir"
-    else
-      _sys_warn "Skipping uv cache: its directory could not be resolved."
-    fi
-  fi
+  _sys_tool_available npm \
+    && _sys_clean_plan_cache "npm cache" _sys_clean_npm_cache_dir
+  command -v uv &>/dev/null \
+    && _sys_clean_plan_cache "uv cache" _sys_clean_uv_cache_dir \
+      _sys_clean_uv_cache_layout "uv CACHEDIR.TAG"
   if _sys_clean_pip_command; then
     if cache_dir=$(_sys_clean_pip_cache_dir); then
       [[ -d "$cache_dir" ]] && print -r -- "pip cache|$cache_dir"
@@ -1349,13 +1565,9 @@ _sys_clean_plan() {
         "${RUSTUP_HOME:-$HOME/.rustup}/downloads" || return 1
       print -r -- "Rust downloads|$REPLY"
     fi
-    if command -v go &>/dev/null; then
-      if cache_dir=$(_sys_clean_go_cache_dir); then
-        [[ -d "$cache_dir" ]] && print -r -- "Go module cache|$cache_dir"
-      else
-        _sys_warn "Skipping Go module cache: its directory could not be resolved."
-      fi
-    fi
+    command -v go &>/dev/null \
+      && _sys_clean_plan_cache "Go module cache" _sys_clean_go_cache_dir \
+        _sys_clean_go_cache_layout "cache/download directory"
   fi
   return 0
 }
@@ -1595,6 +1807,14 @@ _sys_clean_system_main() {
     && [[ "$assume_yes" == 0 || "$assume_yes" == 1 ]] || return 2
   local REPLY
   local -a reply=()
+
+  # The protected roots come from the caller's directory once, before any
+  # probe; the plan and every step's revalidation reuse them.
+  local -a _sys_clean_protected_cache=()
+  local -i _sys_clean_protected_ready=0
+  _sys_clean_resolve_protected_roots
+  _sys_clean_protected_cache=("${reply[@]}")
+  _sys_clean_protected_ready=1
 
   local plan_output
   plan_output=$(_sys_clean_plan "$mode") || return 1

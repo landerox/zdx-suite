@@ -1317,7 +1317,11 @@ clean-snaps --dry-run
 
 Every broad cleanup displays its typed target plan. Execution runs only those
 confirmed records, forwards their recorded scopes to the owning helpers, and
-revalidates dynamic cache paths before mutation. A non-interactive mutation
+revalidates dynamic cache paths before mutation. Cache locations come from your
+own tool configuration and environment, never from the project you are in; a
+uv or Go cache without its tool's layout marker, or a path that is or contains
+the ZDX suite or your current repository, is skipped with a warning. A
+non-interactive mutation
 fails closed without `--yes`; dry-run does not require confirmation. The plan
 names the steps that ask for `sudo`. If another APT process is working, such
 as an automatic update, only the APT cache step fails with APT's own message;
