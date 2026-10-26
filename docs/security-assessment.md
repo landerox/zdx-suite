@@ -709,7 +709,15 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   post-move identity checks detect a destination directory that appeared
   after review, and nothing is deleted.
   Output overwrites freeze both metadata and SHA-256 content. Archive creation
-  and extraction verify publication postconditions; large-file and junk-file
+  and extraction verify publication postconditions. Every archive tool, the
+  tar capability probes, and the extraction listing and extraction run
+  without the option variables those tools read (the list in `file-menu.md`
+  § Archive boundary, such as `TAR_OPTIONS`, `ZIPOPT`, `GZIP`, and `LZOP`),
+  read-only ones included, so an inherited `TAR_OPTIONS=--remove-files`
+  cannot delete the inputs. When the inputs change after the tool ran, the
+  unpublished archive stays in its private staging directory, is reported as
+  a recovery path, and the command returns 1 (`file_recovery.bats`); the user
+  removes that directory. Large-file and junk-file
   deletion rename the exact reviewed object to a sibling quarantine and delete
   only that identity, retaining and reporting recovery data on failure. Junk
   discovery matches only exact regular-file names, never follows links, prunes
@@ -2261,7 +2269,9 @@ memory or CPU during inspection.
   Large-file and junk-file deletion stop later targets when a removal returns
   an interruption status, and an incomplete deletion retains its exact
   quarantine. An interrupted archive creation preserves an existing output and
-  cleans its private staging; an interrupted extraction publishes no
+  cleans its private staging, while a creation whose inputs changed after the
+  tool ran keeps the unpublished archive there and reports it as a recovery
+  path; an interrupted extraction publishes no
   destination. Temporary staging results must match the expected parent, name
   template, private ownership, type, and regular-file link count before use;
   unexpected paths are neither chmodded nor removed.
