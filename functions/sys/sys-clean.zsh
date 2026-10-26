@@ -1519,17 +1519,17 @@ _sys_clean_privileged_labels() {
 }
 
 # REPLY: the display form of the space-separated superseded names of a plan
-# record: at most three names, each without a Codex "releases" component,
-# then a count of the rest.
+# record: every name in plan order, each without a Codex "releases"
+# component. A destructive plan names its exact target set, so no name is
+# summarized as a count.
 # Usage: _sys_clean_names_display <names>
 _sys_clean_names_display() {
   local -a names=("${(@s: :)${1:-}}") shown=()
   local name
-  for name in "${(@)names[1,3]}"; do
+  for name in "${names[@]}"; do
     shown+=("${(V)${name//\/releases\///}}")
   done
   REPLY="${(j:, :)shown}"
-  (( ${#names} <= 3 )) || REPLY+=", and $(( ${#names} - 3 )) more"
 }
 
 # REPLY: what a cleanup mode covers on this host, for the mode prompt and the
