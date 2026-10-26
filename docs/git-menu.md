@@ -284,6 +284,15 @@ status `2`. Tags are published with `git-tag-push`, which with `--yes` and no
 tag names publishes every changed local tag with an absence lease;
 `--dry-run` reviews that plan first.
 
+`git-tag-verify`, `git-tag-push`, and `git-tag-delete` share one inventory of
+local tags, and it skips symbolic refs below `refs/tags`. A symbolic tag is an
+alias of another ref, not a tag of its own, so it is never listed, verified,
+pushed, or deleted, and every one of these commands handles a named symbolic
+tag exactly like a missing tag:
+`Local tag 'NAME' does not exist or is a symbolic ref.` `git-tag-create`
+refuses a name that a symbolic ref holds, even a dangling one:
+`Local tag 'NAME' already exists as a symbolic ref.`
+
 The implemented non-interactive pull-request creation interface is:
 
 ```text
@@ -372,7 +381,9 @@ OID or a current `stash@{N}` selector; a missing, ambiguous, or duplicated
 target fails closed.
 
 Every stash plan names the exact paths and stash identity. Apply, pop, and
-branch refuse untracked or ignored paths that collide with the stash content.
+branch refuse untracked or ignored paths that collide with the stash content,
+and branch refuses a name that a branch or a symbolic ref holds, even a
+dangling one.
 The working tree, index, and stash list are fingerprinted at review and again
 after confirmation, and any change refuses the action. Stashes are bound to
 their object IDs, so drop and pop resolve the current selector of the reviewed
@@ -445,8 +456,10 @@ it, and sets its upstream to the full `refs/remotes/REMOTE/BRANCH` name; this
 is the only branch it ever creates. `REMOTE/BRANCH` chooses one remote
 explicitly, and a name found on several remotes is refused with each
 candidate. A local branch of the same name is used only when it already
-points at the same commit; one that differs is refused, never moved. `-`
-switches to the branch checked out before. Lookups use one exact,
+points at the same commit; one that differs is refused, never moved, and a
+name that a symbolic ref holds, even a dangling one, is refused before the
+switch and again right before it runs. `-` switches to the branch checked out
+before. Lookups use one exact,
 case-preserving ref listing, and with `core.ignorecase` a new tracking branch
 that differs from a local branch only in letter case is refused.
 
@@ -498,13 +511,16 @@ preview is a constant `git show --stat` of the row's hexadecimal object ID.
 
 The selected commit is restored only by creating a new branch, named
 `recover/<short-sha>` unless another name is entered. A name that is taken,
-that is a directory of an existing branch or has one below it, or that differs
-from a branch only in letter case under `core.ignorecase` is refused. The
-plan shows the commit and the new ref; after confirmation or `--yes`, the
-repository, the commit's existence, and the free name are checked again, and
-`git update-ref` creates the branch with an empty old value, so Git refuses it
-if the ref appeared in the meantime. No existing ref is moved, reset, or
-deleted, and HEAD does not change.
+that a symbolic ref holds (even a dangling one, which `git for-each-ref` and
+`git show-ref` skip), that is a directory of an existing branch or has one
+below it, or that differs from a branch only in letter case under
+`core.ignorecase` is refused with status `1`. The plan shows the commit and
+the new ref; after confirmation or `--yes`, the repository, the commit's
+existence, and the free name are checked again, and
+`git update-ref --no-deref` creates the branch with an empty old value: Git
+refuses it if a branch appeared in the meantime, and the write never follows
+an alias to another ref. No existing branch is moved, reset, or deleted, and
+HEAD does not change.
 
 ## Workspace identity
 
@@ -884,6 +900,83 @@ The current branch, default branch, remote default branch, and protected
 repository branches are never deleted by a bulk cleanup. A name derived from a
 formatted row is resolved back to a canonical ref before use.
 
+Deletions and local ref writes do not follow a symbolic ref to the ref it
+names, apart from the gaps listed after these controls:
+
+- **Inventories.** `clean-branches` and `clean-remote-merged` skip local
+  branches and remote-tracking refs whose `%(symref)` is set, and
+  `git-tag-verify`, `git-tag-push`, and `git-tag-delete` skip symbolic tags,
+  so no plan, picker, or named target includes an alias such as
+  `refs/heads/master` pointing at `refs/heads/main`. `git-pull` refuses a
+  symbolic remote-tracking ref while planning.
+- **Ref writes.** `clean-branches`, `clean-remote-merged` (for its
+  remote-tracking ref), and `git-tag-delete` delete with
+  `git update-ref --no-deref`, as `git branch -d` does. `git-pull` and
+  `git-push` update tracking refs with `--no-deref`, and the fetch-prune and
+  temporary-ref transactions of `git-pull` put `option no-deref` before every
+  command, because the option covers only the next one. After a push to the
+  remote URL, recent Git releases update or delete, through any alias, the
+  local ref that the first matching fetch refspec of the remote maps the
+  pushed ref to; releases differ on that update and on whether a negative
+  refspec stops it, so the check assumes the update happens and ignores
+  negative refspecs. Every command that pushes
+  (`git-push`, `git-pr-create`, `git-tag-push`, `git-tag-create --push`,
+  `clean-remote-merged`, and `git-tag-delete`) therefore maps each pushed ref
+  through every fetch refspec of the remote, wildcards included and negative
+  refspecs ignored, and refuses when a resulting ref is symbolic, cannot be
+  inspected, or is not a remote-tracking ref below `refs/remotes/` (a
+  refspec such as `+refs/tags/release:refs/heads/main` would make the push
+  change a branch or a tag), both while planning and right before each push.
+  While planning, `clean-remote-merged` leaves out a branch whose resulting
+  ref is symbolic. An interrupted check (exit 130 or 143) stops the whole run
+  with that status. One exception applies to tag publication only: a refspec
+  that maps a published tag to itself, such as `+refs/tags/*:refs/tags/*`, is
+  accepted by `git-tag-push` and `git-tag-create --push`, because Git then
+  writes the value just pushed to that tag. Remote tag deletion still refuses
+  it, since Git would also delete the local tag outside the plan, and no
+  branch is ever accepted.
+- **New names.** `git-recover`, `git-switch` (for the tracking branch it
+  creates), `git-stash branch`, and `git-tag-create` refuse a name that a
+  symbolic ref holds, even a dangling one that `git for-each-ref` and
+  `git show-ref` skip, both while planning and after confirmation.
+  `git-recover` also creates its branch with `--no-deref`.
+- **Remote aliases.** A server deletes the target of a symbolic ref that a
+  push deletes, so `clean-remote-merged` never plans a branch that the remote
+  reports as symbolic, and `git-tag-delete` refuses to delete a tag that the
+  remote reports as symbolic. Both ask again right before each push. The
+  query asks for protocol v2, the only protocol that reports symbolic refs
+  other than `HEAD`; it lists only `refs/heads/` or `refs/tags/`, is bounded
+  to 30 seconds, never prompts for credentials, and its failure refuses the
+  plan or blocks the target. A remote that does not answer with protocol v2
+  cannot show which refs are symbolic, so both commands refuse the plan
+  (`The remote did not answer with protocol v2, ...`) and name the safe next
+  step: enable protocol v2 on the server (for an OpenSSH server,
+  `AcceptEnv GIT_PROTOCOL` in `sshd_config`), or check the ref on the server
+  and delete it there. A target whose last query no longer answers with
+  protocol v2 is blocked. An interrupted query (exit 130 or 143) stops the
+  whole run with that status and reports how many refs were deleted before
+  it.
+
+A `--no-deref` write changes only the planned ref, even one that became
+symbolic after review. These gaps remain:
+
+- `git switch -c`, `git stash branch`, and `git tag` have no `--no-deref`, so
+  a symbolic ref created between the final check and that command would
+  still redirect the write.
+- A Git release that lets a create-only `--no-deref` update replace a
+  dangling symbolic ref would replace an alias created in the same moment
+  with the `git-recover` branch; Git 2.56 refuses that write instead.
+- `clean-remote-merged` and the remote deletions of `git-tag-delete` refuse
+  every remote that does not answer with protocol v2: an SSH server that
+  does not accept `GIT_PROTOCOL` through `SendEnv` (the stock OpenSSH
+  `sshd_config`), `plink` or `ssh.variant=simple`, and dumb HTTP.
+- A remote branch, a remote tag, or a local ref that a fetch refspec maps the
+  pushed ref to, that becomes symbolic between the last check and the push,
+  is still followed.
+- `git-push` does not check aliases on the server: an exact-lease
+  fast-forward of a branch that is symbolic there moves its target. A later
+  change tracks this.
+
 History rewriting and force pushing show both old and intended commits. The
 default force mode is an exact `--force-with-lease=<ref>:<oid>` transaction.
 Normal pushes also use frozen source OIDs and exact OID-or-absence leases, and
@@ -967,15 +1060,15 @@ regressing.
 | --- | --- |
 | `test/fixtures/git-public-commands.tsv` | Required frozen 21-command inventory, module ownership, risk, and capability metadata |
 | `test/git_contract.bats` | Exact fixture, module, menu, help, dispatcher, nested-completion, and direct-completion parity, including a `git-push` grammar without a tag mode, the stash action grammars, `git-discard --include-untracked` only after `--all`, the amend and unstage flags, the exclusive `git-switch` change modes, and `--json` only on read-only commands |
-| `test/git_branches.bats` | Clean, previous, and remote-tracking switches with exact tracking-branch creation; refusals for unknown, ambiguous, invalid, differing, and case-colliding names, operations in progress, other worktrees, and untracked or ignored obstacles; dirty-tree plans, the carry and stash choices and dialog, dry runs, declined and non-terminal confirmations, and revalidation after confirmation; the branch and commit pickers with constant previews; and recovery that only creates a new branch, refuses taken and conflicting names, revalidates after confirmation, and adds dropped but never live stashes with `--deep` |
+| `test/git_branches.bats` | Clean, previous, and remote-tracking switches with exact tracking-branch creation; refusals for unknown, ambiguous, invalid, differing, and case-colliding names, names that a symbolic ref holds, operations in progress, other worktrees, and untracked or ignored obstacles; dirty-tree plans, the carry and stash choices and dialog, dry runs, declined and non-terminal confirmations, and revalidation after confirmation; the branch and commit pickers with constant previews; and recovery that only creates a new branch, refuses taken and conflicting names and names that a symbolic ref holds, never writes through an alias, revalidates after confirmation, and adds dropped but never live stashes with `--deep` |
 | `test/git_identity_check.bats` | Matching and mismatching profiles without key material or configuration changes, keyless profiles, `IdentityFile` and `ssh.exe` key selection, not-applicable repositories, grammar errors, and the identity guard: off by default and outside interactive shells, one warning per repository, silent outside the layout and in subshells, and lazy loading |
 | `test/git_json.bats` | Exact `zdx.git-status.v1` and `zdx.git-identity-check.v1` documents validated with `jq -e`, null and boolean typing, single-document stdout through the nested route, and missing-`jq`, invalid-argument, and no-repository failures with empty stdout |
 | `test/git_interface.bats` | Exact routing and timing, all direct help streams, outside-repository annotations, standalone and double sourcing, exact-root loader failure and retry, `NO_COLOR`, row validation, fzf behavior, the Local Changes and Branches sections and help groups, the pull-mode dialog, and rejection of a `git-push --tags` mode |
 | `test/git_safety.bats` | Credential redaction, non-TTY refusal on the local-change and shared confirmation paths, literal pathspec isolation, identity-data non-execution, exact PR OID comparison, SSH host-alias PR remotes, detached checkout of the reviewed PR head, subdirectory path selections for discard, unstage, and stash, nested-repository stashes with stdout diffs, staged-rename unstaging, untracked discard obstacles, and branch-bound undo plans |
-| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, refusal of an unstage or amend plan whose state changes while its picker or dialog is open, and refusal after post-confirmation changes |
-| `test/git_github_safety.bats` | Push-remote precedence, local PR head naming, exact single push-URL enforcement, and deny-by-default GitHub write calls |
-| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, and full-ref upstreams |
-| `test/git_sync_recovery.bats`, `test/git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, absence leases, moved local tags, and rejection of multiple push URLs before and after review |
+| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, a stash branch name that a symbolic ref holds, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, refusal of an unstage or amend plan whose state changes while its picker or dialog is open, and refusal after post-confirmation changes |
+| `test/git_github_safety.bats` | Push-remote precedence, local PR head naming, exact single push-URL enforcement, deny-by-default GitHub write calls, and PR publishing that refuses a symbolic remote-tracking ref, including one that a custom fetch refspec maps the head to |
+| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, full-ref upstreams, symbolic branch and tracking aliases that cleanup never plans, and branch deletions and `git-pull` ref transactions that never follow a symbolic ref, symbolic remote branches and tags that cleanup and tag deletion never delete through, and remote-tracking refs that turn symbolic before a push, `git-push` refusing a symbolic remote-tracking ref, remote alias checks right before each cleanup push, a tracking ref that cannot be inspected, remote deletions refused when the remote does not answer with protocol v2 at planning or for a later target, an interrupted alias query that stops the whole run, and symbolic refs that a custom fetch refspec maps a pushed or deleted ref to, which `git-push` (also with a negative refspec), `git-tag-push`, `git-tag-create --push`, `clean-remote-merged`, and `git-tag-delete` refuse, fetch refspecs that map a deleted branch or tag outside `refs/remotes/`, which cleanup and tag deletion refuse, a tag refspec mapped to itself that tag publication accepts and tag deletion refuses, and pushes and remote deletions that stop at an interrupted local probe |
+| `test/git_sync_recovery.bats`, `test/git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, absence leases, moved local tags, rejection of multiple push URLs before and after review, symbolic tags that tag deletion never plans or follows, one refusal for a named symbolic tag in every tag command, and tag names held by a symbolic ref that `git-tag-create` refuses before and after confirmation |
 | `test/git_local_recovery.bats` | Interruption versus ordinary failure in local discard batches, all-changes discard of tracked and untracked files, and stash drops |
 | `test/git_identity.bats` | Identity status, local/global profile behavior, local overrides of inherited signing and SSH key selection, inherited `ssh.exe` and `IdentityAgent` commands kept with or without a profile key, Windows key paths for `ssh.exe` through `wslpath`, and refusal when that conversion fails |
 | `test/git_platform.bats` | Case-insensitive obstacles for hard undo, discard, discard of every change, and stash apply; case-colliding tags, stash branches, fetched and pruned tracking refs, and upstream pushes; WSL detection, the Windows-drive badge and advisory, and one `PATH` lookup per menu dependency; SSH alias resolution with the SSH program Git uses; CRLF `.ws-hostname` files; the macOS Command Line Tools placeholder; Git older than 2.31 or failing to run; and `GPG_TTY` for signed tags |

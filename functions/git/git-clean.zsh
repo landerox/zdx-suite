@@ -304,6 +304,8 @@ _git_clean_is_checked_out() {
 
 # Sets reply to canonical local-branch records:
 #   short-name<TAB>refs/heads/name<TAB>object-id
+# A symbolic ref is an alias of another ref, often a protected one, so it is
+# never a candidate.
 _git_clean_collect_local_candidates() {
   local default_ref="$1"
   local default_oid="$2"
@@ -313,18 +315,21 @@ _git_clean_collect_local_candidates() {
 
   local output
   output=$(command git for-each-ref \
-    --format='%(refname)%09%(objectname)' \
+    --format='%(refname)%09%(objectname)%09%(symref)' \
     --merged "$default_oid" refs/heads 2>/dev/null) || {
     _git_error "Unable to enumerate merged local branches."
     return 1
   }
 
   reply=()
-  local line ref oid short_name
+  local line ref remainder oid symbolic_target short_name
   for line in "${(@f)output}"; do
-    [[ -n "$line" && "$line" == *$'\t'* ]] || continue
+    [[ -n "$line" && "$line" == *$'\t'*$'\t'* ]] || continue
     ref="${line%%$'\t'*}"
-    oid="${line#*$'\t'}"
+    remainder="${line#*$'\t'}"
+    oid="${remainder%%$'\t'*}"
+    symbolic_target="${remainder#*$'\t'}"
+    [[ -z "$symbolic_target" ]] || continue
     _git_validate_full_ref "$ref" && _git_validate_oid "$oid" || {
       _git_error "Git returned an invalid local branch record."
       return 1
@@ -340,6 +345,8 @@ _git_clean_collect_local_candidates() {
 
 # Sets reply to canonical remote-branch records:
 #   short-name<TAB>refs/heads/name<TAB>refs/remotes/remote/name<TAB>object-id
+# Symbolic tracking refs, such as refs/remotes/<remote>/HEAD or an alias of a
+# local branch, are never candidates.
 _git_clean_collect_remote_candidates() {
   local remote="$1"
   local default_tracking_ref="$2"
@@ -349,18 +356,21 @@ _git_clean_collect_remote_candidates() {
   local prefix="refs/remotes/${remote}/"
   local output
   output=$(command git for-each-ref \
-    --format='%(refname)%09%(objectname)' \
+    --format='%(refname)%09%(objectname)%09%(symref)' \
     --merged "$default_oid" "$prefix" 2>/dev/null) || {
     _git_error "Unable to enumerate merged remote branches."
     return 1
   }
 
   reply=()
-  local line tracking_ref oid short_name branch_ref
+  local line tracking_ref remainder oid symbolic_target short_name branch_ref
   for line in "${(@f)output}"; do
-    [[ -n "$line" && "$line" == *$'\t'* ]] || continue
+    [[ -n "$line" && "$line" == *$'\t'*$'\t'* ]] || continue
     tracking_ref="${line%%$'\t'*}"
-    oid="${line#*$'\t'}"
+    remainder="${line#*$'\t'}"
+    oid="${remainder%%$'\t'*}"
+    symbolic_target="${remainder#*$'\t'}"
+    [[ -z "$symbolic_target" ]] || continue
     _git_validate_full_ref "$tracking_ref" && _git_validate_oid "$oid" || {
       _git_error "Git returned an invalid remote branch record."
       return 1
@@ -421,7 +431,7 @@ _git_clean_filter_records() {
     done
     [[ -n "$matched" ]] || {
       _git_error \
-        "Branch '$(_git_display_escape "$target")' is protected, checked out, unmerged, or absent."
+        "Branch '$(_git_display_escape "$target")' is protected, symbolic, checked out, unmerged, or absent."
       return 1
     }
 
@@ -791,7 +801,9 @@ clean-branches() {
       continue
     fi
 
-    if command git update-ref -d "$ref" "$oid" 2>/dev/null; then
+    # --no-deref deletes the planned ref itself, as git branch -d does; a ref
+    # that became symbolic after review never takes its target with it.
+    if command git update-ref --no-deref -d "$ref" "$oid" 2>/dev/null; then
       # Match git branch -d: a recreated branch must not inherit stale upstream
       # or merge configuration. A missing section is not an error.
       command git config --local --remove-section "branch.${ref#refs/heads/}" \
@@ -837,9 +849,18 @@ clean-remote-merged() {
   _git_remote_push_url "$remote" || return 1
   local push_url="$REPLY"
   local -a reply=()
-  local -a remote_snapshot=()
+  local -a remote_snapshot=() remote_symbolic=()
   _git_clean_remote_snapshot "$remote" "$push_url" || return $?
   remote_snapshot=("${reply[@]}")
+  # The server deletes the target of a symbolic branch that a push deletes,
+  # so a branch the remote reports as symbolic is never a candidate, and a
+  # remote that cannot report them (no protocol v2 answer) refuses the plan.
+  _git_remote_symbolic_refs "$push_url" 'refs/heads/*' || return $?
+  remote_symbolic=("${reply[@]}")
+  [[ "$REPLY" == "v2" ]] || {
+    _git_remote_symref_refusal branch
+    return 1
+  }
   _git_clean_remote_default_ref "$remote" "$push_url" || return $?
   local default_ref="$REPLY"
   _git_clean_remote_find_oid "$default_ref" "${remote_snapshot[@]}"
@@ -889,17 +910,34 @@ clean-remote-merged() {
   candidates=("${reply[@]}")
 
   local candidate remainder branch_ref candidate_oid
+  local -a direct_candidates=()
   for candidate in "${candidates[@]}"; do
     remainder="${candidate#*$'\t'}"
     branch_ref="${remainder%%$'\t'*}"
     candidate_oid="${candidate##*$'\t'}"
+    (( ${remote_symbolic[(Ie)$branch_ref]} )) && continue
+    # The push to the remote URL updates the refs that the fetch refspecs map
+    # the branch to, through any alias, so a symbolic one excludes it too and
+    # one that cannot be inspected refuses the plan.
+    local -i destination_rc=0
+    _git_tracking_refs_direct "$remote" "$branch_ref" || destination_rc=$?
+    (( destination_rc == 1 )) && continue
+    (( destination_rc == 130 || destination_rc == 143 )) \
+      && return $destination_rc
+    if (( destination_rc != 0 )); then
+      _git_tracking_refs_refusal \
+        "$destination_rc" "$remote" "$branch_ref" "$REPLY"
+      return 1
+    fi
     _git_clean_remote_find_oid "$branch_ref" "${remote_snapshot[@]}"
     [[ "$REPLY" == "$candidate_oid" ]] || {
       _git_error \
         "Remote-tracking refs are stale; run an explicit fetch-and-prune, then retry."
       return 1
     }
+    direct_candidates+=("$candidate")
   done
+  candidates=("${direct_candidates[@]}")
   if (( ${#candidates[@]} == 0 )); then
     _git_success "No eligible merged remote branches were found."
     return 0
@@ -997,6 +1035,62 @@ clean-remote-merged() {
       continue
     fi
 
+    # Just before this push: the server would delete the target of a
+    # symbolic branch, and Git updates the tracking refs of a URL push through
+    # symbolic ones. Any doubt blocks the target; an interrupt stops the run.
+    local target_label="$remote/$(_git_display_escape "${branch_ref#refs/heads/}")"
+    local -a target_symbolic=()
+    local -i probe_rc=0
+    _git_remote_symbolic_refs "$push_url" "$branch_ref" || probe_rc=$?
+    if (( probe_rc == 130 || probe_rc == 143 )); then
+      _git_outcome_line "$target_label" interrupted
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
+      return "$probe_rc"
+    elif (( probe_rc != 0 )); then
+      _git_outcome_line "$target_label" \
+        blocked "the remote's symbolic refs could not be read"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    target_symbolic=("${reply[@]}")
+    if [[ "$REPLY" != "v2" ]]; then
+      _git_outcome_line "$target_label" \
+        blocked "the remote did not answer with protocol v2"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    if (( ${#target_symbolic[@]} > 0 )); then
+      _git_outcome_line "$target_label" \
+        blocked "the remote branch is now symbolic"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    local -i tracking_direct_rc=0
+    _git_tracking_refs_direct "$remote" "$branch_ref" "$tracking_ref" \
+      || tracking_direct_rc=$?
+    if (( tracking_direct_rc == 130 || tracking_direct_rc == 143 )); then
+      _git_outcome_line "$target_label" interrupted
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
+      return "$tracking_direct_rc"
+    elif (( tracking_direct_rc == 1 )); then
+      _git_outcome_line "$target_label" \
+        blocked "the tracking ref $(_git_display_escape "${REPLY#refs/remotes/}") is now symbolic"
+      failed=$(( failed + 1 ))
+      continue
+    elif (( tracking_direct_rc == 3 )); then
+      _git_outcome_line "$target_label" \
+        blocked "the fetch refspec maps it to $(_git_display_escape "$REPLY"), outside refs/remotes/"
+      failed=$(( failed + 1 ))
+      continue
+    elif (( tracking_direct_rc != 0 )); then
+      _git_outcome_line "$target_label" \
+        blocked "the tracking ref $(_git_display_escape "${REPLY#refs/remotes/}") could not be inspected"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+
     local -a push_cmd=(
       command git push
       --no-follow-tags
@@ -1014,7 +1108,8 @@ clean-remote-merged() {
     if (( push_rc == 0 )); then
       # Pushing to the reviewed URL bypasses the remote's fetch refspec, so drop
       # the matching remote-tracking ref only while it still names this commit.
-      command git update-ref -d "$tracking_ref" "$oid" 2>/dev/null ||
+      # --no-deref removes that ref itself, never the target of a symbolic ref.
+      command git update-ref --no-deref -d "$tracking_ref" "$oid" 2>/dev/null ||
         _git_warn \
           "Remote-tracking ref $(_git_display_escape "$tracking_ref") was kept; fetch --prune to refresh it."
       _git_outcome_line "$branch_label" done "deleted at $oid"
