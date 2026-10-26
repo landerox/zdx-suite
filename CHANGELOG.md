@@ -11,6 +11,9 @@ verification, and remaining limitations.
 - System: `clean-system` plans and dry runs list every superseded Codex,
   Cursor Agent, Claude CLI, AWS CLI bundle, and nvm runtime version they
   remove, instead of the first three and a count.
+- Plugins: under Oh My Zsh, lazy plugins load on first use, and eager plugins
+  show as active and are counted, because the loaded-plugin list stays global
+  when the core is sourced from a function.
 
 ## [0.1.0] — 2026-10-22
 

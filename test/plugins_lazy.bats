@@ -126,3 +126,30 @@ lazy_shell() {
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "loaded=demo discovered=demo" ]
 }
+
+@test "lazy plugins: a core sourced from a function, as Oh My Zsh does, loads them on first use" {
+  # Oh My Zsh sources each plugin entrypoint from its _omz_source function,
+  # so the loaded-plugin list must stay global after that function returns.
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$LAZY_HOME" \
+    PATH="$TEST_TEMP_DIR/zsh-recorder:$PATH" "$(command -v zsh)" -f -c '
+      unset -m "ZDX_*"
+      ZDX_LAZY_LOAD=1 NO_COLOR=1
+      _omz_source() {
+        local context filepath="$1"
+        source "$filepath"
+      }
+      _omz_source "$1/zdx-suite.plugin.zsh" || exit 90
+      print -r -- "after-source: set=${+ZDX_LOADED_PLUGINS} loaded=[${(j:,:)ZDX_LOADED_PLUGINS}]"
+      demo-status one two
+      print -r -- "first-call: rc=$? loaded=[${(j:,:)ZDX_LOADED_PLUGINS}]"
+      zdx demo three
+      zdx-plugins --list 2>&1 | grep -E "^demo "
+    ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "after-source: set=1 loaded=[]" ]
+  [ "${lines[1]}" = "demo status: one two" ]
+  [ "${lines[2]}" = "first-call: rc=0 loaded=[demo]" ]
+  [ "${lines[3]}" = "demo menu: three" ]
+  [[ "${lines[4]}" =~ ^demo\ +Active\ +Local$ ]]
+  [ "$(grep -c '^demo sourced$' "$LAZY_LOG")" -eq 1 ]
+}

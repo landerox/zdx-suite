@@ -166,6 +166,11 @@ NOT:
 It must be idempotent and must never call `exit`. A source failure returns
 non-zero without closing the shell.
 
+The loader sources each entrypoint inside a function, and Oh My Zsh sources
+ZDX itself inside `_omz_source`, so a plain top-level `typeset`, `declare`, or
+`local` in a plugin disappears when sourcing ends. Declare persistent plugin
+state with `typeset -g`, `typeset -ga`, or `typeset -gA` and a namespaced name.
+
 ## Stream and return contract
 
 - Menu row builders and documented data functions emit only data on stdout.

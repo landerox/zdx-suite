@@ -303,6 +303,38 @@ EOF
   [[ "$output" == *"SUCCESS: plugin wrapper preserved caller configuration"* ]]
 }
 
+@test "lazy_loading: an eager core sourced from a function, as Oh My Zsh does, keeps its loaded plugins" {
+  local plugin_root="$HOME/.config/zdx/plugins"
+  mkdir -p "$plugin_root/probe"
+  chmod 755 "$HOME" "$HOME/.config" "$HOME/.config/zdx" "$plugin_root/probe"
+  chmod 700 "$plugin_root"
+  # shellcheck disable=SC2016
+  printf '%s\n' 'probe-menu() { print -r -- "probe menu: $*"; }' \
+    > "$plugin_root/probe/probe-menu.zsh"
+  chmod 644 "$plugin_root/probe/probe-menu.zsh"
+
+  # Oh My Zsh sources each plugin entrypoint from its _omz_source function,
+  # so the plugins loaded at startup must stay recorded after it returns.
+  # shellcheck disable=SC2016
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME "$(command -v zsh)" -f -c '
+    unset -m "ZDX_*"
+    ZDX_EAGER_LOAD=1 NO_COLOR=1
+    _omz_source() {
+      local context filepath="$1"
+      source "$filepath"
+    }
+    _omz_source "$1/zdx-suite.plugin.zsh" || exit 90
+    print -r -- "after-source: set=${+ZDX_LOADED_PLUGINS} loaded=[${(j:,:)ZDX_LOADED_PLUGINS}]"
+    zdx-plugins --list 2>&1 | grep -E "^probe "
+    cd "$HOME" || exit 91
+    zdx-status 2>&1 | grep -E "^  Plugins:"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "after-source: set=1 loaded=[probe]" ]
+  [[ "${lines[1]}" =~ ^probe\ +Active\ +Local$ ]]
+  [[ "${lines[2]}" =~ ^\ \ Plugins:\ +1\ custom\ plugin\ loaded$ ]]
+}
+
 @test "lazy_loading: plugin registers nested completions after compinit ordering" {
   local registration_log="$TEST_TEMP_DIR/completion-registrations"
   : > "$registration_log"
