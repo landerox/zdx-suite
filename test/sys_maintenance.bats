@@ -4238,6 +4238,153 @@ EOF
   assert_no_privilege_network_or_signal
 }
 
+# Shadows python3 with a real interpreter in a sandbox venv without pip: it
+# keeps the import semantics of python3 -m, while no real pip exists for a
+# cleanup to reach. Python writes no bytecode, so the host interpreter's
+# files are never touched, and PYTHONPATH and PYTHONHOME are dropped. Status 1
+# without python3 or its venv module.
+make_python3_without_pip() {
+  local real_python venv="$TEST_TEMP_DIR/python-without-pip"
+  real_python=$(command python3 -I -S -B -c 'import sys; print(sys.executable)' \
+    2>/dev/null) || return 1
+  [[ "$real_python" == /* && -x "$real_python" ]] || return 1
+  "$real_python" -I -B -m venv --without-pip "$venv" \
+    >/dev/null 2>&1 || return 1
+  cat <<EOF > "$TEST_MOCK_BIN/python3"
+#!/usr/bin/env bash
+exec env -u PYTHONPATH -u PYTHONHOME PYTHONDONTWRITEBYTECODE=1 \
+  "$venv/bin/python3" "\$@"
+EOF
+  chmod +x "$TEST_MOCK_BIN/python3"
+}
+
+# Plants pip code in <dir> that appends each run to PIP_PLANT_MARKER and
+# answers like pip, so a cleanup that imported it would also plan and purge
+# the pip cache: <dir>/pip.py, or with --package <dir>/pip/__main__.py.
+# Usage: plant_pip_code <dir> [--package]
+plant_pip_code() {
+  local target="$1/pip.py"
+  mkdir -p "$1"
+  if [[ "${2:-}" == --package ]]; then
+    mkdir -p "$1/pip"
+    : > "$1/pip/__init__.py"
+    target="$1/pip/__main__.py"
+  fi
+  cat <<'EOF' > "$target"
+import os
+import sys
+
+with open(os.environ["PIP_PLANT_MARKER"], "a") as marker:
+    marker.write("planted pip code ran: %s\n" % " ".join(sys.argv[1:]))
+if sys.argv[1:] == ["cache", "dir"]:
+    print(os.path.join(os.environ["HOME"], ".cache", "pip"))
+else:
+    print("pip 99.0 from planted code")
+EOF
+}
+
+@test "sys maintenance: pip probes and purge never import pip code from the working directory" {
+  unset PYTHONSAFEPATH
+  export PYTHONDONTWRITEBYTECODE=1
+  make_python3_without_pip || skip "python3 with its venv module is required"
+  export PIP_PLANT_MARKER="$TEST_TEMP_DIR/planted-pip.log"
+  local module_dir="$HOME/workspaces/github/attacker/module"
+  local package_dir="$HOME/workspaces/github/attacker/package"
+  plant_pip_code "$module_dir"
+  plant_pip_code "$package_dir" --package
+  mkdir -p "$HOME/.cache/pip/http"
+  printf '%s\n' keep > "$HOME/.cache/pip/http/entry"
+
+  # Control: python3 -m pip run inside either directory imports the plant.
+  local dir mode
+  for dir in "$module_dir" "$package_dir"; do
+    (cd "$dir" && "$TEST_MOCK_BIN/python3" -m pip --version) >/dev/null
+  done
+  [ "$(grep -c -F 'planted pip code ran: --version' "$PIP_PLANT_MARKER")" -eq 2 ]
+  rm -f "$PIP_PLANT_MARKER"
+
+  for dir in "$module_dir" "$package_dir"; do
+    for mode in --dry-run --yes; do
+      export PIP_PLANT_DIR="$dir" PIP_PLANT_MODE="$mode"
+      run run_maintenance_zsh "$(hide_cleanup_tools_except python3)"'
+        cd -- "$PIP_PLANT_DIR" || return 97
+        clean-system --quick "$PIP_PLANT_MODE" || return $?
+        [[ "$PWD" == "$PIP_PLANT_DIR" ]] || return 96
+      '
+      [ "$status" -eq 0 ]
+      [ ! -e "$PIP_PLANT_MARKER" ]
+      [[ "$output" != *"pip cache"* ]]
+    done
+  done
+  [ -f "$HOME/.cache/pip/http/entry" ]
+  assert_no_privilege_network_or_signal
+}
+
+# Fails unless PIP_CALL_LOG holds each given line and no other line.
+# Usage: assert_pip_calls <line>...
+assert_pip_calls() {
+  local line
+  local -a patterns=()
+  for line in "$@"; do
+    grep -qxF -- "$line" "$PIP_CALL_LOG" || return 1
+    patterns+=(-e "$line")
+  done
+  [ "$(grep -c -v -x -F "${patterns[@]}" "$PIP_CALL_LOG")" -eq 0 ]
+}
+
+@test "sys maintenance: every pip probe and purge runs from the root directory" {
+  unset PYTHONSAFEPATH
+  export PIP_CALL_LOG="$TEST_TEMP_DIR/pip-calls.log"
+  export PIP_CALLER_DIR="$HOME/workspaces/github/attacker/repo"
+  mkdir -p "$HOME/.cache/pip/http" "$PIP_CALLER_DIR"
+  local tool
+  for tool in python3 pip3; do
+    cat <<'EOF' > "$TEST_MOCK_BIN/$tool"
+#!/usr/bin/env bash
+arguments="$*"
+printf '%s %s|%s|%s\n' "${0##*/}" "$(pwd -P)" "${PYTHONSAFEPATH-unset}" \
+  "$arguments" >> "$PIP_CALL_LOG"
+case "${arguments#-m pip }" in
+  --version) printf '%s\n' 'pip 24.0' ;;
+  "cache dir") printf '%s\n' "$HOME/.cache/pip" ;;
+  "cache purge")
+    printf 'purge PIP_CACHE_DIR=%s\n' "$PIP_CACHE_DIR" >> "$PIP_CALL_LOG"
+    ;;
+  *) exit 97 ;;
+esac
+EOF
+    chmod +x "$TEST_MOCK_BIN/$tool"
+  done
+  local program='
+    cd -- "$PIP_CALLER_DIR" || return 97
+    clean-system --quick --yes || return $?
+    [[ "$PWD" == "$PIP_CALLER_DIR" ]] || return 96
+  '
+
+  # The module form also runs with PYTHONSAFEPATH=1.
+  run run_maintenance_zsh "$(hide_cleanup_tools_except python3)$program"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"\$ python3 -m pip cache purge"* ]]
+  assert_pip_calls \
+    "python3 /|1|-m pip --version" \
+    "python3 /|1|-m pip cache dir" \
+    "python3 /|1|-m pip cache purge" \
+    "purge PIP_CACHE_DIR=$HOME/.cache/pip"
+
+  # A console script keeps the caller's environment and runs from / as well.
+  : > "$PIP_CALL_LOG"
+  run run_maintenance_zsh "$(hide_cleanup_tools_except pip3)$program"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"\$ pip3 cache purge"* ]]
+  assert_pip_calls \
+    "pip3 /|unset|cache dir" \
+    "pip3 /|unset|cache purge" \
+    "purge PIP_CACHE_DIR=$HOME/.cache/pip"
+  assert_no_privilege_network_or_signal
+}
+
 @test "sys maintenance: clean-system runs its private implementation directly" {
   run run_maintenance_zsh '
     (( ! ${+functions[clean-system-quick]} \

@@ -52,6 +52,19 @@ _sys_clean_validate_user_path() {
   REPLY="${candidate:A}"
 }
 
+# Runs one command from the root directory in a subshell, so a cache probe or
+# purge never loads code or settings from the caller's working directory;
+# python3 -m, for example, puts that directory first on sys.path. The command
+# may be a shell function, such as the timeout service. The caller's shell
+# keeps its directory. Status: the command's, or 1 when / cannot be entered.
+# Usage: _sys_clean_in_neutral_dir <command> [args...]
+_sys_clean_in_neutral_dir() {
+  (
+    builtin cd -q -- / || exit 1
+    "$@"
+  )
+}
+
 _sys_clean_npm_cache_dir() {
   local REPLY
   local cache_dir
@@ -69,22 +82,33 @@ _sys_clean_uv_cache_dir() {
   print -r -- "$REPLY"
 }
 
-# reply: the pip command whose cache cleanup manages: pip, then pip3, which is
-# all that Homebrew Python provides, then python3 -m pip when that module is
-# installed. Status 1 when none is usable.
+# reply: the argv of the pip whose cache the cleanup manages: pip, then pip3,
+# which is all that Homebrew Python provides, then python3 -m pip when that
+# module answers a bounded --version probe. REPLY: its display form. Every
+# pip runs through _sys_clean_in_neutral_dir, and the module form also with
+# PYTHONSAFEPATH=1, which Python 3.11 and later honor, so a pip.py or pip/
+# package in the working directory is never imported. The module form keeps
+# the user site, where it may be the only pip, so it never runs with -I.
+# Status 1 when none is usable.
 _sys_clean_pip_command() {
   reply=()
+  REPLY=""
   local pip_tool
+  # env, not command, leads the module form: the timeout service executes its
+  # argv directly, so command would not be found.
+  local -a module_form=(env PYTHONSAFEPATH=1 python3 -m pip)
   for pip_tool in pip pip3; do
     if _sys_tool_available "$pip_tool"; then
       reply=("$pip_tool")
+      REPLY="$pip_tool"
       return 0
     fi
   done
   _sys_tool_available python3 \
-    && _sys_run_with_timeout 5 python3 -m pip --version \
-      </dev/null >/dev/null 2>&1 || return 1
-  reply=(python3 -m pip)
+    && _sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
+      "${module_form[@]}" --version </dev/null >/dev/null 2>&1 || return 1
+  reply=("${module_form[@]}")
+  REPLY="python3 -m pip"
 }
 
 _sys_clean_pip_cache_dir() {
@@ -92,8 +116,8 @@ _sys_clean_pip_cache_dir() {
   local -a reply=()
   local cache_dir
   _sys_clean_pip_command || return 1
-  cache_dir=$(_sys_run_with_timeout 5 "${reply[@]}" cache dir \
-    </dev/null 2>/dev/null) || return 1
+  cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
+    "${reply[@]}" cache dir </dev/null 2>/dev/null) || return 1
   _sys_clean_validate_user_path "$cache_dir" || return 1
   print -r -- "$REPLY"
 }
@@ -836,13 +860,14 @@ _sys_clean_step_uv_cache() {
 }
 
 _sys_clean_step_pip_cache() {
-  local REPLY
+  local REPLY pip_display
   local -a reply=() pip_command=()
   if ! _sys_clean_pip_command; then
     _sys_report_result skipped "not installed" "pip not installed, skipping."
     return 0
   fi
   pip_command=("${reply[@]}")
+  pip_display="$REPLY"
 
   local expected_cache="${1:-}"
   local cache_dir
@@ -857,8 +882,8 @@ _sys_clean_step_pip_cache() {
     _sys_error "The confirmed pip cache directory is no longer available."
     return 1
   }
-  _sys_run_logged "${(j: :)pip_command} cache purge" \
-    env PIP_CACHE_DIR="$cache_dir" "${pip_command[@]}" cache purge
+  _sys_run_logged "$pip_display cache purge" _sys_clean_in_neutral_dir \
+    command env PIP_CACHE_DIR="$cache_dir" "${pip_command[@]}" cache purge
 }
 
 _sys_clean_step_precommit_cache() {
