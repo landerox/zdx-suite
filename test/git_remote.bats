@@ -245,6 +245,604 @@ MOCK
     --format='%(refname)' refs/zdx-suite)" ]
 }
 
+@test "git-pull: merge, rebase, and ff-only refuse an ignored file that the fetched commit tracks" {
+  init_seeded_remote_worktree
+
+  local mode
+  for mode in merge rebase ff-only; do
+    git clone -q "$REMOTE_REPO" "$HOME/work-$mode"
+    printf '%s\n' "local.env" >> "$HOME/work-$mode/.git/info/exclude"
+    printf '%s\n' "local secret" > "$HOME/work-$mode/local.env"
+  done
+  for mode in merge rebase; do
+    # A local commit makes the merge a true merge, where Git's
+    # --no-overwrite-ignore has no effect, and gives the rebase work to do.
+    printf '%s\n' "local change" > "$HOME/work-$mode/local-only.txt"
+    git -C "$HOME/work-$mode" add -- local-only.txt
+    git -C "$HOME/work-$mode" commit -q -m "local change"
+  done
+  # Upstream starts tracking local.env, which every clone ignores.
+  printf '%s\n' "from upstream" > "$SEED_REPO/local.env"
+  git -C "$SEED_REPO" add -- local.env
+  git -C "$SEED_REPO" commit -q -m "track local.env"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+
+  run run_zsh '
+    local mode="" head_before="" tracking_before="" head_same="" tracking_same=""
+    local temp_clean=""
+    local -i pull_rc=0
+    for mode in merge rebase ff-only; do
+      cd "$HOME/work-$mode" || return 90
+      head_before=$(command git rev-parse HEAD) || return 91
+      tracking_before=$(command git rev-parse refs/remotes/origin/main) \
+        || return 92
+      pull_rc=0
+      git-pull --remote origin --ref refs/heads/main "--$mode" --yes \
+        >"$HOME/$mode.stdout" 2>"$HOME/$mode.stderr" || pull_rc=$?
+      head_same=no tracking_same=no temp_clean=no
+      [[ "$(command git rev-parse HEAD)" == "$head_before" ]] && head_same=yes
+      [[ "$(command git rev-parse refs/remotes/origin/main)" \
+        == "$tracking_before" ]] && tracking_same=yes
+      [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+        && temp_clean=yes
+      print -r -- "$mode rc=$pull_rc file=[$(<local.env)] head=$head_same tracking=$tracking_same temp=$temp_clean"
+    done
+  '
+
+  if [ "$status" -ne 0 ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+  fi
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >&2
+  [ "${lines[0]}" = "merge rc=1 file=[local secret] head=yes tracking=yes temp=yes" ]
+  [ "${lines[1]}" = "rebase rc=1 file=[local secret] head=yes tracking=yes temp=yes" ]
+  [ "${lines[2]}" = "ff-only rc=1 file=[local secret] head=yes tracking=yes temp=yes" ]
+  for mode in merge rebase ff-only; do
+    [ ! -s "$HOME/$mode.stdout" ]
+    grep -Fq "local.env" "$HOME/$mode.stderr"
+    grep -Fq "move or remove these paths first." "$HOME/$mode.stderr"
+  done
+}
+
+@test "git-pull: rebase refuses an ignored file that the replayed local commits write" {
+  init_seeded_remote_worktree
+
+  # Two unpushed commits add local.env and then stop tracking it, while
+  # .git/info/exclude ignores it. Replaying them would overwrite and then
+  # delete the ignored file, although neither HEAD nor upstream tracks it.
+  printf '%s\n' "local.env" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "tracked once" > "$WORK_REPO/local.env"
+  git -C "$WORK_REPO" add -f -- local.env
+  git -C "$WORK_REPO" commit -q -m "add local.env"
+  git -C "$WORK_REPO" rm -q --cached -- local.env
+  git -C "$WORK_REPO" commit -q -m "untrack local.env"
+  printf '%s\n' "local secret" > "$WORK_REPO/local.env"
+  # Upstream moves on, so the rebase has commits to replay.
+  printf '%s\n' "remote update" > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam "remote update"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export REPLAY_HEAD
+  REPLAY_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/replay.stdout" 2>"$HOME/replay.stderr"
+    replay_rc=$?
+    [[ -f local.env && "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git rev-parse HEAD)" == "$REPLAY_HEAD" ]] || return 11
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 12
+    print -r -- "$replay_rc"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "1" ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    [ ! -f "$HOME/replay.stderr" ] || cat "$HOME/replay.stderr" >&2
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/replay.stdout" ]
+  grep -Fq "local.env" "$HOME/replay.stderr"
+  grep -Fq "Refusing to rebase; move or remove these paths first." \
+    "$HOME/replay.stderr"
+}
+
+@test "git-pull: rebase finds the replayed paths of signed commits under log.showSignature" {
+  command -v ssh-keygen >/dev/null 2>&1 || skip "ssh-keygen is not available"
+  init_seeded_remote_worktree
+
+  # The same replay as above, but the local commits are SSH-signed and
+  # log.showSignature is on, so a git log listing would put signature text
+  # in front of the first path of every commit.
+  ssh-keygen -q -t ed25519 -N '' -C zdx-test -f "$HOME/signing-key"
+  git -C "$WORK_REPO" config gpg.format ssh
+  git -C "$WORK_REPO" config user.signingKey "$HOME/signing-key"
+  git -C "$WORK_REPO" config log.showSignature true
+  printf '%s\n' "local.env" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "tracked once" > "$WORK_REPO/local.env"
+  git -C "$WORK_REPO" add -f -- local.env
+  git -C "$WORK_REPO" commit -q -S -m "add local.env"
+  git -C "$WORK_REPO" rm -q --cached -- local.env
+  git -C "$WORK_REPO" commit -q -S -m "untrack local.env"
+  git -C "$WORK_REPO" cat-file commit HEAD | grep -Fq 'gpgsig '
+  git -C "$WORK_REPO" cat-file commit HEAD~1 | grep -Fq 'gpgsig '
+  printf '%s\n' "local secret" > "$WORK_REPO/local.env"
+  printf '%s\n' "remote update" > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam "remote update"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export SIGNED_HEAD
+  SIGNED_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/signed.stdout" 2>"$HOME/signed.stderr"
+    signed_rc=$?
+    [[ -f local.env && "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git rev-parse HEAD)" == "$SIGNED_HEAD" ]] || return 11
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 12
+    print -r -- "$signed_rc"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "1" ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    [ ! -f "$HOME/signed.stderr" ] || cat "$HOME/signed.stderr" >&2
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/signed.stdout" ]
+  grep -Fxq "  local.env" "$HOME/signed.stderr"
+  grep -Fq "Refusing to rebase; move or remove these paths first." \
+    "$HOME/signed.stderr"
+  run grep -Fq "signature" "$HOME/signed.stderr"
+  [ "$status" -eq 1 ]
+}
+
+@test "git-pull: a rebase that would keep merge commits is refused" {
+  init_seeded_remote_worktree
+
+  # Shared history: F tracks local.env and G stops tracking it.
+  printf '%s\n' "tracked once" > "$SEED_REPO/local.env"
+  git -C "$SEED_REPO" add -- local.env
+  git -C "$SEED_REPO" commit -q -m "F: track local.env"
+  export FORK_OID
+  FORK_OID=$(git -C "$SEED_REPO" rev-parse HEAD)
+  git -C "$SEED_REPO" rm -q -- local.env
+  git -C "$SEED_REPO" commit -q -m "G: stop tracking local.env"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  git -C "$WORK_REPO" fetch -q origin
+  git -C "$WORK_REPO" merge -q --ff-only origin/main
+  # Local: L on top of G, merged with a side branch forked from F. Kept
+  # merges reset to F, which checks out local.env over the ignored file,
+  # and neither HEAD, the fetched commit, nor a replayed commit tracks it.
+  printf '%s\n' "local.env" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "local" > "$WORK_REPO/local.txt"
+  git -C "$WORK_REPO" add -- local.txt
+  git -C "$WORK_REPO" commit -q -m "L: local change"
+  git -C "$WORK_REPO" switch -q -c side "$FORK_OID"
+  printf '%s\n' "other" > "$WORK_REPO/other.txt"
+  git -C "$WORK_REPO" add -- other.txt
+  git -C "$WORK_REPO" commit -q -m "S: side change"
+  git -C "$WORK_REPO" switch -q main
+  git -C "$WORK_REPO" merge -q --no-edit side
+  git -C "$WORK_REPO" branch -q -D side
+  printf '%s\n' "local secret" > "$WORK_REPO/local.env"
+  # Upstream moves on, so the rebase has commits to replay.
+  printf '%s\n' "remote update" > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam "R: remote update"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export MERGE_HEAD_OID
+  MERGE_HEAD_OID=$(git -C "$WORK_REPO" rev-parse HEAD)
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    local -a codes=()
+    local setting=""
+    for setting in rebase.rebaseMerges=true pull.rebase=merges \
+      branch.main.rebase=merges; do
+      command git config --unset-all rebase.rebaseMerges
+      command git config --unset-all pull.rebase
+      command git config --unset-all branch.main.rebase
+      command git config "${setting%%=*}" "${setting#*=}" || return 10
+      # branch.main.rebase overrides pull.rebase.
+      [[ "$setting" != branch.* ]] || command git config pull.rebase false
+      git-pull --remote origin --ref refs/heads/main --rebase --yes \
+        >"$HOME/${setting%%=*}.stdout" 2>"$HOME/${setting%%=*}.stderr"
+      codes+=($?)
+      [[ "$(<local.env)" == "local secret" ]] || return 11
+      [[ "$(command git rev-parse HEAD)" == "$MERGE_HEAD_OID" ]] || return 12
+    done
+
+    # Without those settings the rebase replays L and S linearly, which
+    # never touches local.env.
+    command git config --unset-all branch.main.rebase
+    command git config --unset-all pull.rebase
+    command git config rebase.rebaseMerges false
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/linear.stdout" 2>"$HOME/linear.stderr"
+    codes+=($?)
+    [[ "$(<local.env)" == "local secret" ]] || return 13
+    [[ "$(command git rev-parse HEAD)" != "$MERGE_HEAD_OID" ]] || return 14
+    command git rev-parse --verify --quiet HEAD^2 >/dev/null && return 15
+    print -r -- "${(j:,:)codes}"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "1,1,1,0" ]; then
+    printf 'zsh status: %s\ncodes: %s\n' "$status" "$output" >&2
+    cat "$HOME"/*.stderr >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "1,1,1,0" ]
+  grep -Fq "rebase.rebaseMerges=true makes git rebase recreate merge commits" \
+    "$HOME/rebase.rebaseMerges.stderr"
+  grep -Fq "pull.rebase=merges asks pulls to keep merge commits" \
+    "$HOME/pull.rebase.stderr"
+  grep -Fq "branch.main.rebase=merges asks pulls to keep merge commits" \
+    "$HOME/branch.main.rebase.stderr"
+  grep -Fq "Run the rebase yourself with git rebase, or pull with git-pull --merge." \
+    "$HOME/rebase.rebaseMerges.stderr"
+  [ -z "$(git -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
+}
+
+@test "git-pull: a merge refuses an ignored file at a path that directory-rename detection writes" {
+  init_seeded_remote_worktree
+
+  mkdir -p "$SEED_REPO/old"
+  printf '%s\n' "a" > "$SEED_REPO/old/a"
+  printf '%s\n' "b" > "$SEED_REPO/old/b"
+  git -C "$SEED_REPO" add -- old
+  git -C "$SEED_REPO" commit -q -m "add old/"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  git -C "$WORK_REPO" fetch -q origin
+  git -C "$WORK_REPO" merge -q --ff-only origin/main
+  # Locally old/ moves to new/, and upstream adds old/local.env. With
+  # directory-rename detection the merge writes new/local.env, a path that
+  # neither HEAD nor the fetched commit names.
+  git -C "$WORK_REPO" mv old new
+  git -C "$WORK_REPO" commit -q -m "move old to new"
+  printf '%s\n' "local.env" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "local secret" > "$WORK_REPO/new/local.env"
+  printf '%s\n' "from upstream" > "$SEED_REPO/old/local.env"
+  git -C "$SEED_REPO" add -- old/local.env
+  git -C "$SEED_REPO" commit -q -m "upstream adds old/local.env"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export DIRMERGE_HEAD DIRMERGE_COMPUTED=0
+  DIRMERGE_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+  # A Git with git merge-tree --write-tree (2.38 or later) computes the
+  # merge; an older one runs it with merge.directoryRenames=false.
+  git -C "$WORK_REPO" merge-tree --write-tree --no-messages HEAD HEAD \
+    >/dev/null 2>&1 && DIRMERGE_COMPUTED=1
+  export_real_git
+  # With $HOME/.no-merge-tree, git merge-tree fails as it does before 2.38.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$HOME/.no-merge-tree" && " $* " == *" merge-tree "* ]]; then
+  printf '%s\n' "error: unknown option \`write-tree'" >&2
+  exit 129
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    local -a codes=()
+    local setting=""
+    for setting in true default; do
+      command git config --unset-all merge.directoryRenames
+      [[ "$setting" == default ]] \
+        || command git config merge.directoryRenames "$setting"
+      git-pull --remote origin --ref refs/heads/main --merge --yes \
+        >"$HOME/$setting.stdout" 2>"$HOME/$setting.stderr"
+      codes+=($?)
+      [[ "$(<new/local.env)" == "local secret" ]] || return 10
+      if (( DIRMERGE_COMPUTED )); then
+        [[ "$(command git rev-parse HEAD)" == "$DIRMERGE_HEAD" ]] || return 11
+      else
+        [[ "$(<old/local.env)" == "from upstream" ]] || return 12
+        command git reset -q --hard "$DIRMERGE_HEAD" || return 13
+      fi
+    done
+
+    # Without merge-tree the merge runs with merge.directoryRenames=false,
+    # so the file stays at old/local.env, a path that the check covers.
+    command git config merge.directoryRenames true
+    : >"$HOME/.no-merge-tree"
+    git-pull --remote origin --ref refs/heads/main --merge --yes \
+      >"$HOME/fallback.stdout" 2>"$HOME/fallback.stderr"
+    codes+=($?)
+    [[ "$(<new/local.env)" == "local secret" ]] || return 14
+    [[ "$(<old/local.env)" == "from upstream" ]] || return 15
+    command git rev-parse --verify --quiet "HEAD^2" >/dev/null || return 16
+    print -r -- "${(j:,:)codes}"
+  '
+
+  local expected="0,0,0"
+  (( DIRMERGE_COMPUTED )) && expected="1,1,0"
+  if [ "$status" -ne 0 ] || [ "$output" != "$expected" ]; then
+    printf 'zsh status: %s\ncodes: %s (expected %s)\n' \
+      "$status" "$output" "$expected" >&2
+    cat "$HOME"/*.stderr >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+  if (( DIRMERGE_COMPUTED )); then
+    grep -Fxq "  new/local.env" "$HOME/true.stderr"
+    grep -Fq "Refusing to merge; move or remove these paths first." \
+      "$HOME/true.stderr"
+    grep -Fxq "  new/local.env" "$HOME/default.stderr"
+  fi
+}
+
+@test "git-pull: a rebase refuses an ignored file at a path that directory-rename detection writes" {
+  init_seeded_remote_worktree
+
+  mkdir -p "$SEED_REPO/old"
+  printf '%s\n' "a" > "$SEED_REPO/old/a"
+  printf '%s\n' "b" > "$SEED_REPO/old/b"
+  git -C "$SEED_REPO" add -- old
+  git -C "$SEED_REPO" commit -q -m "add old/"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  git -C "$WORK_REPO" fetch -q origin
+  git -C "$WORK_REPO" merge -q --ff-only origin/main
+  # One local commit adds old/tmp.env and the next deletes it, while upstream
+  # moves old/ to new/. Replaying the first writes new/tmp.env and the
+  # second deletes it, so neither HEAD, the fetched commit, the replayed
+  # commits, nor the final tree names that path.
+  printf '%s\n' "tmp.env" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "scratch" > "$WORK_REPO/old/tmp.env"
+  git -C "$WORK_REPO" add -f -- old/tmp.env
+  git -C "$WORK_REPO" commit -q -m "add old/tmp.env"
+  git -C "$WORK_REPO" rm -q -- old/tmp.env
+  git -C "$WORK_REPO" commit -q -m "drop old/tmp.env"
+  git -C "$SEED_REPO" mv old new
+  git -C "$SEED_REPO" commit -q -m "move old to new"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  mkdir -p "$WORK_REPO/new"
+  printf '%s\n' "local secret" > "$WORK_REPO/new/tmp.env"
+  export DIRREBASE_HEAD DIRREBASE_COMPUTED=0
+  DIRREBASE_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+  # A Git whose merge-tree accepts trees with --merge-base replays the
+  # commits; an older one runs the rebase with merge.directoryRenames=false.
+  git -C "$WORK_REPO" merge-tree --write-tree --no-messages \
+    "--merge-base=HEAD^" "HEAD^^{tree}" HEAD >/dev/null 2>&1 \
+    && DIRREBASE_COMPUTED=1
+  export_real_git
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$HOME/.no-merge-tree" && " $* " == *" merge-tree "* ]]; then
+  printf '%s\n' "error: unknown option \`write-tree'" >&2
+  exit 129
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    local -a codes=()
+    local setting=""
+    for setting in default true; do
+      command git config --unset-all merge.directoryRenames
+      [[ "$setting" == default ]] \
+        || command git config merge.directoryRenames "$setting"
+      git-pull --remote origin --ref refs/heads/main --rebase --yes \
+        >"$HOME/$setting.stdout" 2>"$HOME/$setting.stderr"
+      codes+=($?)
+      [[ "$(<new/tmp.env)" == "local secret" ]] || return 10
+      if (( DIRREBASE_COMPUTED )); then
+        [[ "$(command git rev-parse HEAD)" == "$DIRREBASE_HEAD" ]] || return 11
+      else
+        command git cat-file -e "HEAD:new/a" || return 12
+        command git reset -q --hard "$DIRREBASE_HEAD" || return 13
+      fi
+    done
+
+    # Without merge-tree the rebase runs with merge.directoryRenames=false,
+    # so the replayed commits keep old/tmp.env, which the check covers.
+    : >"$HOME/.no-merge-tree"
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/fallback.stdout" 2>"$HOME/fallback.stderr"
+    codes+=($?)
+    [[ "$(<new/tmp.env)" == "local secret" ]] || return 14
+    [[ "$(command git rev-parse HEAD)" != "$DIRREBASE_HEAD" ]] || return 15
+    command git cat-file -e "HEAD:new/a" || return 16
+    print -r -- "${(j:,:)codes}"
+  '
+
+  local expected="0,0,0"
+  (( DIRREBASE_COMPUTED )) && expected="1,1,0"
+  if [ "$status" -ne 0 ] || [ "$output" != "$expected" ]; then
+    printf 'zsh status: %s\ncodes: %s (expected %s)\n' \
+      "$status" "$output" "$expected" >&2
+    cat "$HOME"/*.stderr >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+  if (( DIRREBASE_COMPUTED )); then
+    grep -Fxq "  new/tmp.env" "$HOME/default.stderr"
+    grep -Fq "Refusing to rebase; move or remove these paths first." \
+      "$HOME/default.stderr"
+    grep -Fxq "  new/tmp.env" "$HOME/true.stderr"
+  fi
+}
+
+@test "git-pull: a merge refuses an ignored file that a file/directory conflict writes" {
+  init_seeded_remote_worktree
+  git -C "$WORK_REPO" merge-tree --write-tree --no-messages HEAD HEAD \
+    >/dev/null 2>&1 || skip "git merge-tree --write-tree needs Git 2.38"
+
+  # HEAD adds the file p and upstream adds the directory p/, so the merge
+  # moves HEAD's file to p~HEAD, a name that no commit holds.
+  printf '%s\n' "file" > "$WORK_REPO/p"
+  git -C "$WORK_REPO" add -- p
+  git -C "$WORK_REPO" commit -q -m "local adds the file p"
+  printf '%s\n' "p~HEAD" >> "$WORK_REPO/.git/info/exclude"
+  printf '%s\n' "local secret" > "$WORK_REPO/p~HEAD"
+  mkdir -p "$SEED_REPO/p"
+  printf '%s\n' "x" > "$SEED_REPO/p/x"
+  git -C "$SEED_REPO" add -- p
+  git -C "$SEED_REPO" commit -q -m "upstream adds p/x"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export FDCONFLICT_HEAD
+  FDCONFLICT_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --merge --yes \
+      >"$HOME/fd.stdout" 2>"$HOME/fd.stderr"
+    local -i pull_rc=$?
+    [[ "$(<"p~HEAD")" == "local secret" ]] || return 10
+    [[ "$(command git rev-parse HEAD)" == "$FDCONFLICT_HEAD" ]] || return 11
+    print -r -- "$pull_rc"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "1" ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    cat "$HOME/fd.stderr" >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+  grep -Fxq "  p~HEAD" "$HOME/fd.stderr"
+}
+
+@test "git-pull: an interrupt while the rebase replay is computed stops the pull" {
+  init_seeded_remote_worktree
+
+  printf '%s\n' "local" > "$WORK_REPO/local.txt"
+  git -C "$WORK_REPO" add -- local.txt
+  git -C "$WORK_REPO" commit -q -m "local change"
+  printf '%s\n' "remote update" > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam "remote update"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export REPLAY_INT_HEAD
+  REPLAY_INT_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+  export_real_git
+  # Ctrl-C arrives while the parent of a replayed commit is looked up.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ " $* " == *" rev-parse --verify --quiet "*"^1 "* ]]; then
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/int.stdout" 2>"$HOME/int.stderr"
+    local -i pull_rc=$?
+    [[ "$(command git rev-parse HEAD)" == "$REPLAY_INT_HEAD" ]] || return 10
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "$pull_rc"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "130" ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    cat "$HOME/int.stderr" >&2 2>/dev/null || true
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "130" ]
+  grep -Fq "The pull was interrupted (exit 130)." "$HOME/int.stderr"
+}
+
+@test "git-pull: an interrupt after the reviewed fetch keeps its status and leaves no temporary ref" {
+  init_seeded_remote_worktree
+
+  printf '%s\n' "remote update" > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam "remote update"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export INTERRUPT_HEAD
+  INTERRUPT_HEAD=$(git -C "$WORK_REPO" rev-parse HEAD)
+  export_real_git
+  # Ctrl-C reaches the shell while it reads the fetched temporary ref; the
+  # read runs in a command substitution, so the wrapper signals the shell.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == for-each-ref && " $* " == *" refs/zdx-suite/fetch/"* \
+  && " $* " != *" --count=1 "* && ! -e "$HOME/.pull-interrupted" ]]; then
+  : > "$HOME/.pull-interrupted"
+  "$REAL_GIT" for-each-ref --format='%(refname)' refs/zdx-suite \
+    > "$HOME/temp-refs-during-pull"
+  kill -INT "$ZDX_TEST_SHELL_PID"
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    export ZDX_TEST_SHELL_PID=$$
+    git-pull --remote origin --ref refs/heads/main --ff-only --yes \
+      >"$HOME/interrupt.stdout" 2>"$HOME/interrupt.stderr"
+    print -r -- "$?"
+  '
+
+  if [ "$status" -ne 0 ] || [ "$output" != "130" ]; then
+    printf 'zsh status: %s\n%s\n' "$status" "$output" >&2
+    [ ! -f "$HOME/interrupt.stderr" ] || cat "$HOME/interrupt.stderr" >&2
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "130" ]
+  # The fetch had written its temporary ref before the interruption.
+  [ -s "$HOME/temp-refs-during-pull" ]
+  [ -z "$("$REAL_GIT" -C "$WORK_REPO" for-each-ref --format='%(refname)' \
+    refs/zdx-suite)" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD)" = "$INTERRUPT_HEAD" ]
+}
+
+@test "git-pull: merge and ff-only fast-forwards never overwrite an ignored file that appears after the check" {
+  init_seeded_remote_worktree
+
+  local mode
+  for mode in merge ff-only; do
+    git clone -q "$REMOTE_REPO" "$HOME/late-$mode"
+    printf '%s\n' "local.env" >> "$HOME/late-$mode/.git/info/exclude"
+  done
+  printf '%s\n' "from upstream" > "$SEED_REPO/local.env"
+  git -C "$SEED_REPO" add -- local.env
+  git -C "$SEED_REPO" commit -q -m "track local.env"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export_real_git
+  # The ignored file appears just before git merge runs, after the obstacle
+  # check; --no-overwrite-ignore makes the fast-forward refuse it.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == merge && ! -e .git/late-ignored-file ]]; then
+  : > .git/late-ignored-file
+  printf '%s\n' "local secret" > local.env
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    local mode="" head_before=""
+    local -i pull_rc=0
+    for mode in merge ff-only; do
+      cd "$HOME/late-$mode" || return 90
+      head_before=$(command git rev-parse HEAD) || return 91
+      pull_rc=0
+      git-pull --remote origin --ref refs/heads/main "--$mode" --yes \
+        >"$HOME/late-$mode.stdout" 2>"$HOME/late-$mode.stderr" || pull_rc=$?
+      [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 92
+      print -r -- "$mode rc=$pull_rc file=[$(<local.env)]"
+    done
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  printf '%s\n' "$output" >&2
+  [ "${lines[0]}" = "merge rc=1 file=[local secret]" ]
+  [ "${lines[1]}" = "ff-only rc=1 file=[local secret]" ]
+  grep -Fq "local.env" "$HOME/late-merge.stderr"
+  grep -Fq "local.env" "$HOME/late-ff-only.stderr"
+}
+
 @test "git-pull: fetch-prune dry run preserves tracking refs and real run converges" {
   init_seeded_remote_worktree
 

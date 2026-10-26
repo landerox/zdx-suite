@@ -3,7 +3,7 @@
 # Git Sync: explicit, planned fetch, pull, and push transactions
 # =============================================================================
 #
-# Loaded by git-menu.zsh after git-common.zsh.
+# Loaded by git-menu.zsh after git-common.zsh and git-branch.zsh.
 # Safe to re-source; defines functions only.
 #
 
@@ -375,6 +375,185 @@ _git_sync_cleanup_temp_refs() {
     return 1
   fi
   return 0
+}
+
+# Refuses a rebase pull that configuration asks to keep merge commits.
+# rebase.rebaseMerges makes git rebase recreate merges, and its resets can
+# check out older trees that the obstacle check never sees; pull.rebase or
+# branch.<name>.rebase set to merges asks a pull for the same, which this
+# command's rebase would linearize instead. An interrupted read returns its
+# status (130 or 143).
+# Usage: _git_pull_require_linear_rebase ROOT BRANCH
+_git_pull_require_linear_rebase() {
+  emulate -L zsh
+
+  local repo_root="$1"
+  local branch="$2"
+  local setting="" value=""
+  local -i config_rc=0
+
+  value=$(command git -C "$repo_root" config --type=bool --get \
+    rebase.rebaseMerges 2>/dev/null) || config_rc=$?
+  (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+  # Status 1: unset. Any other failure is a mode such as rebase-cousins.
+  if (( config_rc == 0 )) && [[ "$value" == "false" ]]; then
+    :
+  elif (( config_rc != 1 )); then
+    value=$(command git -C "$repo_root" config --get rebase.rebaseMerges \
+      2>/dev/null) || value="true"
+    _git_error \
+      "rebase.rebaseMerges=$(_git_display_escape "${value:-true}") makes git rebase recreate merge commits, which can check out older trees that this plan does not check for untracked or ignored files."
+    _git_info \
+      "Run the rebase yourself with git rebase, or pull with git-pull --merge."
+    return 1
+  fi
+
+  value=""
+  config_rc=0
+  if [[ -n "$branch" ]]; then
+    setting="branch.${branch}.rebase"
+    value=$(command git -C "$repo_root" config --get "$setting" \
+      2>/dev/null) || config_rc=$?
+    (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+  fi
+  if [[ -z "$branch" ]] || (( config_rc != 0 )); then
+    setting="pull.rebase"
+    config_rc=0
+    value=$(command git -C "$repo_root" config --get "$setting" \
+      2>/dev/null) || config_rc=$?
+    (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+    (( config_rc == 0 )) || value=""
+  fi
+  # Git reads merges or m as a rebase that keeps merges.
+  if [[ "$value" == "merges" || "$value" == "m" ]]; then
+    _git_error \
+      "$(_git_display_escape "$setting")=$value asks pulls to keep merge commits; this pull would drop them, and keeping them can check out older trees that this plan does not check for untracked or ignored files."
+    _git_info \
+      "Run the rebase yourself with git rebase, or pull with git-pull --merge."
+    return 1
+  fi
+  return 0
+}
+
+# Sets reply to the paths that the non-merge commits in UPSTREAM..HEAD change,
+# the commits that a rebase replays. Only plumbing runs (rev-list and
+# diff-tree), so porcelain settings such as log.showSignature cannot add text
+# to the list.
+# Usage: _git_sync_replayed_paths ROOT UPSTREAM_OID HEAD_OID
+_git_sync_replayed_paths() {
+  emulate -L zsh
+
+  local repo_root="$1"
+  local upstream_oid="$2"
+  local head_oid="$3"
+  local commits_output="" commit=""
+  local -i git_rc=0
+  reply=()
+  commits_output=$(command git -C "$repo_root" rev-list --no-merges \
+    "${upstream_oid}..${head_oid}" --) || git_rc=$?
+  (( git_rc == 130 || git_rc == 143 )) && return $git_rc
+  (( git_rc == 0 )) || return 1
+  [[ -n "$commits_output" ]] || return 0
+  for commit in "${(@f)commits_output}"; do
+    _git_validate_oid "$commit" || return 1
+  done
+  _git_capture_nul -C "$repo_root" diff-tree --stdin -r --root \
+    --no-commit-id --name-only --no-renames -z <<<"$commits_output" \
+    || return $?
+  reply=("${(@u)reply:#}")
+}
+
+# Sets reply to the paths that merging TARGET into HEAD writes or removes,
+# read from the tree that git merge-tree --write-tree (Git 2.38 or later)
+# computes with the same configuration as git merge. Rename and
+# directory-rename detection can write a path that neither side names, such
+# as a file added in a directory that the other side renamed, and a conflict
+# can add names such as path~HEAD; that tree holds them all. git merge labels
+# its own side HEAD and the other side by the argument it gets, and those
+# labels name the side files of a file/directory conflict, so merge-tree gets
+# the same arguments: HEAD, which must still be HEAD_OID, and TARGET_OID.
+# Returns 3 when this Git cannot compute it, so the caller runs the merge
+# with merge.directoryRenames=false instead, and 130 or 143 when interrupted.
+# Usage: _git_sync_merge_result_paths ROOT HEAD_OID TARGET_OID
+_git_sync_merge_result_paths() {
+  emulate -L zsh
+
+  local repo_root="$1"
+  local head_oid="$2"
+  local target_oid="$3"
+  local output="" result_tree="" current_head=""
+  local -i merge_rc=0
+  reply=()
+  current_head=$(command git -C "$repo_root" rev-parse --verify --quiet HEAD) \
+    || merge_rc=$?
+  (( merge_rc == 130 || merge_rc == 143 )) && return $merge_rc
+  [[ "$current_head" == "$head_oid" ]] || return 1
+  output=$(command git -C "$repo_root" merge-tree --write-tree --no-messages \
+    HEAD "$target_oid" 2>/dev/null) || merge_rc=$?
+  (( merge_rc == 130 || merge_rc == 143 )) && return $merge_rc
+  # 0 is a clean merge; 1 is a conflicted one, whose tree still holds every
+  # file the merge writes.
+  (( merge_rc == 0 || merge_rc == 1 )) || return 3
+  result_tree="${output%%$'\n'*}"
+  _git_validate_oid "$result_tree" || return 3
+  _git_capture_nul -C "$repo_root" diff-tree -r --name-only --no-renames -z \
+    "$head_oid" "$result_tree" || return $?
+  reply=("${(@u)reply:#}")
+}
+
+# Sets reply to the paths that a rebase of UPSTREAM..HEAD onto UPSTREAM writes
+# or removes at any step. Each non-merge commit is replayed as git rebase
+# replays it, with git merge-tree --write-tree --merge-base=<parent> on the
+# trees (which needs a Git that accepts trees there; Git 2.56 does), so a
+# path that directory-rename detection moves into a renamed directory, even
+# one that a later commit deletes again, is listed. A conflicted step's tree
+# stands in for the stop and the replay continues, which can only list more
+# paths. Returns 3 when this Git cannot replay the trees or a commit has no
+# parent, so the caller runs the rebase with merge.directoryRenames=false
+# instead, and 130 or 143 when interrupted.
+# Usage: _git_sync_rebase_result_paths ROOT UPSTREAM_OID HEAD_OID
+_git_sync_rebase_result_paths() {
+  emulate -L zsh
+
+  local repo_root="$1"
+  local upstream_oid="$2"
+  local head_oid="$3"
+  local commits_output="" commit="" parent="" current="" output=""
+  local result_tree=""
+  local -i git_rc=0
+  local -a written=()
+  reply=()
+  commits_output=$(command git -C "$repo_root" rev-list --reverse \
+    --no-merges "${upstream_oid}..${head_oid}" --) || git_rc=$?
+  (( git_rc == 130 || git_rc == 143 )) && return $git_rc
+  (( git_rc == 0 )) || return 1
+  [[ -n "$commits_output" ]] || return 0
+  current=$(command git -C "$repo_root" rev-parse --verify --quiet \
+    "${upstream_oid}^{tree}") || git_rc=$?
+  (( git_rc == 130 || git_rc == 143 )) && return $git_rc
+  (( git_rc == 0 )) || return 1
+  for commit in "${(@f)commits_output}"; do
+    _git_validate_oid "$commit" || return 1
+    # Status 1 is a root commit, which this replay does not cover.
+    git_rc=0
+    parent=$(command git -C "$repo_root" rev-parse --verify --quiet \
+      "${commit}^1") || git_rc=$?
+    (( git_rc == 130 || git_rc == 143 )) && return $git_rc
+    (( git_rc == 0 )) || return 3
+    git_rc=0
+    output=$(command git -C "$repo_root" merge-tree --write-tree \
+      --no-messages "--merge-base=${parent}" "$current" "$commit" \
+      2>/dev/null) || git_rc=$?
+    (( git_rc == 130 || git_rc == 143 )) && return $git_rc
+    (( git_rc == 0 || git_rc == 1 )) || return 3
+    result_tree="${output%%$'\n'*}"
+    _git_validate_oid "$result_tree" || return 3
+    _git_capture_nul -C "$repo_root" diff-tree -r --name-only --no-renames \
+      -z "$current" "$result_tree" || return $?
+    written+=("${reply[@]}")
+    current="$result_tree"
+  done
+  reply=("${(@u)written:#}")
 }
 
 # Promotes one fetched OID to a canonical tracking ref with an exact old-value
@@ -1626,6 +1805,9 @@ git-pull() {
   local REPLY=""
   _git_sync_resolve_branch_target \
     "$_git_pull_opt_remote" "$_git_pull_opt_ref" fetch || return $?
+  if [[ "$_git_pull_opt_mode" == "rebase" ]]; then
+    _git_pull_require_linear_rebase "$root" "$_git_sync_branch" || return $?
+  fi
 
   local -a reply=()
   local -a prune_plan=()
@@ -1794,71 +1976,168 @@ git-pull() {
   local exact_temp_prefix="$REPLY"
   local exact_temp_ref="${exact_temp_prefix}/source"
   local fetch_refspec="${_git_sync_remote_ref}:${exact_temp_ref}"
-  _git_sync_fetch_temp "$_git_sync_remote" "$fetch_refspec"
-  local -i exact_fetch_rc=$?
+  local fetched_oid="" pull_head="" pull_verb=""
+  local -i exact_fetch_rc=0 operation_rc=0 promote_rc=0 exact_cleanup_rc=0
+  local -a exact_temp_records=() replayed_paths=()
+  local -i pull_without_dir_renames=0
+  # The temporary ref exists only inside this block: the always list removes
+  # whatever remains on every exit, and an interrupt keeps its status.
+  {
+    trap 'operation_rc=130; return 130' INT
+    trap 'operation_rc=143; return 143' TERM HUP
 
-  local -a exact_temp_records=()
-  _git_sync_temp_snapshot "$exact_temp_prefix" || {
-    _git_error \
-      "Unable to inventory the temporary refs; inspect '$exact_temp_prefix'."
-    return 1
-  }
-  exact_temp_records=("${reply[@]}")
-  if (( exact_fetch_rc != 0 )); then
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || return 1
-    _git_error "Fetch failed (exit $exact_fetch_rc)."
-    return $exact_fetch_rc
-  fi
+    _git_sync_fetch_temp "$_git_sync_remote" "$fetch_refspec" \
+      || exact_fetch_rc=$?
+    if (( operation_rc == 0 \
+      && ( exact_fetch_rc == 130 || exact_fetch_rc == 143 ) )); then
+      operation_rc=$exact_fetch_rc
+    fi
+    (( operation_rc == 0 )) || return $operation_rc
 
-  local fetched_oid=""
-  if (( ${#exact_temp_records[@]} == 1 )) \
-    && [[ "${exact_temp_records[1]#*$'\t'}" == "$exact_temp_ref" ]]; then
-    fetched_oid="${exact_temp_records[1]%%$'\t'*}"
-  fi
-  [[ "$fetched_oid" == "$remote_oid" ]] || {
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || true
-    _git_error "The fetched object does not match the frozen remote plan."
-    return 1
-  }
+    _git_sync_temp_snapshot "$exact_temp_prefix" || {
+      (( operation_rc )) || _git_error \
+        "Unable to inventory the temporary refs; inspect '$exact_temp_prefix'."
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    exact_temp_records=("${reply[@]}")
+    if (( exact_fetch_rc != 0 )); then
+      _git_error "Fetch failed (exit $exact_fetch_rc)."
+      operation_rc=$exact_fetch_rc
+      return $operation_rc
+    fi
 
-  _git_sync_validate_temp_commits "${exact_temp_records[@]}" || {
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || true
-    return 1
-  }
+    if (( ${#exact_temp_records[@]} == 1 )) \
+      && [[ "${exact_temp_records[1]#*$'\t'}" == "$exact_temp_ref" ]]; then
+      fetched_oid="${exact_temp_records[1]%%$'\t'*}"
+    fi
+    [[ "$fetched_oid" == "$remote_oid" ]] || {
+      _git_error "The fetched object does not match the frozen remote plan."
+      operation_rc=1
+      return 1
+    }
 
-  _git_sync_revalidate_context \
-    "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
-    "$_git_sync_local_oid" "$_git_sync_remote" "$_git_sync_fetch_url" fetch \
-    || {
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || true
-    return 1
-  }
-  _git_sync_direct_ref_oid "$_git_sync_tracking_ref" || {
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || true
-    return 1
-  }
-  [[ "$REPLY" == "$tracking_oid" ]] || {
-    _git_sync_cleanup_temp_refs \
-      "$exact_temp_prefix" "${exact_temp_records[@]}" || true
-    _git_error "The tracking ref changed during fetch."
-    return 1
-  }
+    _git_sync_validate_temp_commits "${exact_temp_records[@]}" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
 
-  local -i promote_rc=0
-  _git_sync_promote_tracking_ref \
-    "$_git_sync_tracking_ref" "$remote_oid" "$tracking_oid" \
-    || promote_rc=$?
-  local -i exact_cleanup_rc=0
-  _git_sync_cleanup_temp_refs \
-    "$exact_temp_prefix" "${exact_temp_records[@]}" \
-    || exact_cleanup_rc=$?
-  (( promote_rc == 0 )) || return $promote_rc
-  (( exact_cleanup_rc == 0 )) || return $exact_cleanup_rc
+    _git_sync_revalidate_context \
+      "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
+      "$_git_sync_local_oid" "$_git_sync_remote" "$_git_sync_fetch_url" fetch \
+      || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    _git_sync_direct_ref_oid "$_git_sync_tracking_ref" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    [[ "$REPLY" == "$tracking_oid" ]] || {
+      _git_error "The tracking ref changed during fetch."
+      operation_rc=1
+      return 1
+    }
+
+    # Git silently replaces an ignored file at a path the fetched commit
+    # tracks, and a rebase or a true merge has no working
+    # --no-overwrite-ignore, so the pull refuses here, before any ref or file
+    # changes. A rebase also replays the local commits, which can write and
+    # then delete paths that neither HEAD nor the fetched commit tracks.
+    if [[ "$_git_pull_opt_mode" != "fetch" ]]; then
+      pull_head="$head_oid"
+      pull_verb="$_git_pull_opt_mode"
+      [[ "$pull_head" != "unborn" ]] || pull_head=""
+      [[ "$pull_verb" != "ff-only" ]] || pull_verb="fast-forward"
+      if [[ "$_git_pull_opt_mode" == "rebase" && -n "$pull_head" ]]; then
+        # Again after confirmation: kept merges would reset to trees that
+        # the path list below does not cover.
+        _git_pull_require_linear_rebase "$root" "$_git_sync_branch" || {
+          local -i linear_rc=$?
+          (( operation_rc )) || operation_rc=$linear_rc
+          return $operation_rc
+        }
+        # Plumbing only: git log would add text from porcelain settings such
+        # as log.showSignature to the path list.
+        local -i replay_rc=0
+        _git_sync_replayed_paths "$root" "$remote_oid" "$pull_head" \
+          || replay_rc=$?
+        if (( replay_rc != 0 )); then
+          if (( operation_rc == 0 && ( replay_rc == 130 || replay_rc == 143 ) )); then
+            operation_rc=$replay_rc
+          fi
+          (( operation_rc )) || _git_error \
+            "Unable to list the paths of the local commits to replay."
+          (( operation_rc )) || operation_rc=1
+          return $operation_rc
+        fi
+        replayed_paths=("${reply[@]}")
+      fi
+      # Rename and directory-rename detection can make a merge or a replayed
+      # commit write a path that no diff above names, so the paths come from
+      # the computed result; a Git that cannot compute it runs the merge or
+      # rebase with merge.directoryRenames=false instead.
+      if [[ -n "$pull_head" ]] \
+        && [[ "$_git_pull_opt_mode" == "merge" \
+          || "$_git_pull_opt_mode" == "rebase" ]]; then
+        local -i result_rc=0
+        if [[ "$_git_pull_opt_mode" == "merge" ]]; then
+          _git_sync_merge_result_paths "$root" "$pull_head" "$remote_oid" \
+            || result_rc=$?
+        else
+          _git_sync_rebase_result_paths "$root" "$remote_oid" "$pull_head" \
+            || result_rc=$?
+        fi
+        if (( result_rc == 0 )); then
+          replayed_paths+=("${reply[@]}")
+        elif (( result_rc == 3 )); then
+          pull_without_dir_renames=1
+        elif (( result_rc == 130 || result_rc == 143 )); then
+          (( operation_rc )) || operation_rc=$result_rc
+          return $operation_rc
+        else
+          (( operation_rc )) || _git_error \
+            "Unable to compute the paths that the $pull_verb would write."
+          (( operation_rc )) || operation_rc=1
+          return $operation_rc
+        fi
+      fi
+      _git_require_clear_target "$root" "$pull_head" "$remote_oid" \
+        "Pulling ${remote_oid[1,12]}" "Refusing to $pull_verb" \
+        replayed_paths || {
+        (( operation_rc )) || operation_rc=1
+        return $operation_rc
+      }
+    fi
+
+    _git_sync_promote_tracking_ref \
+      "$_git_sync_tracking_ref" "$remote_oid" "$tracking_oid" \
+      || promote_rc=$?
+    _git_sync_cleanup_temp_refs \
+      "$exact_temp_prefix" "${exact_temp_records[@]}" \
+      || exact_cleanup_rc=$?
+    (( operation_rc != 0 || promote_rc == 0 )) || operation_rc=$promote_rc
+    (( operation_rc != 0 || exact_cleanup_rc == 0 )) \
+      || operation_rc=$exact_cleanup_rc
+    (( operation_rc == 0 )) || return $operation_rc
+  } always {
+    trap - INT TERM HUP
+    if (( operation_rc == 130 || operation_rc == 143 )); then
+      _git_error "The pull was interrupted (exit $operation_rc)."
+    fi
+    # Whatever ended the block, no temporary ref is left behind.
+    local -a remaining_temp_records=()
+    if _git_sync_temp_snapshot "$exact_temp_prefix" 2>/dev/null; then
+      remaining_temp_records=("${reply[@]}")
+      (( ${#remaining_temp_records[@]} == 0 )) \
+        || _git_sync_cleanup_temp_refs "$exact_temp_prefix" \
+          "${remaining_temp_records[@]}" \
+        || _git_warn "Remove the temporary refs below '$exact_temp_prefix'."
+    else
+      _git_warn \
+        "Unable to inventory the temporary refs; inspect '$exact_temp_prefix'."
+    fi
+  }
 
   if [[ "$_git_pull_opt_mode" == "fetch" ]]; then
     _git_success \
@@ -1866,19 +2145,26 @@ git-pull() {
     return 0
   fi
 
-  local -a apply_cmd=()
+  local -a apply_cmd=() dir_renames_option=()
   local success_message=""
+  # Without a computed result the check covers only paths that the commits
+  # name, so the merge or rebase must not move files into renamed directories.
+  (( pull_without_dir_renames )) \
+    && dir_renames_option=(-c merge.directoryRenames=false)
+  # --no-overwrite-ignore also stops a fast-forward over an ignored file that
+  # appeared after the check; git rebase has no such option.
   case "$_git_pull_opt_mode" in
     merge)
-      apply_cmd=(command git merge --no-edit "$remote_oid")
+      apply_cmd=(command git "${dir_renames_option[@]}" merge --no-edit
+        --no-overwrite-ignore "$remote_oid")
       success_message="Merged $remote_oid into $_git_sync_local_ref."
       ;;
     rebase)
-      apply_cmd=(command git rebase "$remote_oid")
+      apply_cmd=(command git "${dir_renames_option[@]}" rebase "$remote_oid")
       success_message="Rebased $_git_sync_local_ref onto $remote_oid."
       ;;
     ff-only)
-      apply_cmd=(command git merge --ff-only "$remote_oid")
+      apply_cmd=(command git merge --ff-only --no-overwrite-ignore "$remote_oid")
       success_message="Fast-forwarded $_git_sync_local_ref to $remote_oid."
       ;;
     *)

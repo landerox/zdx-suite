@@ -3,7 +3,7 @@
 # Git Pull Requests: repository-bound pull request creation and checkout
 # =============================================================================
 #
-# Loaded by git-menu.zsh after git-common.zsh.
+# Loaded by git-menu.zsh after git-common.zsh, git-branch.zsh, and git-sync.zsh.
 # Safe to re-source; defines functions only.
 #
 
@@ -280,11 +280,16 @@ _git_gh_ssh_hostname() {
   local ssh_variant=""
   local output=""
   local line=""
+  local -i ssh_rc=0
   REPLY="$host"
 
+  # Status 1 means unset; an interrupted read returns its status.
+  local -i config_rc=0
   if [[ -z "$ssh_command" ]]; then
     ssh_command=$(command git config --get core.sshCommand 2>/dev/null) ||
-      ssh_command=""
+      config_rc=$?
+    (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+    (( config_rc == 0 )) || ssh_command=""
   fi
   if [[ -n "$ssh_command" ]]; then
     local -a ssh_words=("${(z)ssh_command}")
@@ -293,21 +298,28 @@ _git_gh_ssh_hostname() {
     ssh_program="${GIT_SSH:-ssh}"
   fi
 
+  config_rc=0
   ssh_variant=$(command git config --get ssh.variant 2>/dev/null) ||
-    ssh_variant=""
+    config_rc=$?
+  (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+  (( config_rc == 0 )) || ssh_variant=""
   if [[ -z "$ssh_variant" || "$ssh_variant" == "auto" ]]; then
     ssh_variant="${${${ssh_program##*[/\\]}:l}%.exe}"
   fi
   [[ "$ssh_variant" == (plink|putty|tortoiseplink|simple) ]] && return 0
 
+  # A failed query keeps the host as written; an interrupted one returns its
+  # status (130 or 143).
   if [[ -n "$ssh_command" ]]; then
     output=$(command /bin/sh -c "$ssh_command \"\$@\"" "$ssh_command" \
-      -G -- "$host" </dev/null 2>/dev/null) || return 0
+      -G -- "$host" </dev/null 2>/dev/null) || ssh_rc=$?
   else
     _git_check_cmd "$ssh_program" || return 0
     output=$(command "$ssh_program" -G -- "$host" </dev/null 2>/dev/null) ||
-      return 0
+      ssh_rc=$?
   fi
+  (( ssh_rc == 130 || ssh_rc == 143 )) && return $ssh_rc
+  (( ssh_rc == 0 )) || return 0
   for line in "${(@f)output}"; do
     # Windows OpenSSH ends its lines with CRLF.
     line="${line%$'\r'}"
@@ -321,10 +333,19 @@ _git_gh_ssh_hostname() {
 
 _git_gh_remote_identity() {
   local remote="$1"
-  local remote_url remainder host repo_path owner repo
-  local transport="https"
   _git_gh_remote_push_url "$remote" || return 1
-  remote_url="$REPLY"
+  _git_gh_url_identity "$REPLY"
+}
+
+# Sets reply to host/owner/repo, the URL, and the owner of a GitHub-style
+# remote URL. SSH host aliases resolve to their configured HostName unless
+# MODE is raw, which keeps the host as written.
+# Usage: _git_gh_url_identity URL [resolve|raw]
+_git_gh_url_identity() {
+  local remote_url="$1"
+  local identity_mode="${2:-resolve}"
+  local remainder host repo_path owner repo
+  local transport="https"
 
   if [[ "$remote_url" == (http|https|ssh)://* ]]; then
     [[ "$remote_url" == ssh://* ]] && transport="ssh"
@@ -349,11 +370,88 @@ _git_gh_remote_identity() {
     && "$owner" =~ '^[A-Za-z0-9_.-]+$' \
     && "$repo" =~ '^[A-Za-z0-9_.-]+$' \
     && "$repo" != */* ]] || return 1
-  if [[ "$transport" == "ssh" ]]; then
-    _git_gh_ssh_hostname "$host"
+  if [[ "$transport" == "ssh" && "$identity_mode" != "raw" ]]; then
+    local -i hostname_rc=0
+    _git_gh_ssh_hostname "$host" || hostname_rc=$?
+    (( hostname_rc == 130 || hostname_rc == 143 )) && return $hostname_rc
     host="$REPLY"
   fi
   reply=("$host/$owner/$repo" "$remote_url" "$owner")
+}
+
+# Sets REPLY to the first remote, in configuration order, whose fetch URL
+# names the reviewed GitHub repository. git fetch uses only the first URL of a
+# remote, so only that URL counts, as configured or as its insteadOf
+# expansion, with the host as written or as its SSH HostName (GitHub's SSH over
+# port 443 uses HostName ssh.github.com). Fetching by remote name keeps the
+# transport, credentials, and URL rewriting the user configured, and the
+# fetched object is compared with the reviewed head OID, so the choice of
+# remote cannot change what is checked out.
+_git_gh_fetch_remote() {
+  emulate -L zsh
+
+  local wanted="${(L)_GIT_GH_REPO[target]}"
+  local config_record="" config_key="" remote=""
+  local url="" first_url="" expanded_url="" identity_mode=""
+  local -a remotes=() urls=() reply=()
+  REPLY=""
+  [[ -n "$wanted" ]] || return 1
+  # git config lists remote.<name>.url entries in configuration order; with
+  # -z each record is the key, a newline, and the value.
+  local -i read_rc=0
+  _git_capture_nul config -z --get-regexp '^remote\..*\.url$' 2>/dev/null \
+    || read_rc=$?
+  (( read_rc == 130 || read_rc == 143 )) && return $read_rc
+  (( read_rc == 0 )) || return 1
+  for config_record in "${reply[@]}"; do
+    config_key="${config_record%%$'\n'*}"
+    remote="${${config_key#remote.}%.url}"
+    [[ -n "$remote" && "$remote" != "$config_key" ]] || continue
+    (( ${remotes[(Ie)$remote]} )) || remotes+=("$remote")
+  done
+  for remote in "${remotes[@]}"; do
+    _git_validate_remote_token "$remote" || continue
+    # git fetch uses only the first URL of a remote, and an empty value
+    # resets the list. The values are read NUL-delimited, since a command
+    # substitution would drop a trailing empty one. A remote whose list ends
+    # empty, or whose URL git remote get-url cannot report, is unusable.
+    # An interrupted read stops the selection instead of trying the next
+    # remote.
+    first_url=""
+    read_rc=0
+    _git_capture_nul config -z --get-all "remote.${remote}.url" 2>/dev/null \
+      || read_rc=$?
+    (( read_rc == 130 || read_rc == 143 )) && return $read_rc
+    (( read_rc == 0 )) || continue
+    for url in "${reply[@]}"; do
+      if [[ -z "$url" ]]; then
+        first_url=""
+      elif [[ -z "$first_url" ]]; then
+        first_url="$url"
+      fi
+    done
+    [[ -n "$first_url" ]] || continue
+    read_rc=0
+    expanded_url=$(command git remote get-url "$remote" 2>/dev/null) \
+      || read_rc=$?
+    (( read_rc == 130 || read_rc == 143 )) && return $read_rc
+    (( read_rc == 0 )) || continue
+    [[ -n "$expanded_url" ]] || continue
+    urls=("$first_url" "$expanded_url")
+    for url in "${(@u)urls}"; do
+      [[ -n "$url" ]] || continue
+      for identity_mode in raw resolve; do
+        read_rc=0
+        _git_gh_url_identity "$url" "$identity_mode" || read_rc=$?
+        (( read_rc == 130 || read_rc == 143 )) && return $read_rc
+        (( read_rc == 0 )) || continue
+        [[ "${(L)reply[1]}" == "$wanted" ]] || continue
+        REPLY="$remote"
+        return 0
+      done
+    done
+  done
+  return 1
 }
 
 _git_gh_remote_head_oid() {
@@ -546,7 +644,10 @@ git-pr-create() {
   }
 
   local -a reply=()
-  _git_gh_remote_identity "$remote" || {
+  local -i identity_rc=0
+  _git_gh_remote_identity "$remote" || identity_rc=$?
+  (( identity_rc == 130 || identity_rc == 143 )) && return $identity_rc
+  (( identity_rc == 0 )) || {
     _git_error "Remote '$remote' is not a supported GitHub remote URL."
     return 1
   }
@@ -656,7 +757,7 @@ git-pr-create() {
     return 1
   }
   local -a current_remote=()
-  _git_gh_remote_identity "$remote" || return 1
+  _git_gh_remote_identity "$remote" || return $?
   current_remote=("${reply[@]}")
   [[ "${current_remote[1]:l}" == "${remote_target:l}" \
     && "${current_remote[2]}" == "$remote_url" ]] || {
@@ -780,9 +881,16 @@ git-pr-create() {
   return 0
 }
 
+# Returns HEAD to ORIGINAL_BRANCH at ORIGINAL_OID, or to that OID detached,
+# after a failed or interrupted PR checkout, and sets REPLY to unchanged,
+# restored, detached, or failed. The restore is a checkout too: it refuses an
+# untracked or ignored file that a hook or a build wrote meanwhile at a path
+# it would replace, and its switches pass --no-overwrite-ignore.
+# Usage: _git_gh_restore_checkout_state ORIGINAL_BRANCH ORIGINAL_OID ROOT
 _git_gh_restore_checkout_state() {
   local original_branch="$1"
   local original_oid="$2"
+  local repo_root="$3"
   local current_branch current_oid
   current_branch=$(command git symbolic-ref --quiet --short HEAD \
     2>/dev/null) || current_branch=""
@@ -802,12 +910,20 @@ _git_gh_restore_checkout_state() {
     return 0
   fi
 
+  _git_require_clear_target "$repo_root" "$current_oid" "$original_oid" \
+    "Restoring the prior state at ${original_oid[1,12]}" \
+    "Refusing to restore the prior state" || {
+    REPLY="failed"
+    return 1
+  }
+
   if [[ "$original_branch" != "detached" ]]; then
     local original_ref_oid
     original_ref_oid=$(command git rev-parse --verify \
       "refs/heads/$original_branch" 2>/dev/null) || original_ref_oid=""
     if [[ "$original_ref_oid" == "$original_oid" ]] \
-      && command git switch --quiet "$original_branch" >&2; then
+      && command git switch --quiet --no-overwrite-ignore \
+        "$original_branch" >&2; then
       current_branch=$(command git symbolic-ref --quiet --short HEAD \
         2>/dev/null) || current_branch=""
       current_oid=$(command git rev-parse --verify HEAD 2>/dev/null) \
@@ -820,7 +936,8 @@ _git_gh_restore_checkout_state() {
     fi
   fi
 
-  if command git switch --quiet --detach "$original_oid" >&2; then
+  if command git switch --quiet --detach --no-overwrite-ignore \
+    "$original_oid" >&2; then
     current_branch=$(command git symbolic-ref --quiet --short HEAD \
       2>/dev/null) || current_branch=""
     current_oid=$(command git rev-parse --verify HEAD 2>/dev/null) \
@@ -910,50 +1027,150 @@ git-pr-checkout() {
     return 1
   }
 
-  _git_info \
-    "Checking out PR #$number at reviewed head ${head_oid[1,12]}."
-  command gh pr checkout "$number" --detach \
-    --repo "${_GIT_GH_REPO[target]}" >&2
-  local -i checkout_rc=$?
-  if (( checkout_rc != 0 )); then
-    if _git_gh_restore_checkout_state "$original_branch" "$expected_head"; then
-      if [[ "$REPLY" == "detached" ]]; then
-        _git_warn \
-          "Checkout failed; the original OID was restored in detached mode."
-      else
-        _git_info "Checkout failed; the original worktree state is intact."
-      fi
-    else
-      _git_warn \
-        "Checkout failed and the original worktree state could not be restored."
-    fi
-    _git_error "Unable to checkout PR #$number (exit $checkout_rc)."
-    return $checkout_rc
-  fi
-
-  local -i pin_rc=0
-  command git switch --quiet --detach "$head_oid" >&2 || pin_rc=$?
-  local checked_out_oid checked_out_branch
-  checked_out_oid=$(command git rev-parse --verify HEAD 2>/dev/null) \
-    || checked_out_oid=""
-  checked_out_branch=$(command git symbolic-ref --quiet --short HEAD \
-    2>/dev/null) || checked_out_branch=""
-  if (( pin_rc != 0 )) \
-    || [[ "$checked_out_oid" != "$head_oid" \
-      || -n "$checked_out_branch" ]]; then
+  local -i select_rc=0
+  _git_gh_fetch_remote || select_rc=$?
+  if (( select_rc == 130 || select_rc == 143 )); then
     _git_error \
-      "Checkout did not reach the exact reviewed OID; restoring the prior state."
-    if _git_gh_restore_checkout_state "$original_branch" "$expected_head"; then
-      if [[ "$REPLY" == "detached" ]]; then
-        _git_warn \
-          "The original OID was restored, but only in detached mode."
-      else
-        _git_info "The original worktree state was restored."
-      fi
-    else
-      _git_warn \
-        "The original worktree state could not be restored; inspect HEAD."
+      "Choosing the remote for PR #$number was interrupted (exit $select_rc); nothing was fetched or checked out."
+    return $select_rc
+  elif (( select_rc != 0 )); then
+    _git_error \
+      "No configured remote URL names ${_GIT_GH_REPO[target]}; add one with 'git remote add <name> <url>', then retry."
+    return 1
+  fi
+  local fetch_remote="$REPLY"
+
+  # The PR head is fetched into a temporary ref that this command owns, and
+  # nothing is checked out unless that ref holds the reviewed OID. A moved
+  # head is refused before its tree or hooks reach the worktree. An interrupt
+  # status recorded by a trap survives every later failure path.
+  _git_info \
+    "Fetching PR #$number from '$fetch_remote' to verify reviewed head ${head_oid[1,12]}."
+  local temp_prefix="" temp_ref="" fetched_oid=""
+  local checked_out_oid="" checked_out_branch=""
+  local -i operation_rc=0 fetch_rc=0 checkout_rc=0 switch_started=0
+  local -i cleanup_failed=0
+  local -a temp_records=()
+  {
+    trap 'operation_rc=130; return 130' INT
+    trap 'operation_rc=143; return 143' TERM HUP
+
+    _git_sync_allocate_temp_prefix || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    temp_prefix="$REPLY"
+    temp_ref="${temp_prefix}/head"
+    _git_sync_fetch_temp "$fetch_remote" \
+      "refs/pull/${number}/head:${temp_ref}" || fetch_rc=$?
+    if (( operation_rc == 0 && ( fetch_rc == 130 || fetch_rc == 143 ) )); then
+      operation_rc=$fetch_rc
     fi
+    (( operation_rc == 0 )) || return $operation_rc
+    if (( fetch_rc != 0 )); then
+      _git_error \
+        "Unable to fetch PR #$number from '$fetch_remote' (exit $fetch_rc); nothing was checked out."
+      operation_rc=1
+      return 1
+    fi
+
+    _git_sync_temp_snapshot "$temp_prefix" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    temp_records=("${reply[@]}")
+    if (( ${#temp_records[@]} == 1 )) \
+      && [[ "${temp_records[1]#*$'\t'}" == "$temp_ref" ]]; then
+      fetched_oid="${temp_records[1]%%$'\t'*}"
+    fi
+    [[ "$fetched_oid" == "$head_oid" ]] || {
+      _git_error \
+        "PR #$number moved after review (fetched ${fetched_oid[1,12]:-nothing}); nothing was checked out. Review it again."
+      operation_rc=1
+      return 1
+    }
+    _git_sync_validate_temp_commits "${temp_records[@]}" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+
+    _git_require_same_context \
+      "$expected_root" "$expected_head" "$expected_fingerprint" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+    _git_require_clear_target "$expected_root" "$expected_head" "$head_oid" \
+      "Checking out PR #$number" "Refusing to check out PR #$number" || {
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    }
+
+    # From here a signal only records its status, so the HEAD check and the
+    # restore below still run when Ctrl-C interrupts the checkout.
+    trap 'operation_rc=130' INT
+    trap 'operation_rc=143' TERM HUP
+    switch_started=1
+    # --no-overwrite-ignore makes Git refuse an ignored file that appeared at
+    # a path of the PR head after the obstacle check.
+    _git_info \
+      "Checking out PR #$number at reviewed head ${head_oid[1,12]}."
+    command git switch --quiet --detach --no-overwrite-ignore \
+      "$head_oid" >&2 || checkout_rc=$?
+    if (( operation_rc == 0 \
+      && ( checkout_rc == 130 || checkout_rc == 143 ) )); then
+      operation_rc=$checkout_rc
+    fi
+    checked_out_oid=$(command git rev-parse --verify HEAD 2>/dev/null) \
+      || checked_out_oid=""
+    checked_out_branch=$(command git symbolic-ref --quiet --short HEAD \
+      2>/dev/null) || checked_out_branch=""
+    if (( operation_rc != 0 || checkout_rc != 0 )) \
+      || [[ "$checked_out_oid" != "$head_oid" \
+        || -n "$checked_out_branch" ]]; then
+      if (( operation_rc == 130 || operation_rc == 143 )); then
+        _git_error \
+          "Checkout of PR #$number was interrupted; restoring the prior state."
+      else
+        _git_error \
+          "Checkout did not reach the exact reviewed OID; restoring the prior state."
+      fi
+      if _git_gh_restore_checkout_state \
+        "$original_branch" "$expected_head" "$expected_root"; then
+        if [[ "$REPLY" == "detached" ]]; then
+          _git_warn \
+            "The original OID was restored, but only in detached mode."
+        else
+          _git_info "The original worktree state was restored."
+        fi
+      else
+        _git_warn \
+          "The original worktree state could not be restored; inspect HEAD."
+      fi
+      (( operation_rc )) || operation_rc=1
+      return $operation_rc
+    fi
+  } always {
+    trap - INT TERM HUP
+    if (( ! switch_started && ( operation_rc == 130 || operation_rc == 143 ) )); then
+      _git_error \
+        "Fetching PR #$number was interrupted; nothing was checked out."
+    fi
+    if [[ -n "$temp_prefix" ]]; then
+      if _git_sync_temp_snapshot "$temp_prefix"; then
+        _git_sync_cleanup_temp_refs "$temp_prefix" "${reply[@]}" || {
+          _git_warn "Remove the temporary refs below '$temp_prefix'."
+          cleanup_failed=1
+        }
+      else
+        _git_warn "Unable to inventory the temporary refs; inspect '$temp_prefix'."
+        cleanup_failed=1
+      fi
+    fi
+  }
+  (( operation_rc == 0 )) || return $operation_rc
+  if (( cleanup_failed )); then
+    _git_error \
+      "Checked out pull request #$number at ${head_oid[1,12]}, but its temporary refs could not be removed."
     return 1
   fi
 

@@ -513,9 +513,33 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   SSH program and agent options.
 - `git-switch` creates a branch only as the local branch that tracks a chosen
   remote-tracking ref, at the reviewed object ID, and refuses a local branch
-  of that name that differs instead of moving it. It refuses untracked or
-  ignored files that checkout would overwrite, since Git silently replaces
-  ignored files. Uncommitted changes need a reviewed plan and an explicit carry
+  of that name that differs instead of moving it. Git silently replaces
+  ignored files, so `git-switch`, `git-stash branch`, `git-pull`, and
+  `git-pr-checkout` refuse, and list, the untracked or ignored paths that the
+  target tree would overwrite or remove, while planning and after
+  confirmation. A rebase also checks the paths that its replayed commits
+  write, read with plumbing (`git rev-list`, `git diff-tree`) that
+  `log.showSignature` cannot change, and both merges and rebases check the
+  paths of the result that `git merge-tree` computes with the merge's own
+  labels, so rename and directory-rename detection and a file/directory side
+  file such as `p~HEAD` cannot write an unchecked path; a Git without that
+  support runs the merge or rebase with `merge.directoryRenames=false`. A
+  rebase pull is refused when `rebase.rebaseMerges` is enabled or the
+  effective `pull.rebase` or `branch.<name>.rebase` is `merges`, because
+  recreated merges can reset to older trees that the check does not cover.
+  `git switch`, fast-forward merges, and the PR checkout and its restore pass
+  `--no-overwrite-ignore`; a restore that would replace such a file is refused
+  and leaves HEAD at the PR head; and `git-switch` refuses a change made while
+  its picker was open. `git-pr-checkout` no longer runs `gh pr checkout`: it
+  fetches `refs/pull/<N>/head` into an invocation-owned temporary ref from the
+  first remote whose first URL, the one `git fetch` uses, names the reviewed
+  repository, checks out only the reviewed head OID, detached, removes the
+  temporary ref on every exit, and returns non-zero when it cannot; an
+  interrupt keeps its status. Residual risk: an ignored file created between
+  the final check and a rebase, a true merge, or `git stash branch` is still
+  replaced, and a rebase's file/directory side file (`p~<abbrev> (<subject>)`)
+  is not checked, nor a merge's on Git before 2.38. Uncommitted changes need a
+  reviewed plan and an explicit carry
   or stash choice, and HEAD, the index and working tree, the stash list, and
   the target ref are compared again after authorization. `git-recover` only
   adds a branch through `git update-ref --no-deref` with an empty old value.

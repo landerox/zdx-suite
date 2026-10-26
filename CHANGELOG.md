@@ -72,6 +72,12 @@ verification, and remaining limitations.
   the failure as an empty success, the capture returned 0 with an empty
   selection. A result whose size changes after the post-picker check is
   refused too.
+- Git: `git-pull`, `git-stash branch`, and `git-pr-checkout` no longer
+  overwrite untracked or ignored local files that the target tree tracks: they
+  refuse and list them before any change. `git-pr-checkout` fetches the
+  reviewed pull-request head itself from a configured remote and checks out
+  only that commit, instead of running `gh pr checkout`, and a rebase pull is
+  refused when the configuration asks it to recreate merges.
 
 ## [0.1.0] — 2026-10-22
 

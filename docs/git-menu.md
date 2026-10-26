@@ -162,7 +162,7 @@ most dangerous selectable action, not its most common action.
 | `git-tag-verify` | `git/git-tags.zsh` | read-only | repository |
 | `git-tag-push` | `git/git-tags.zsh` | mutating | repository and remote |
 | `git-pr-create` | `git/git-pr.zsh` | mutating | repository and authenticated `gh` |
-| `git-pr-checkout` | `git/git-pr.zsh` | mutating | repository and authenticated `gh` |
+| `git-pr-checkout` | `git/git-pr.zsh` | mutating | repository, authenticated `gh`, and a remote for the repository |
 | `git-identity-check` | `git/git-identity.zsh` | read-only | repository |
 | `git-identity-switcher` | `git/git-identity.zsh` | mutating | Git configuration; repository only for local scope |
 | `git-discard` | `git/git-changes.zsh` | destructive | repository |
@@ -383,7 +383,10 @@ target fails closed.
 Every stash plan names the exact paths and stash identity. Apply, pop, and
 branch refuse untracked or ignored paths that collide with the stash content,
 and branch refuses a name that a branch or a symbolic ref holds, even a
-dangling one.
+dangling one. Because `git stash branch` first checks out the stash base, and
+Git silently replaces ignored files there, branch also refuses and lists the
+untracked or ignored paths that the base would overwrite or remove, both while
+planning and after confirmation.
 The working tree, index, and stash list are fingerprinted at review and again
 after confirmation, and any change refuses the action. Stashes are bound to
 their object IDs, so drop and pop resolve the current selector of the reviewed
@@ -467,7 +470,10 @@ Without BRANCH, a picker lists local branches first (the current branch is
 left out) and then branches that exist only on a remote, each newest first
 with its last-commit date and its upstream with the ahead and behind counts
 that `git for-each-ref` computes from local refs. Its preview is a constant
-`git log` of the row's hexadecimal object ID.
+`git log` of the row's hexadecimal object ID. The header counts the
+uncommitted changes from a snapshot of HEAD, the index, the working tree, and
+the stash list taken with that inventory, and a change made while the picker
+is open refuses the switch; run `git-switch` again to review the new state.
 
 A merge, rebase, cherry-pick, revert, or bisect in progress, conflicted
 paths, and a target branch checked out in another worktree (named by its path)
@@ -475,6 +481,10 @@ refuse the switch. Untracked or ignored paths that the target would overwrite
 or remove are refused too, because Git silently replaces ignored files on
 checkout; with `core.ignorecase` they are compared without letter case. An
 untracked directory may receive new target files that do not exist yet.
+`git switch` also runs with `--no-overwrite-ignore`, so an ignored file that
+appears at a target path after that check stops the switch instead of being
+replaced. The changed-file table names repository-wide paths, like the counts,
+even from a subdirectory with `diff.relative` set.
 
 A switch with no uncommitted tracked changes is reversible: it shows the
 target and runs at once, without a question, after checking that the target
@@ -593,7 +603,9 @@ Dependencies are enforced at the narrowest useful boundary:
 - `fzf` is required only by an interactive adapter. Help and a complete
   non-interactive command do not require it.
 - Authenticated `gh` is required only by `git-pr-create` and
-  `git-pr-checkout`.
+  `git-pr-checkout`. `git-pr-checkout` fetches the pull request itself, so it
+  also needs a configured remote whose URL names the repository and that
+  remote's Git credentials; the credential helper of `gh` is not used.
 - `jq` is required only by the `--json` modes.
 - Git transport credentials and a configured remote are checked only by the
   remote action that needs them.
@@ -691,8 +703,9 @@ Unicode normalization differences (`core.precomposeUnicode`) are not compared.
   `core.sshCommand` at the Linux `ssh`. A local profile without a key keeps an
   inherited command that selects no key and overrides one that selects
   another profile's key with the same command without it.
-- `git-pr-create` resolves an SSH host alias such as `github-work` with the SSH
-  program Git uses for the push: `GIT_SSH_COMMAND`, then `core.sshCommand`
+- `git-pr-create` and `git-pr-checkout` resolve an SSH host alias such as
+  `github-work` with the SSH program Git uses for the push or fetch:
+  `GIT_SSH_COMMAND`, then `core.sshCommand`
   (run through `/bin/sh`, as Git does), then `GIT_SSH`, then `ssh`, always as
   `-G -- HOST` with stdin closed. `ssh.exe` therefore reads the Windows SSH
   configuration, and its CRLF output is accepted. PuTTY variants have no `-G`
@@ -1011,7 +1024,41 @@ temporary namespace with implicit ref mappings, tags, pruning, submodules,
 `FETCH_HEAD`, commit-graph writes, and maintenance disabled. Fetched OIDs must
 match the frozen remote snapshot before canonical tracking refs are promoted
 with compare-and-swap updates. Temporary refs are removed with exact OID
-leases.
+leases, and the exact fetch of `git-pull` removes its temporary ref on every
+exit, an interruption included, which keeps its status (`130` or `143`).
+Before a merge, rebase, or fast-forward changes any ref or file, `git-pull`
+refuses and lists the untracked or ignored paths that the fetched commit
+would overwrite or remove; a rebase also checks the paths that its replayed
+local commits write, which can add and then delete a path that neither HEAD
+nor the fetched commit tracks. Those paths come from plumbing
+(`git rev-list` and `git diff-tree`), which porcelain settings such as
+`log.showSignature` cannot change. Rename and directory-rename detection can
+write a path that none of these name, such as a file added in a directory
+that the other side renamed, so the check also covers the computed result:
+for a merge, the tree that `git merge-tree --write-tree` (Git 2.38 or later)
+computes with the same configuration and the same labels as `git merge`
+(`HEAD` and the fetched object ID), so it also names the side file of a
+file/directory conflict, such as `p~HEAD`; and for a rebase, every step of
+a replay of the local commits with `git merge-tree --merge-base` on trees,
+which also lists a path that a later commit deletes again. On a Git that
+cannot compute that result (the minimum is 2.31), the merge or rebase runs
+with `merge.directoryRenames=false`, so files stay at the paths that the
+commits name. Two cases are still not checked, and a later change tracks
+them: the side file of a file/directory conflict in a rebase, which Git
+names after the replayed commit (`p~<abbreviated ID> (<subject>)`) where the
+replay can only use object IDs, and the side files of a merge's
+file/directory conflicts on a Git without `git merge-tree --write-tree`. An
+untracked or ignored file with exactly such a name is still replaced. Git
+silently replaces ignored files,
+`git rebase` has no `--no-overwrite-ignore`, and a true merge does not honor
+it. The suite still passes `--no-overwrite-ignore` to `git merge`, where it
+stops a fast-forward over an ignored file that appears after the check. A
+rebase pull is refused, while planning and again after confirmation, when
+`rebase.rebaseMerges` is enabled, because recreated merges can reset to
+older trees that the check does not cover, and when `pull.rebase` or
+`branch.<name>.rebase` is `merges`, because this rebase would drop those
+merges; the message names the setting and suggests running the rebase
+manually or pulling with `--merge`.
 
 Fetch and pull do not require a single push URL: their reviewed fetch source
 is independent of publication configuration.
@@ -1026,6 +1073,29 @@ GitHub writes re-fetch the repository, pull request, or branch state after
 confirmation. Multi-target writes run sequentially unless concurrency is
 proven safe, retain the association between each identifier and result, and
 return non-zero when any required operation fails.
+
+`git-pr-checkout` never runs `gh pr checkout`. It fetches
+`refs/pull/<N>/head` into a temporary ref that the invocation owns, from the
+first remote, in configuration order, whose fetch URL names the reviewed
+GitHub repository. `git fetch` uses only the first URL of a remote, so only
+that URL counts, as configured or as its `insteadOf` expansion, with the host
+as written or as its SSH `HostName`. A remote whose URL list ends with an
+empty value, which leaves Git no URL to fetch from, or whose URL
+`git remote get-url` cannot report, is skipped; an interrupted URL read or
+`HostName` query stops the command with its status before anything is
+fetched. Because nothing is checked out unless that ref holds the reviewed
+head OID, the choice of remote cannot change what is checked out. The
+command then refuses and lists the untracked or ignored paths that the PR
+head would overwrite or remove, and runs one
+`git switch --detach --no-overwrite-ignore` of that OID, so no other head,
+tree, or hook reaches the worktree. The temporary ref is removed on success,
+on failure, and on interruption, which keeps its status (`130` or `143`); a
+temporary ref that cannot be removed makes the command return non-zero, also
+after a completed checkout. A failed or interrupted checkout restores the
+prior branch or OID with the same obstacle check and
+`--no-overwrite-ignore`, so the restore refuses an untracked or ignored file
+that a hook or a build wrote meanwhile, lists it, and leaves HEAD at the PR
+head for inspection.
 
 No Git path uses `eval`, computed shell text, or `sh -c` with selected data.
 
@@ -1060,14 +1130,14 @@ regressing.
 | --- | --- |
 | `test/fixtures/git-public-commands.tsv` | Required frozen 21-command inventory, module ownership, risk, and capability metadata |
 | `test/git_contract.bats` | Exact fixture, module, menu, help, dispatcher, nested-completion, and direct-completion parity, including a `git-push` grammar without a tag mode, the stash action grammars, `git-discard --include-untracked` only after `--all`, the amend and unstage flags, the exclusive `git-switch` change modes, and `--json` only on read-only commands |
-| `test/git_branches.bats` | Clean, previous, and remote-tracking switches with exact tracking-branch creation; refusals for unknown, ambiguous, invalid, differing, and case-colliding names, names that a symbolic ref holds, operations in progress, other worktrees, and untracked or ignored obstacles; dirty-tree plans, the carry and stash choices and dialog, dry runs, declined and non-terminal confirmations, and revalidation after confirmation; the branch and commit pickers with constant previews; and recovery that only creates a new branch, refuses taken and conflicting names and names that a symbolic ref holds, never writes through an alias, revalidates after confirmation, and adds dropped but never live stashes with `--deep` |
+| `test/git_branches.bats` | Clean, previous, and remote-tracking switches with exact tracking-branch creation; refusals for unknown, ambiguous, invalid, differing, and case-colliding names, names that a symbolic ref holds, operations in progress, other worktrees, and untracked or ignored obstacles; dirty-tree plans, the carry and stash choices and dialog, dry runs, declined and non-terminal confirmations, and revalidation after confirmation, refusal of a switch whose state changes while the picker is open, an ignored file that appears after review and stops the switch or the tracking-branch creation, and repository-wide plan tables from a subdirectory with `diff.relative`; the branch and commit pickers with constant previews; and recovery that only creates a new branch, refuses taken and conflicting names and names that a symbolic ref holds, never writes through an alias, revalidates after confirmation, and adds dropped but never live stashes with `--deep` |
 | `test/git_identity_check.bats` | Matching and mismatching profiles without key material or configuration changes, keyless profiles, `IdentityFile` and `ssh.exe` key selection, not-applicable repositories, grammar errors, and the identity guard: off by default and outside interactive shells, one warning per repository, silent outside the layout and in subshells, and lazy loading |
 | `test/git_json.bats` | Exact `zdx.git-status.v1` and `zdx.git-identity-check.v1` documents validated with `jq -e`, null and boolean typing, single-document stdout through the nested route, and missing-`jq`, invalid-argument, and no-repository failures with empty stdout |
 | `test/git_interface.bats` | Exact routing and timing, all direct help streams, outside-repository annotations, standalone and double sourcing, exact-root loader failure and retry, `NO_COLOR`, row validation, fzf behavior, the Local Changes and Branches sections and help groups, the pull-mode dialog, and rejection of a `git-push --tags` mode |
-| `test/git_safety.bats` | Credential redaction, non-TTY refusal on the local-change and shared confirmation paths, literal pathspec isolation, identity-data non-execution, exact PR OID comparison, SSH host-alias PR remotes, detached checkout of the reviewed PR head, subdirectory path selections for discard, unstage, and stash, nested-repository stashes with stdout diffs, staged-rename unstaging, untracked discard obstacles, and branch-bound undo plans |
-| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, a stash branch name that a symbolic ref holds, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, refusal of an unstage or amend plan whose state changes while its picker or dialog is open, and refusal after post-confirmation changes |
+| `test/git_safety.bats` | Credential redaction, non-TTY refusal on the local-change and shared confirmation paths, literal pathspec isolation, identity-data non-execution, exact PR OID comparison, SSH host-alias PR remotes, detached checkout of the reviewed PR head through the suite's own fetch of `refs/pull/<N>/head`, refusal of a moved PR head and of ignored-file obstacles, removal of the temporary ref on success, failure, and interruption, interruptions after the PR fetch and during the checkout that keep their status and restore the branch, a restore that refuses an ignored file written during the checkout, a temporary ref that cannot be removed, remote selection in a fork layout and by the first URL of a remote, with an SSH `HostName` override, skipping a remote without a usable fetch URL, an interrupted URL read, `HostName` query, or SSH configuration read that stops the selection, a missing remote, a failed fetch, a late ignored file that the checkout refuses, subdirectory path selections for discard, unstage, and stash, nested-repository stashes with stdout diffs, staged-rename unstaging, untracked discard obstacles, and branch-bound undo plans |
+| `test/git_local_changes.bats` | Discard of every change with and without untracked files, kept ignored files and nested repositories, unstage batches and staged versions missing from the working tree, subject-only and editor amends with kept trailers, published-commit disclosure, stash save, apply, pop, drop, and branch, a stash branch name that a symbolic ref holds, a stash branch whose base would replace an ignored file, also one that appears after confirmation, the stash manager and action dialog, constant read-only previews, dry runs, declined and unavailable confirmations, refusal of an unstage or amend plan whose state changes while its picker or dialog is open, and refusal after post-confirmation changes |
 | `test/git_github_safety.bats` | Push-remote precedence, local PR head naming, exact single push-URL enforcement, deny-by-default GitHub write calls, and PR publishing that refuses a symbolic remote-tracking ref, including one that a custom fetch refspec maps the head to |
-| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, full-ref upstreams, symbolic branch and tracking aliases that cleanup never plans, and branch deletions and `git-pull` ref transactions that never follow a symbolic ref, symbolic remote branches and tags that cleanup and tag deletion never delete through, and remote-tracking refs that turn symbolic before a push, `git-push` refusing a symbolic remote-tracking ref, remote alias checks right before each cleanup push, a tracking ref that cannot be inspected, remote deletions refused when the remote does not answer with protocol v2 at planning or for a later target, an interrupted alias query that stops the whole run, and symbolic refs that a custom fetch refspec maps a pushed or deleted ref to, which `git-push` (also with a negative refspec), `git-tag-push`, `git-tag-create --push`, `clean-remote-merged`, and `git-tag-delete` refuse, fetch refspecs that map a deleted branch or tag outside `refs/remotes/`, which cleanup and tag deletion refuse, a tag refspec mapped to itself that tag publication accepts and tag deletion refuses, and pushes and remote deletions that stop at an interrupted local probe |
+| `test/git_remote.bats` | Disposable local-remote verification for exact pushes, isolated fetch and pull, tag publication and deletion, leased branch cleanup with tracking-ref and branch-configuration removal, `push.followTags` isolation, clean multi-ref stdout, ls-remote tail-match filtering, full-ref upstreams, symbolic branch and tracking aliases that cleanup never plans, and branch deletions and `git-pull` ref transactions that never follow a symbolic ref, symbolic remote branches and tags that cleanup and tag deletion never delete through, and remote-tracking refs that turn symbolic before a push, `git-push` refusing a symbolic remote-tracking ref, remote alias checks right before each cleanup push, a tracking ref that cannot be inspected, remote deletions refused when the remote does not answer with protocol v2 at planning or for a later target, an interrupted alias query that stops the whole run, symbolic refs that a custom fetch refspec maps a pushed or deleted ref to, which `git-push` (also with a negative refspec), `git-tag-push`, `git-tag-create --push`, `clean-remote-merged`, and `git-tag-delete` refuse, fetch refspecs that map a deleted branch or tag outside `refs/remotes/`, which cleanup and tag deletion refuse, a tag refspec mapped to itself that tag publication accepts and tag deletion refuses, pushes and remote deletions that stop at an interrupted local probe, and merge, rebase, and fast-forward pulls that refuse an ignored file the fetched commit tracks or that replayed local commits write, signed ones under `log.showSignature` included, rebase pulls refused under `rebase.rebaseMerges`, `pull.rebase=merges`, or `branch.<name>.rebase=merges`, merges and rebases that refuse an ignored file at a path that directory-rename detection writes, on both the computed and the `merge.directoryRenames=false` path, a merge that refuses an ignored `p~HEAD` side file of a file/directory conflict, an interrupt while the replay is computed, late ignored files that `--no-overwrite-ignore` stops, and interrupted pulls that leave no temporary ref |
 | `test/git_sync_recovery.bats`, `test/git_tag_recovery.bats` | Independent fetch configuration, exact publication destinations, absence leases, moved local tags, rejection of multiple push URLs before and after review, symbolic tags that tag deletion never plans or follows, one refusal for a named symbolic tag in every tag command, and tag names held by a symbolic ref that `git-tag-create` refuses before and after confirmation |
 | `test/git_local_recovery.bats` | Interruption versus ordinary failure in local discard batches, all-changes discard of tracked and untracked files, and stash drops |
 | `test/git_identity.bats` | Identity status, local/global profile behavior, local overrides of inherited signing and SSH key selection, inherited `ssh.exe` and `IdentityAgent` commands kept with or without a profile key, Windows key paths for `ssh.exe` through `wslpath`, and refusal when that conversion fails |

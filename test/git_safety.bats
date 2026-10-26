@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016
 
 setup() {
   load test_helper
@@ -6,6 +7,12 @@ setup() {
 
 teardown() {
   cleanup_sandbox
+}
+
+# Exports REAL_GIT, the git executable that a test wrapper delegates to.
+export_real_git() {
+  export REAL_GIT
+  REAL_GIT=$(command -v git)
 }
 
 @test "git safety: remote display removes credentials and URL secrets" {
@@ -413,41 +420,701 @@ MOCK
   ! grep -Fq "targets github-personal" "$HOME/pr.stderr" || false
 }
 
-@test "git safety: git-pr-checkout fixes repository and PR head identity" {
+# Creates PR_REPO on main (BASE_OID) whose origin names github.com/user/repo,
+# while url.<base>.insteadOf makes Git fetch it from the local bare repository
+# PR_REMOTE. That remote's refs/pull/123/head is PR_HEAD, one commit on top of
+# main that adds FILE (default pr.txt) with CONTENT.
+# Usage: pr_checkout_fixture [FILE CONTENT]
+pr_checkout_fixture() {
+  export PR_REPO="$HOME/pr-repository" PR_REMOTE="$HOME/pr-remote.git"
+  export PR_HEAD BASE_OID
+  git init -q -b main "$PR_REPO"
+  git -C "$PR_REPO" config user.name "PR Test"
+  git -C "$PR_REPO" config user.email "pr@example.invalid"
+  git -C "$PR_REPO" config core.hooksPath /dev/null
+  git -C "$PR_REPO" config commit.gpgSign false
+  printf '%s\n' "base" > "$PR_REPO/base.txt"
+  git -C "$PR_REPO" add base.txt
+  git -C "$PR_REPO" commit -q -m "base"
+  BASE_OID=$(git -C "$PR_REPO" rev-parse HEAD)
+  git init -q --bare "$PR_REMOTE"
+  git -C "$PR_REPO" remote add origin git@github.com:user/repo.git
+  git -C "$PR_REPO" config "url.$PR_REMOTE.insteadOf" \
+    git@github.com:user/repo.git
+  git -C "$PR_REPO" switch -q -c pr-branch
+  printf '%s\n' "${2:-pr change}" > "$PR_REPO/${1:-pr.txt}"
+  git -C "$PR_REPO" add -- "${1:-pr.txt}"
+  git -C "$PR_REPO" commit -q -m "pr head"
+  PR_HEAD=$(git -C "$PR_REPO" rev-parse HEAD)
+  git -C "$PR_REPO" switch -q main
+  git -C "$PR_REPO" push -q origin "$PR_HEAD:refs/pull/123/head"
+  git -C "$PR_REPO" branch -q -D pr-branch
+}
+
+# A deny-by-default gh that resolves github.com/user/repo and reports PR 123
+# open at PR_HEAD. `pr checkout` does what gh pr checkout --detach does, so a
+# test can show that git-pr-checkout no longer delegates to it. Every call is
+# recorded in $HOME/gh.calls.
+install_pr_gh_mock() {
   cat > "$TEST_MOCK_BIN/gh" <<'MOCKGH'
 #!/usr/bin/env bash
-if [[ "$*" == *"repo view"* && "$*" == *"id,nameWithOwner,url"* ]]; then
+printf '%s\n' "$*" >> "$HOME/gh.calls"
+if [[ "${1:-} ${2:-}" == "auth status" ]]; then
+  exit 0
+elif [[ "${1:-} ${2:-}" == "repo view" && "$*" == *"id,nameWithOwner,url"* ]]; then
   printf 'R_repo_id\tuser/repo\thttps://github.com/user/repo\n'
   exit 0
-elif [[ "$*" == *"repo view"* && "$*" == *"--json id"* ]]; then
+elif [[ "${1:-} ${2:-}" == "repo view" && "$*" == *"--json id"* ]]; then
   printf 'R_repo_id\n'
   exit 0
-elif [[ "$*" == *"pr view 123"* ]]; then
+elif [[ "${1:-} ${2:-} ${3:-}" == "pr view 123" ]]; then
   printf 'PR_node_id\tOPEN\t%s\n' "$PR_HEAD"
   exit 0
-elif [[ "$*" == *"pr checkout"* ]]; then
-  printf 'checked out exact PR head\n'
-  exit 0
+elif [[ "${1:-} ${2:-} ${3:-}" == "pr checkout 123" ]]; then
+  git fetch -q origin refs/pull/123/head && git checkout -q --detach FETCH_HEAD
+  exit $?
 fi
-exit 0
+printf 'mock gh denied: %s\n' "$*" >&2
+exit 97
 MOCKGH
   chmod +x "$TEST_MOCK_BIN/gh"
+}
+
+@test "git safety: git-pr-checkout fixes repository and PR head identity" {
+  pr_checkout_fixture
+  install_pr_gh_mock
 
   run run_zsh '
-    local repo_dir="$HOME/pr-repository"
-    command git init -q "$repo_dir" || return 1
-    cd "$repo_dir" || return 1
-    command git config user.name "Test User"
-    command git config user.email "test@example.com"
-    : > tracked.txt
-    command git add tracked.txt
-    command git commit -qm "test head"
-    command git remote add origin git@github.com:user/repo.git
-    export PR_HEAD=$(command git rev-parse HEAD)
-
-    git-pr-checkout 123
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr" \
+      || return 10
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 11
+    command git symbolic-ref -q HEAD >/dev/null && return 12
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 13
+    return 0
   '
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"checked out exact PR head"* ]]
-  [[ "$output" == *"detached mode"* ]]
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ ! -s "$HOME/checkout.stdout" ]
+  grep -Fq "detached mode" "$HOME/checkout.stderr"
+  # gh only reads the repository and the PR; the suite fetches and checks out.
+  run grep -F "pr checkout" "$HOME/gh.calls"
+  [ "$status" -eq 1 ]
+}
+
+@test "git safety: git-pr-checkout refuses an ignored file that the PR head tracks" {
+  pr_checkout_fixture local.env "from-pr"
+  install_pr_gh_mock
+  printf '%s\n' "local.env" >> "$PR_REPO/.git/info/exclude"
+  printf '%s\n' "local secret" > "$PR_REPO/local.env"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 11
+    [[ "$(command git rev-parse HEAD)" == "$BASE_OID" ]] || return 12
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 13
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/checkout.stdout" ]
+  grep -Fq "local.env" "$HOME/checkout.stderr"
+  grep -Fq "Refusing to check out PR #123; move or remove these paths first." \
+    "$HOME/checkout.stderr"
+}
+
+@test "git safety: git-pr-checkout refuses a PR head that moved after review" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  # gh reported PR_HEAD; the PR ref then moved to another commit.
+  git -C "$PR_REPO" switch -q --detach "$PR_HEAD"
+  printf '%s\n' "force-pushed" > "$PR_REPO/moved.txt"
+  git -C "$PR_REPO" add moved.txt
+  git -C "$PR_REPO" commit -q -m "moved head"
+  export MOVED_OID
+  MOVED_OID=$(git -C "$PR_REPO" rev-parse HEAD)
+  git -C "$PR_REPO" switch -q main
+  git -C "$PR_REPO" push -q -f origin "$MOVED_OID:refs/pull/123/head"
+  # A post-checkout hook records every commit the worktree is checked out at.
+  mkdir -p "$HOME/hooks"
+  printf '%s\n' '#!/bin/sh' 'git rev-parse HEAD >> "$HOME/checkouts.log"' \
+    > "$HOME/hooks/post-checkout"
+  chmod +x "$HOME/hooks/post-checkout"
+  git -C "$PR_REPO" config core.hooksPath "$HOME/hooks"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" "$HOME/checkouts.log" >&2 2>/dev/null
+    false
+  }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/checkout.stdout" ]
+  grep -Fq "moved after review" "$HOME/checkout.stderr"
+  # Nothing was checked out, so no hook ran for the moved head.
+  [ ! -s "$HOME/checkouts.log" ]
+}
+
+@test "git safety: an interrupted git-pr-checkout fetch leaves no temporary ref" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  export_real_git
+  # Ctrl-C reaches the fetch and the shell that waits for it, after the fetch
+  # wrote its temporary ref.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == fetch && " $* " == *" refs/pull/123/head:"* ]]; then
+  "$REAL_GIT" "$@" || exit
+  "$REAL_GIT" for-each-ref --format='%(refname)' refs/zdx-suite \
+    > "$HOME/temp-refs-during-fetch"
+  kill -INT "$PPID"
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ "$output" = "130" ]
+  # The fetch had written its temporary ref before the interruption.
+  [ -s "$HOME/temp-refs-during-fetch" ]
+  grep -Fq "interrupted" "$HOME/checkout.stderr"
+}
+
+@test "git safety: an interrupt after the PR fetch keeps its status and leaves no temporary ref" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  export_real_git
+  # Ctrl-C reaches the shell while it reads the fetched temporary ref; the
+  # read runs in a command substitution, so the wrapper signals the shell.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == for-each-ref && " $* " == *" refs/zdx-suite/fetch/"* \
+  && " $* " != *" --count=1 "* && ! -e "$HOME/.read-interrupted" ]]; then
+  : > "$HOME/.read-interrupted"
+  kill -INT "$ZDX_TEST_SHELL_PID"
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    export ZDX_TEST_SHELL_PID=$$
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ -e "$HOME/.read-interrupted" ]
+  [ "$output" = "130" ]
+  [ -z "$("$REAL_GIT" -C "$PR_REPO" for-each-ref --format='%(refname)' \
+    refs/zdx-suite)" ]
+}
+
+@test "git safety: an interrupted PR checkout switch keeps its status and restores the branch" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  export_real_git
+  # Ctrl-C arrives while git switch runs, after it moved HEAD.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == switch && " $* " == *" --detach "* \
+  && ! -e "$HOME/.switch-interrupted" ]]; then
+  : > "$HOME/.switch-interrupted"
+  "$REAL_GIT" "$@"
+  kill -INT "$PPID"
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    # The harness wraps the command builtin in a function, which would absorb
+    # a return from the INT trap; an interactive shell runs the builtin.
+    unfunction command 2>/dev/null
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    [[ "$(command git rev-parse HEAD)" == "$BASE_OID" ]] || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ -e "$HOME/.switch-interrupted" ]
+  [ "$output" = "130" ]
+  grep -Fq "The original worktree state was restored." "$HOME/checkout.stderr"
+  [ -z "$("$REAL_GIT" -C "$PR_REPO" for-each-ref --format='%(refname)' \
+    refs/zdx-suite)" ]
+}
+
+@test "git safety: a PR checkout restore never overwrites an ignored file that appeared meanwhile" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  export_real_git
+  # main tracks build.cfg, which the PR head lacks, and ignores it otherwise.
+  printf '%s\n' "tracked config" > "$PR_REPO/build.cfg"
+  git -C "$PR_REPO" add -- build.cfg
+  git -C "$PR_REPO" commit -q -m "add build.cfg"
+  printf '%s\n' "build.cfg" >> "$PR_REPO/.git/info/exclude"
+  # The switch reaches the PR head, a hook writes an ignored build.cfg, and
+  # Ctrl-C arrives, so the command restores main over that file.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == switch && " $* " == *" --detach "* \
+  && ! -e "$HOME/.switch-interrupted" ]]; then
+  : > "$HOME/.switch-interrupted"
+  "$REAL_GIT" "$@"
+  printf '%s\n' "generated by a hook" > "$PWD/build.cfg"
+  kill -INT "$PPID"
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    unfunction command 2>/dev/null
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(<build.cfg)" == "generated by a hook" ]] || return 10
+    # The restore was refused, so HEAD stays at the PR head for inspection.
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 11
+    command git symbolic-ref --quiet HEAD >/dev/null && return 12
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 13
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ -e "$HOME/.switch-interrupted" ]
+  [ "$output" = "130" ]
+  grep -Fxq "  build.cfg" "$HOME/checkout.stderr"
+  grep -Fq "Refusing to restore the prior state; move or remove these paths first." \
+    "$HOME/checkout.stderr"
+  grep -Fq "The original worktree state could not be restored; inspect HEAD." \
+    "$HOME/checkout.stderr"
+}
+
+@test "git safety: git-pr-checkout fails when its temporary ref cannot be removed" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  export_real_git
+  # The cleanup transaction of the temporary ref fails.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == update-ref && " $* " == *" --stdin "* \
+  && "$*" == *"temporary fetch cleanup"* ]]; then
+  cat >/dev/null
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 10
+    [[ -n "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ "$output" = "1" ]
+  grep -Fq "Remove the temporary refs below 'refs/zdx-suite/" \
+    "$HOME/checkout.stderr"
+  grep -Fq "Checked out pull request #123 at ${PR_HEAD:0:12}, but its temporary refs could not be removed." \
+    "$HOME/checkout.stderr"
+  run grep -Fq "Checked out pull request #123 in detached mode" \
+    "$HOME/checkout.stderr"
+  [ "$status" -eq 1 ]
+}
+
+@test "git safety: git-pr-checkout refuses when no remote names the reviewed repository" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  git -C "$PR_REPO" remote set-url origin git@github.com:someone/elsewhere.git
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$output" = "1" ]
+  grep -Fq "No configured remote URL names github.com/user/repo; add one with 'git remote add <name> <url>', then retry." \
+    "$HOME/checkout.stderr"
+}
+
+@test "git safety: git-pr-checkout fetches from the base remote in a fork layout" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  # origin is the user's fork, which has no pull refs; upstream is the base.
+  git init -q --bare "$HOME/fork.git"
+  git -C "$PR_REPO" remote rename origin upstream
+  git -C "$PR_REPO" remote add origin git@github.com:me/repo.git
+  git -C "$PR_REPO" config "url.$HOME/fork.git.insteadOf" \
+    git@github.com:me/repo.git
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr" \
+      || return 10
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 11
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  grep -Fq "from 'upstream'" "$HOME/checkout.stderr"
+}
+
+@test "git safety: git-pr-checkout selects a remote by the first URL, which git fetch uses" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  # origin fetches from its first URL, an empty mirror; only its second URL
+  # names the repository. upstream's first URL names it.
+  git init -q --bare "$HOME/mirror.git"
+  git -C "$PR_REPO" config "url.$HOME/mirror.git.insteadOf" \
+    https://github.com/someone/mirror.git
+  git -C "$PR_REPO" remote set-url origin \
+    https://github.com/someone/mirror.git
+  git -C "$PR_REPO" config --add remote.origin.url \
+    git@github.com:user/repo.git
+  git -C "$PR_REPO" remote add upstream git@github.com:user/repo.git
+  # GitHub's SSH over port 443 maps github.com to HostName ssh.github.com, so
+  # upstream matches by the host as written.
+  cat > "$TEST_MOCK_BIN/ssh" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "-G" ]] || exit 97
+[[ "${2:-}" == "--" ]] && shift
+case "${2:-}" in
+  github.com) printf 'user git\nhostname ssh.github.com\nport 443\n' ;;
+  *) printf 'user git\nhostname %s\nport 22\n' "${2:-}" ;;
+esac
+MOCK
+  chmod +x "$TEST_MOCK_BIN/ssh"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    local -a codes=()
+    git-pr-checkout 123 >"$HOME/upstream.stdout" 2>"$HOME/upstream.stderr"
+    codes+=($?)
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 10
+
+    # Without upstream, no remote fetches from a URL that names it.
+    command git switch -q main || return 11
+    command git remote remove upstream || return 12
+    git-pr-checkout 123 >"$HOME/none.stdout" 2>"$HOME/none.stderr"
+    codes+=($?)
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 13
+    print -r -- "${(j:,:)codes}"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/upstream.stderr" "$HOME/none.stderr" >&2 2>/dev/null
+    false
+  }
+  [ "$output" = "0,1" ]
+  grep -Fq "from 'upstream'" "$HOME/upstream.stderr"
+  grep -Fq "No configured remote URL names github.com/user/repo" \
+    "$HOME/none.stderr"
+  run grep -Fq "Fetching PR #123" "$HOME/none.stderr"
+  [ "$status" -eq 1 ]
+}
+
+@test "git safety: git-pr-checkout skips a remote without a usable fetch URL" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  git -C "$PR_REPO" remote add upstream git@github.com:user/repo.git
+  # A trailing empty value resets origin's URL list, so Git cannot fetch
+  # from origin at all.
+  git -C "$PR_REPO" config --add remote.origin.url ""
+  export_real_git
+  # With $HOME/.get-url-fails, git remote get-url origin fails.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$HOME/.get-url-fails" && "$*" == "remote get-url origin" ]]; then
+  printf '%s\n' "error: unable to read the URL" >&2
+  exit 2
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    local -a codes=()
+    git-pr-checkout 123 >"$HOME/empty.stdout" 2>"$HOME/empty.stderr"
+    codes+=($?)
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 10
+
+    # origin has a URL again, but git remote get-url cannot report it.
+    command git switch -q main || return 11
+    command git config --unset-all remote.origin.url || return 12
+    command git config remote.origin.url git@github.com:user/repo.git \
+      || return 13
+    : >"$HOME/.get-url-fails"
+    git-pr-checkout 123 >"$HOME/geturl.stdout" 2>"$HOME/geturl.stderr"
+    codes+=($?)
+    [[ "$(command git rev-parse HEAD)" == "$PR_HEAD" ]] || return 14
+    print -r -- "${(j:,:)codes}"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/empty.stderr" "$HOME/geturl.stderr" >&2 2>/dev/null
+    false
+  }
+  [ "$output" = "0,0" ]
+  grep -Fq "from 'upstream'" "$HOME/empty.stderr"
+  grep -Fq "from 'upstream'" "$HOME/geturl.stderr"
+}
+
+@test "git safety: an interrupted remote URL read stops git-pr-checkout" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  git -C "$PR_REPO" remote add upstream git@github.com:user/repo.git
+  export_real_git
+  # With $HOME/.interrupt-get-url, Ctrl-C arrives while git remote get-url
+  # reads origin's URL.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$HOME/.interrupt-get-url" && "$*" == "remote get-url origin" ]]; then
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+  # The query for the HostName of the alias gh-alias is interrupted too.
+  cat > "$TEST_MOCK_BIN/ssh" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "-G" ]] || exit 97
+[[ "${2:-}" == "--" ]] && shift
+[[ "${2:-}" == gh-alias ]] && exit 130
+printf 'user git\nhostname %s\nport 22\n' "${2:-}"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/ssh"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    local -a codes=()
+    : >"$HOME/.interrupt-get-url"
+    git-pr-checkout 123 >"$HOME/geturl.stdout" 2>"$HOME/geturl.stderr"
+    codes+=($?)
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+
+    # origin names the repository only through an SSH alias.
+    command rm -f -- "$HOME/.interrupt-get-url"
+    command git remote set-url origin git@gh-alias:user/repo.git || return 11
+    git-pr-checkout 123 >"$HOME/ssh.stdout" 2>"$HOME/ssh.stderr"
+    codes+=($?)
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 13
+    print -r -- "${(j:,:)codes}"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/geturl.stderr" "$HOME/ssh.stderr" >&2 2>/dev/null
+    false
+  }
+  [ "$output" = "130,130" ]
+  grep -Fq "Choosing the remote for PR #123 was interrupted (exit 130); nothing was fetched or checked out." \
+    "$HOME/geturl.stderr"
+  grep -Fq "Choosing the remote for PR #123 was interrupted (exit 130)" \
+    "$HOME/ssh.stderr"
+  run grep -Fq "Fetching PR #123" "$HOME/geturl.stderr" "$HOME/ssh.stderr"
+  [ "$status" -eq 1 ]
+}
+
+@test "git safety: an interrupted SSH configuration read stops git-pr-checkout" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  git -C "$PR_REPO" remote add upstream git@github.com:user/repo.git
+  # origin names the repository only through the SSH alias gh-alias, so
+  # choosing it reads the SSH configuration.
+  git -C "$PR_REPO" remote set-url origin git@gh-alias:user/repo.git
+  export_real_git
+  # Ctrl-C arrives while core.sshCommand, then ssh.variant, is read.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$HOME/.interrupt-ssh-command" \
+  && "$*" == "config --get core.sshCommand" ]]; then
+  exit 130
+fi
+if [[ -e "$HOME/.interrupt-ssh-variant" \
+  && "$*" == "config --get ssh.variant" ]]; then
+  exit 130
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+  cat > "$TEST_MOCK_BIN/ssh" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "-G" ]] || exit 97
+[[ "${2:-}" == "--" ]] && shift
+case "${2:-}" in
+  gh-alias) printf 'user git\nhostname github.com\nport 22\n' ;;
+  *) printf 'user git\nhostname %s\nport 22\n' "${2:-}" ;;
+esac
+MOCK
+  chmod +x "$TEST_MOCK_BIN/ssh"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    local -a codes=()
+    local marker=""
+    for marker in .interrupt-ssh-command .interrupt-ssh-variant; do
+      : >"$HOME/$marker"
+      git-pr-checkout 123 >"$HOME/$marker.stdout" 2>"$HOME/$marker.stderr"
+      codes+=($?)
+      command rm -f -- "$HOME/$marker"
+      [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    done
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "${(j:,:)codes}"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME"/.interrupt-*.stderr >&2 2>/dev/null
+    false
+  }
+  [ "$output" = "130,130" ]
+  grep -Fq "Choosing the remote for PR #123 was interrupted (exit 130)" \
+    "$HOME/.interrupt-ssh-command.stderr"
+  grep -Fq "Choosing the remote for PR #123 was interrupted (exit 130)" \
+    "$HOME/.interrupt-ssh-variant.stderr"
+  run grep -Fq "Fetching PR #123" "$HOME/.interrupt-ssh-command.stderr" \
+    "$HOME/.interrupt-ssh-variant.stderr"
+  [ "$status" -eq 1 ]
+}
+
+@test "git safety: a failed PR fetch checks out nothing and leaves no temporary ref" {
+  pr_checkout_fixture
+  install_pr_gh_mock
+  # The remote no longer has the pull ref.
+  git --git-dir="$PR_REMOTE" update-ref -d refs/pull/123/head
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    [[ -z "$(command git for-each-ref --format="%(refname)" refs/zdx-suite)" ]] \
+      || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$output" = "1" ]
+  grep -Fq "Unable to fetch PR #123 from 'origin'" "$HOME/checkout.stderr"
+}
+
+@test "git safety: git-pr-checkout never overwrites an ignored file that appears after the check" {
+  pr_checkout_fixture local.env "from-pr"
+  install_pr_gh_mock
+  printf '%s\n' "local.env" >> "$PR_REPO/.git/info/exclude"
+  export_real_git
+  # The ignored file appears just before git switch runs, after the obstacle
+  # check; --no-overwrite-ignore makes the switch refuse it.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == switch && " $* " == *" --detach "* \
+  && ! -e "$HOME/.late-ignored" ]]; then
+  : > "$HOME/.late-ignored"
+  printf '%s\n' "local secret" > local.env
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  run run_zsh '
+    cd "$PR_REPO" || return 90
+    git-pr-checkout 123 >"$HOME/checkout.stdout" 2>"$HOME/checkout.stderr"
+    local -i checkout_rc=$?
+    [[ "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 11
+    print -r -- "$checkout_rc"
+  '
+
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output" >&2
+    cat "$HOME/checkout.stderr" >&2
+    false
+  }
+  [ -e "$HOME/.late-ignored" ]
+  [ "$output" = "1" ]
+  grep -Fq "local.env" "$HOME/checkout.stderr"
 }
