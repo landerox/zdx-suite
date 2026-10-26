@@ -269,7 +269,8 @@ existing profile. Fill it in with `vpn-config-edit`.
 
 The source must be a regular, owner-only file owned by you, with a link count of
 one, no symlink indirection, and a maximum size of 1 MiB. It must contain
-`[Interface]` and `[Peer]`. `PreUp`, `PostUp`, `PreDown`, and `PostDown` are
+exactly one `[Interface]` and at least one `[Peer]` section, in any letter
+case. `PreUp`, `PostUp`, `PreDown`, and `PostDown` are
 refused because `wg-quick` would execute imported hook text as root, and so is
 any NUL or control byte other than tab and line breaks. Add a
 reviewed hook later with `vpn-config-edit` if needed.

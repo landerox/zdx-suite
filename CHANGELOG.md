@@ -6,6 +6,13 @@ verification, and remaining limitations.
 
 ## [Unreleased]
 
+### Security
+
+- VPN: profile import refuses `wg-quick` lifecycle hooks in any section and
+  letter case, and a second `[Interface]`, whatever options the calling shell
+  sets. Before, an inherited `PIPE_FAIL` let a padded profile carry a `PreUp`
+  hook that `wg-quick` then ran as root.
+
 ### Fixed
 
 - System: `clean-system` plans and dry runs list every superseded Codex,

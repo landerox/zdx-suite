@@ -1009,13 +1009,25 @@ never elevate downloaded or user-computed shell text.
   failure and changes nothing.
 - Imported profiles cannot introduce commands that `wg-quick` would
   execute as root. Import accepts only a private, singly linked, current-user
-  regular file no larger than 1 MiB, verifies `[Interface]` and `[Peer]`, and
-  refuses every `PreUp`, `PostUp`, `PreDown`, or `PostDown` assignment. NUL and
-  other control bytes are refused first, because wg-quick's bash `read` drops
-  NUL bytes and `Post<NUL>Up` would otherwise evade the text check and still run
-  as root. It fingerprints the source around a private staging copy and
-  atomically installs validated mode-`600` content without replacing an
-  existing profile.
+  regular file no larger than 1 MiB. The validator reads it once and parses it
+  in Zsh the way `wg-quick` does, under `emulate -L zsh` and the C locale, with
+  no pipeline status deciding a rule: it strips `#` comments, takes the key
+  before the first `=`, trims whitespace including carriage returns, and
+  compares keys and section headers without letter case. It requires exactly
+  one `[Interface]` and at least one `[Peer]` section and refuses every
+  `PreUp`, `PostUp`, `PreDown`, or `PostDown` key in any section. The earlier
+  `head | grep -q` check passed a padded profile whose lower-case `[interface]`
+  carried a `PreUp` hook when the caller's shell set `PIPE_FAIL`;
+  `vpn_hardening.bats` now runs the validator under default options,
+  `PIPE_FAIL`, and `emulate sh`, and imports end to end with `PIPE_FAIL` set.
+  NUL and other control bytes are refused first, because wg-quick's bash
+  `read` drops NUL bytes and `Post<NUL>Up` would otherwise evade the text check
+  and still run as root. Import fingerprints the source around a private
+  staging copy, validates the staged copy again, and atomically installs
+  validated mode-`600` content without replacing an existing profile. Residual
+  risk: the macOS `wg-quick` from Homebrew `wireguard-tools` is assumed to
+  parse like the Linux script, and the other VPN entry points still inherit the
+  caller's shell options.
 - The WSL DNS hooks the VPN suite writes are executed by root on every tunnel
   transition, and their resolver address comes from an imported profile's
   `DNS =` line. The value is validated as a strict comma-separated list of at
@@ -2433,4 +2445,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-10-22.
+Last reviewed: 2026-10-26.
