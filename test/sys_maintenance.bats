@@ -400,7 +400,10 @@ run_maintenance_zsh() {
   local os_updates_backend="unavailable"
   [[ "$os_backend" == "darwin" ]] && os_updates_backend="softwareupdate"
 
+  # The program starts in the sandbox root: a cleanup resolves the Git
+  # repository of its working directory, never the checkout under test.
   run_zsh "
+    builtin cd -q -- \"\$TEST_TEMP_DIR\" || return 95
     source \"\$ZSH_CUSTOM/functions/sys-menu.zsh\" || return 98
     _SYS_CAPABILITIES=(
       architecture x86_64
@@ -4383,6 +4386,462 @@ EOF
     "pip3 /|unset|cache purge" \
     "purge PIP_CACHE_DIR=$HOME/.cache/pip"
   assert_no_privilege_network_or_signal
+}
+
+# Writes uv, npm, and go stubs that read project configuration from their
+# working directory, as the real tools do: uv answers `cache dir` from
+# ./uv.toml, npm `config get cache` from ./.npmrc, and go switches to the
+# toolchain that ./go.mod names unless GOTOOLCHAIN=local. The environment
+# wins over the project, as it does for the real tools. Each call appends
+# "<tool>|<cwd>|<environment>|<arguments>" to CACHE_CALL_LOG, and a switch
+# appends "go|toolchain switch|<version>".
+write_project_aware_cache_tools() {
+  unset UV_CACHE_DIR npm_config_cache NPM_CONFIG_CACHE GOMODCACHE GOTOOLCHAIN \
+    GOPATH GOFLAGS
+  export CACHE_CALL_LOG="$TEST_TEMP_DIR/cache-calls.log"
+  : > "$CACHE_CALL_LOG"
+  cat <<'EOF' > "$TEST_MOCK_BIN/uv"
+#!/usr/bin/env bash
+arguments="$*"
+printf 'uv|%s|UV_CACHE_DIR=%s|%s\n' "$(pwd -P)" "${UV_CACHE_DIR-unset}" \
+  "$arguments" >> "$CACHE_CALL_LOG"
+case "$arguments" in
+  "cache dir")
+    cache_home="${XDG_CACHE_HOME:-}"
+    [[ "$cache_home" == /* ]] || cache_home="$HOME/.cache"
+    answer="$cache_home/uv"
+    if [[ -f uv.toml ]]; then
+      while IFS= read -r line; do
+        [[ "$line" == 'cache-dir = "'*'"' ]] || continue
+        answer="${line#cache-dir = \"}"
+        answer="${answer%\"}"
+      done < uv.toml
+    fi
+    printf '%s\n' "${UV_CACHE_DIR:-$answer}"
+    ;;
+  "cache clean") ;;
+  *) exit 97 ;;
+esac
+EOF
+  cat <<'EOF' > "$TEST_MOCK_BIN/npm"
+#!/usr/bin/env bash
+arguments="$*"
+printf 'npm|%s|npm_config_cache=%s|%s\n' "$(pwd -P)" \
+  "${npm_config_cache-unset}" "$arguments" >> "$CACHE_CALL_LOG"
+case "$arguments" in
+  "config get cache")
+    answer="$HOME/.npm"
+    if [[ -f .npmrc ]]; then
+      while IFS= read -r line; do
+        [[ "$line" == cache=* ]] && answer="${line#cache=}"
+      done < .npmrc
+    fi
+    printf '%s\n' "${npm_config_cache:-$answer}"
+    ;;
+  "cache clean --force") ;;
+  *) exit 97 ;;
+esac
+EOF
+  cat <<'EOF' > "$TEST_MOCK_BIN/go"
+#!/usr/bin/env bash
+arguments="$*"
+printf 'go|%s|GOTOOLCHAIN=%s GOMODCACHE=%s|%s\n' "$(pwd -P)" \
+  "${GOTOOLCHAIN-unset}" "${GOMODCACHE-unset}" "$arguments" >> "$CACHE_CALL_LOG"
+if [[ "${GOTOOLCHAIN:-auto}" != local && -f go.mod ]]; then
+  while IFS= read -r line; do
+    [[ "$line" == "toolchain "* ]] || continue
+    printf 'go|toolchain switch|%s\n' "${line#toolchain }" >> "$CACHE_CALL_LOG"
+  done < go.mod
+fi
+case "$arguments" in
+  "env GOMODCACHE") printf '%s\n' "${GOMODCACHE:-$HOME/go/pkg/mod}" ;;
+  "clean -modcache") ;;
+  *) exit 97 ;;
+esac
+EOF
+  chmod +x "$TEST_MOCK_BIN/uv" "$TEST_MOCK_BIN/npm" "$TEST_MOCK_BIN/go"
+}
+
+# Creates <dir> with the CACHEDIR.TAG that uv writes in its cache root: the
+# 43-byte standard signature and no newline (uv-fs cachedir.rs).
+# Usage: write_uv_cache_tag <dir>
+write_uv_cache_tag() {
+  mkdir -p "$1"
+  printf '%s' 'Signature: 8a477f597d28d172789f06886806bc55' > "$1/CACHEDIR.TAG"
+}
+
+# Fails unless CACHE_CALL_LOG records a call and every call ran from /.
+assert_cache_calls_from_root() {
+  local line cwd
+  local -i calls=0
+  while IFS= read -r line; do
+    cwd="${line#*|}"
+    cwd="${cwd%%|*}"
+    [[ "$cwd" == / ]] || return 1
+    (( ++calls ))
+  done < "$CACHE_CALL_LOG"
+  (( calls > 0 ))
+}
+
+@test "sys maintenance: a project's uv and npm configuration never chooses a cleanup target" {
+  write_project_aware_cache_tools
+  export CACHE_PROJECT="$HOME/workspaces/github/attacker/repo"
+  mkdir -p "$CACHE_PROJECT" "$HOME/Documents" "$HOME/.npm"
+  printf '%s\n' 'keep me' > "$HOME/Documents/thesis.txt"
+  write_uv_cache_tag "$HOME/.cache/uv"
+  # Tagged, so only the neutral directory keeps the project's choice out.
+  write_uv_cache_tag "$HOME/Documents"
+  printf 'cache-dir = "%s"\n' "$HOME/Documents" > "$CACHE_PROJECT/uv.toml"
+  printf 'cache=%s\n' "$HOME/Documents" > "$CACHE_PROJECT/.npmrc"
+
+  local mode
+  for mode in --dry-run --yes; do
+    : > "$CACHE_CALL_LOG"
+    export CACHE_MODE="$mode"
+    run run_maintenance_zsh "$(hide_cleanup_tools_except 'uv|npm')"'
+      cd -- "$CACHE_PROJECT" || return 97
+      clean-system --quick "$CACHE_MODE" || return $?
+      [[ "$PWD" == "$CACHE_PROJECT" ]] || return 96
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"npm cache"*"~/.npm"* ]]
+    [[ "$output" == *"uv cache"*"~/.cache/uv"* ]]
+    [[ "$output" != *"~/Documents"* ]]
+    assert_cache_calls_from_root
+  done
+  grep -qxF "npm|/|npm_config_cache=$HOME/.npm|cache clean --force" \
+    "$CACHE_CALL_LOG"
+  grep -qxF "uv|/|UV_CACHE_DIR=$HOME/.cache/uv|cache clean" "$CACHE_CALL_LOG"
+  [ "$(grep -c -F "$HOME/Documents" "$CACHE_CALL_LOG")" -eq 0 ]
+  [ "$(cat "$HOME/Documents/thesis.txt")" = 'keep me' ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a go.mod toolchain line never switches the cleanup's Go toolchain" {
+  write_project_aware_cache_tools
+  export CACHE_PROJECT="$HOME/workspaces/github/attacker/module"
+  mkdir -p "$CACHE_PROJECT" "$HOME/go/pkg/mod/cache/download"
+  printf '%s\n' 'module example.invalid/module' '' 'go 1.22' '' \
+    'toolchain go1.99.0' > "$CACHE_PROJECT/go.mod"
+
+  local mode
+  for mode in --dry-run --yes; do
+    : > "$CACHE_CALL_LOG"
+    export CACHE_MODE="$mode"
+    run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+      cd -- "$CACHE_PROJECT" || return 97
+      clean-system --deep "$CACHE_MODE" || return $?
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Go module cache"*"~/go/pkg/mod"* ]]
+    assert_cache_calls_from_root
+    # Every probe and clean pins the local toolchain; no switch happened.
+    [ "$(grep -c -v -F '|GOTOOLCHAIN=local ' "$CACHE_CALL_LOG")" -eq 0 ]
+  done
+  grep -qxF "go|/|GOTOOLCHAIN=local GOMODCACHE=$HOME/go/pkg/mod|clean -modcache" \
+    "$CACHE_CALL_LOG"
+  assert_no_privilege_network_or_signal
+}
+
+# Runs clean-system --quick --yes with only uv visible, exporting
+# UV_CACHE_DIR and XDG_CACHE_HOME when the given values are not empty.
+# Usage: run_uv_cleanup <uv-cache-dir> <xdg-cache-home>
+run_uv_cleanup() {
+  export CACHE_UV_DIR="${1:-}" CACHE_XDG="${2:-}"
+  : > "$CACHE_CALL_LOG"
+  run run_maintenance_zsh "$(hide_cleanup_tools_except uv)"'
+    [[ -z "$CACHE_UV_DIR" ]] || export UV_CACHE_DIR="$CACHE_UV_DIR"
+    [[ -z "$CACHE_XDG" ]] || export XDG_CACHE_HOME="$CACHE_XDG"
+    clean-system --quick --yes
+  '
+}
+
+@test "sys maintenance: uv and Go caches are planned only with their layout signature" {
+  write_project_aware_cache_tools
+  mkdir -p "$HOME/untagged-uv" "$HOME/mistagged-uv" "$HOME/symlinked-tag-uv" \
+    "$HOME/.cache/uv" "$HOME/xdg-cache/uv" "$HOME/plain-go" \
+    "$HOME/linked-cache-go" "$HOME/linked-download-go/cache" \
+    "$HOME/real-go-cache/download" "$HOME/real-go-download"
+  printf '%s\n' keep > "$HOME/untagged-uv/entry"
+  printf '%s\n' 'Signature: 0123456789abcdef0123456789abcdef' \
+    > "$HOME/mistagged-uv/CACHEDIR.TAG"
+  write_uv_cache_tag "$HOME/tagged-uv"
+  ln -s "$HOME/tagged-uv/CACHEDIR.TAG" "$HOME/symlinked-tag-uv/CACHEDIR.TAG"
+  write_uv_cache_tag "$HOME/oversized-tag-uv"
+  make_sized_file "$HOME/oversized-tag-uv/CACHEDIR.TAG" 4097
+  ln -s "$HOME/real-go-cache" "$HOME/linked-cache-go/cache"
+  ln -s "$HOME/real-go-download" "$HOME/linked-download-go/cache/download"
+
+  # Without uv's tag a custom directory is omitted with one warning. With an
+  # absolute XDG_CACHE_HOME elsewhere, ~/.cache/uv is not uv's default.
+  local name
+  for name in untagged-uv mistagged-uv symlinked-tag-uv oversized-tag-uv \
+    .cache/uv; do
+    run_uv_cleanup "$HOME/$name" "$HOME/xdg-cache"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c -F "Skipping uv cache: ~/$name has no uv CACHEDIR.TAG." \
+      <<< "$output")" -eq 1 ]
+    [ "$(grep -c -F 'cache clean' "$CACHE_CALL_LOG")" -eq 0 ]
+  done
+  [ -f "$HOME/untagged-uv/entry" ]
+
+  # A tagged directory and uv's default location, untagged and also under an
+  # absolute XDG_CACHE_HOME, are planned.
+  local spec uv_dir xdg_home
+  for spec in "$HOME/tagged-uv||tagged-uv" "||.cache/uv" \
+    "|$HOME/xdg-cache|xdg-cache/uv"; do
+    IFS='|' read -r uv_dir xdg_home name <<< "$spec"
+    run_uv_cleanup "$uv_dir" "$xdg_home"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"uv cache"*"~/$name"* ]]
+    grep -qxF "uv|/|UV_CACHE_DIR=$HOME/$name|cache clean" "$CACHE_CALL_LOG"
+  done
+
+  # Execution checks the signature again before uv cache clean runs.
+  rm "$HOME/tagged-uv/CACHEDIR.TAG"
+  : > "$CACHE_CALL_LOG"
+  run run_maintenance_zsh "$(hide_cleanup_tools_except uv)"'
+    export UV_CACHE_DIR="$HOME/tagged-uv"
+    _sys_clean_step_uv_cache "$HOME/tagged-uv"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"The confirmed uv cache directory no longer has its CACHEDIR.TAG."* ]]
+  [ "$(grep -c -F 'cache clean' "$CACHE_CALL_LOG")" -eq 0 ]
+
+  # A Go module cache needs a cache/download directory that no symbolic link
+  # reaches; execution checks it again.
+  for name in plain-go linked-cache-go linked-download-go; do
+    : > "$CACHE_CALL_LOG"
+    export GOMODCACHE="$HOME/$name"
+    run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+      clean-system --deep --yes || return $?
+      _sys_clean_step_go_modcache "$GOMODCACHE" && return 11
+      return 0
+    '
+    [ "$status" -eq 0 ]
+    [ "$(grep -c -F "Skipping Go module cache: ~/$name has no cache/download directory." \
+      <<< "$output")" -eq 1 ]
+    [[ "$output" == *"The confirmed Go module cache no longer has its cache/download directory."* ]]
+    [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+  done
+  unset GOMODCACHE
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a Go module cache at the repository or suite root is refused before go clean" {
+  write_project_aware_cache_tools
+  export CACHE_REPO="$HOME/workspaces/github/me/app"
+  mkdir -p "$CACHE_REPO/sub" "$CACHE_REPO/cache/download" \
+    "$HOME/workspaces/cache/download"
+  git -C "$CACHE_REPO" init --quiet
+  printf '%s\n' work > "$CACHE_REPO/notes.txt"
+  # A Git wrapper counts the repository probes of each run.
+  local real_git
+  real_git=$(command -v git)
+  export CACHE_GIT_LOG="$TEST_TEMP_DIR/git-calls.log"
+  cat <<EOF > "$TEST_MOCK_BIN/git"
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$CACHE_GIT_LOG"
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$TEST_MOCK_BIN/git"
+
+  local target shown
+  for target in "$CACHE_REPO" "$HOME/workspaces"; do
+    : > "$CACHE_CALL_LOG"
+    : > "$CACHE_GIT_LOG"
+    export CACHE_TARGET="$target"
+    shown="~${target#"$HOME"}"
+    run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+      export GOMODCACHE="$CACHE_TARGET"
+      cd -- "$CACHE_REPO/sub" || return 97
+      clean-system --deep --yes
+    '
+    [ "$status" -eq 0 ]
+    # The plan writes one warning that carries the reason.
+    [ "$(grep -c -F "Skipping Go module cache: $shown is or contains the current repository." \
+      <<< "$output")" -eq 1 ]
+    [[ "$output" != *"Cleanup target"* ]]
+    [[ "$output" != *"could not be resolved"* ]]
+    [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+    [ "$(grep -c -F ' rev-parse ' "$CACHE_GIT_LOG")" -eq 1 ]
+  done
+  [ "$(cat "$CACHE_REPO/notes.txt")" = work ]
+
+  # A step that meets a refused directory still fails with the error.
+  : > "$CACHE_CALL_LOG"
+  run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+    export GOMODCACHE="$CACHE_REPO"
+    cd -- "$CACHE_REPO/sub" || return 97
+    _sys_clean_step_go_modcache "$CACHE_REPO"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"✘ Cleanup target ~/workspaces/github/me/app is or contains the current repository."* ]]
+  [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+
+  # An installed suite below HOME protects its root and every ancestor.
+  local suite="$HOME/.oh-my-zsh/custom/plugins/zdx-suite"
+  mkdir -p "$suite/functions" "$HOME/.oh-my-zsh/custom/cache/download"
+  export CACHE_SUITE="$suite"
+  : > "$CACHE_CALL_LOG"
+  run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+    export GOMODCACHE="$HOME/.oh-my-zsh/custom"
+    _ZDX_FUNCTIONS_DIR="$CACHE_SUITE/functions"
+    clean-system --deep --yes
+  '
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -F 'Skipping Go module cache: ~/.oh-my-zsh/custom is or contains the ZDX suite.' \
+    <<< "$output")" -eq 1 ]
+  [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a planted core.worktree leaves the repository directory protected" {
+  write_project_aware_cache_tools
+  export CACHE_REPO="$HOME/workspaces/github/attacker/planted"
+  export CACHE_MARKER="$TEST_TEMP_DIR/fsmonitor.marker"
+  mkdir -p "$CACHE_REPO/sub" "$CACHE_REPO/cache/download" "$HOME/elsewhere"
+  git -C "$CACHE_REPO" init --quiet
+  cat <<EOF > "$TEST_TEMP_DIR/fsmonitor-hook"
+#!/bin/sh
+printf '%s\n' 'fsmonitor ran' >> '$CACHE_MARKER'
+EOF
+  chmod +x "$TEST_TEMP_DIR/fsmonitor-hook"
+  # The repository's own configuration moves its top level and names a hook.
+  printf '[core]\n\tworktree = %s\n\tfsmonitor = %s\n' "$HOME/elsewhere" \
+    "$TEST_TEMP_DIR/fsmonitor-hook" >> "$CACHE_REPO/.git/config"
+  [ "$(git -C "$CACHE_REPO/sub" rev-parse --show-toplevel)" = "$HOME/elsewhere" ]
+
+  run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+    export GOMODCACHE="$CACHE_REPO"
+    cd -- "$CACHE_REPO/sub" || return 97
+    clean-system --deep --yes
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -F 'Skipping Go module cache: ~/workspaces/github/attacker/planted is or contains the current repository.' \
+    <<< "$output")" -eq 1 ]
+  [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+  [ ! -e "$CACHE_MARKER" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a bare repository that holds the working directory is protected" {
+  write_project_aware_cache_tools
+  export CACHE_BARE="$HOME/mirrors/mirror.git"
+  git init --bare --quiet "$CACHE_BARE"
+  mkdir -p "$CACHE_BARE/cache/download" "$HOME/mirrors/cache/download"
+
+  # From the bare repository or inside it, the repository and its ancestors
+  # are refused before any go clean, as the plan and as a dry run.
+  local spec start target mode
+  for spec in "$CACHE_BARE|$CACHE_BARE|--dry-run" \
+    "$CACHE_BARE|$CACHE_BARE|--yes" "$CACHE_BARE/objects|$CACHE_BARE|--yes" \
+    "$CACHE_BARE|$HOME/mirrors|--yes"; do
+    IFS='|' read -r start target mode <<< "$spec"
+    export CACHE_START="$start" CACHE_TARGET="$target" CACHE_MODE="$mode"
+    : > "$CACHE_CALL_LOG"
+    run run_maintenance_zsh "$(hide_cleanup_tools_except go)"'
+      export GOMODCACHE="$CACHE_TARGET"
+      cd -- "$CACHE_START" || return 97
+      clean-system --deep "$CACHE_MODE"
+    '
+    [ "$status" -eq 0 ]
+    [ "$(grep -c -F "Skipping Go module cache: ~${target#"$HOME"} is or contains the current repository." \
+      <<< "$output")" -eq 1 ]
+    [ "$(grep -c -F 'clean -modcache' "$CACHE_CALL_LOG")" -eq 0 ]
+  done
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: a CACHEDIR.TAG swapped for a FIFO never blocks the plan" {
+  command -v mkfifo >/dev/null 2>&1 || skip "mkfifo is unavailable"
+  write_project_aware_cache_tools
+  write_uv_cache_tag "$HOME/swapped-uv"
+  export CACHE_SWAP_TAG="$HOME/swapped-uv/CACHEDIR.TAG"
+  export CACHE_WATCHDOG_MARK="$TEST_TEMP_DIR/fifo-watchdog.fired"
+
+  run run_maintenance_zsh "$(hide_cleanup_tools_except uv)"'
+    # A watchdog bounds this program: after 15 s it records that it fired
+    # and opens the FIFO, which releases a reader blocked in any subshell.
+    (
+      zmodload zsh/zselect && zselect -t 1500
+      print -r -- fired >| "$CACHE_WATCHDOG_MARK"
+      [[ ! -p "$CACHE_SWAP_TAG" ]] || : <> "$CACHE_SWAP_TAG"
+    ) </dev/null >/dev/null 2>&1 &
+    local watchdog=$!
+    # The tag turns into a FIFO right after the size check stats it.
+    zstat() {
+      builtin zstat "$@"
+      local stat_rc=$?
+      if [[ " $* " == *" $CACHE_SWAP_TAG "* && -f "$CACHE_SWAP_TAG" ]]; then
+        command rm -f -- "$CACHE_SWAP_TAG" \
+          && command mkfifo -- "$CACHE_SWAP_TAG" || return 90
+      fi
+      return $stat_rc
+    }
+    export UV_CACHE_DIR="$HOME/swapped-uv"
+    local -i plan_rc=0
+    clean-system --quick --dry-run || plan_rc=$?
+    builtin kill -TERM $watchdog 2>/dev/null
+    [[ -p "$CACHE_SWAP_TAG" ]] || return 91
+    return $plan_rc
+  '
+  # Release any reader that still waits on the FIFO.
+  [[ ! -p "$CACHE_SWAP_TAG" ]] || : <> "$CACHE_SWAP_TAG"
+
+  [ "$status" -eq 0 ]
+  # The bounded read gave up by itself; the watchdog never had to step in.
+  [ ! -e "$CACHE_WATCHDOG_MARK" ]
+  [ "$(grep -c -F 'Skipping uv cache: ~/swapped-uv has no uv CACHEDIR.TAG.' \
+    <<< "$output")" -eq 1 ]
+  [ "$(grep -c -F 'cache clean' "$CACHE_CALL_LOG")" -eq 0 ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys maintenance: the cleanup path validator protects the repository and suite roots" {
+  export CACHE_REPO="$HOME/workspaces/github/me/app"
+  mkdir -p "$CACHE_REPO/sub/deeper" "$HOME/workspaces/github/me/other" \
+    "$HOME/tools/zdx/functions"
+  git -C "$CACHE_REPO" init --quiet
+
+  run run_maintenance_zsh '
+    cd -- "$CACHE_REPO/sub/deeper" || return 97
+    _sys_clean_validate_user_path "$CACHE_REPO" && return 11
+    _sys_clean_validate_user_path "$HOME/workspaces" && return 12
+    _sys_clean_validate_user_path "$CACHE_REPO/sub" || return 13
+    _sys_clean_validate_user_path "$HOME/workspaces/github/me/other" || return 14
+    # A Git probe that cannot answer keeps the directory that holds .git.
+    (
+      _sys_update_git_read() { return 124; }
+      _sys_clean_validate_user_path "$CACHE_REPO" && exit 15
+      exit 0
+    ) || return $?
+    # The suite root from the core, or without the core from this suite.
+    _ZDX_FUNCTIONS_DIR="$HOME/tools/zdx/functions"
+    _sys_clean_validate_user_path "$HOME/tools/zdx" && return 16
+    _sys_clean_validate_user_path "$HOME/tools" && return 17
+    unset _ZDX_FUNCTIONS_DIR
+    _SYS_CLEAN_SUITE_ROOT="$HOME/tools/zdx"
+    _sys_clean_validate_user_path "$HOME/tools" && return 18
+    # Outside a repository only the suite stays protected.
+    cd -- "$HOME/workspaces/github/me/other" || return 96
+    _sys_clean_validate_user_path "$HOME/workspaces" || return 19
+    return 0
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cleanup target ~/workspaces/github/me/app is or contains the current repository."* ]]
+  [[ "$output" == *"Cleanup target ~/workspaces is or contains the current repository."* ]]
+  [[ "$output" == *"Cleanup target ~/tools is or contains the ZDX suite."* ]]
+
+  # Without the core, the suite root comes from this suite's own location.
+  run zsh -f -c '
+    source "$1/functions/sys-menu.zsh" || exit 98
+    (( ! ${+_ZDX_FUNCTIONS_DIR} )) || exit 97
+    [[ "$_SYS_CLEAN_SUITE_ROOT" == "${1:A}" ]] || exit 96
+  ' zsh "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
 }
 
 @test "sys maintenance: clean-system runs its private implementation directly" {

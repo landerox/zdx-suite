@@ -1180,6 +1180,35 @@ only pip. The mode prompt and confirmation name only
 targets that exist on the platform: old journal logs only with systemd,
 thumbnails only on Linux, and Homebrew cleanup only with Homebrew.
 
+The npm, uv, and Go probes and cleans run from the root directory in the same
+way, so project configuration in the working directory, such as a `uv.toml`
+or `[tool.uv]` `cache-dir`, a project `.npmrc`, or a `go.mod`, never chooses a
+target; the user's own configuration and environment still apply. Every Go
+probe and clean also runs with `GOTOOLCHAIN=local`, so a `toolchain` line never
+makes cleanup download or switch a Go toolchain. A uv cache is planned only
+when it is uv's default `${XDG_CACHE_HOME:-~/.cache}/uv` or its root holds the
+`CACHEDIR.TAG` that uv writes, a regular file of at most 4096 bytes that
+starts with the standard `Signature: 8a477f597d28d172789f06886806bc55`, and a
+Go module cache only when it has a `cache/download` directory. The tag is read
+through the timeout service with a byte limit, and must still be the file
+that was checked, so a name swapped for a FIFO cannot block even a dry run.
+Any other directory is omitted from the plan with one warning that names it,
+and execution checks the signature again before the clean.
+
+Every cache path, root, and store must be a user-owned directory below `HOME`,
+never `HOME` itself, that no symbolic link reaches, and it must not be or
+contain a protected root: the ZDX suite root, both the core's and the System
+suite's own location, or a directory of the Git repository that contains the
+working directory. Those directories are resolved once per run, before any
+probe: the nearest directory at or above the working directory that holds a
+`.git` entry or is itself a Git directory with `HEAD`, `objects/`, and
+`refs/`, as a bare repository is, and the Git directory and work tree top
+level that a bounded `git rev-parse --absolute-git-dir --show-toplevel`
+reports, which a repository's `core.worktree` can move elsewhere. Outside a
+repository there is none, and Git is not run. The plan reports a refused npm,
+uv, or Go cache in one warning that carries the reason; a step that meets a
+refused directory fails with the error.
+
 No process-name scan gates the cleanup. `apt-get clean` takes APT's own
 non-blocking locks, so while another APT process holds them only the APT cache
 step fails, with APT's message; the remaining steps still run. An idle service

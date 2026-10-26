@@ -15,6 +15,10 @@ verification, and remaining limitations.
 - System: `clean-system` runs its pip probes and the pip cache purge from
   the root directory, so pip code planted in the working directory no longer
   runs, not even in a dry run.
+- System: a project's `uv.toml`, `.npmrc`, or `go.mod` can no longer choose
+  what `clean-system` deletes or make a dry run download a Go toolchain, and a
+  cache that is or contains the ZDX suite or the current repository, bare ones
+  included, is refused.
 
 ### Fixed
 
