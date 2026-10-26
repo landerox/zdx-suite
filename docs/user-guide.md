@@ -688,7 +688,10 @@ you manage with `git-menu`:
 - `git-pull` — Choose pull with merge, rebase, or fast-forward, fetch the
   upstream branch, or fetch all branches and prune; each mode shows its plan
   before asking.
-- `git-pr-checkout [NUMBER]` — Check out a pull request branch locally.
+- `git-pr-checkout [NUMBER]` — Check out the reviewed head of a pull request in
+  detached mode; the suite fetches it from a configured remote for the
+  repository, with that remote's Git credentials, and refuses a head that
+  moved after review or a local file it would overwrite.
 - `git-tag-create --name TAG [--target REV]` — Create one tag at a reviewed
   commit, `HEAD` by default, after showing the plan; choose `--annotated`,
   `--signed`, or `--lightweight`, add `--message TEXT`, and publish it right

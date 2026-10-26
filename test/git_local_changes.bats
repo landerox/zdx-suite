@@ -1065,6 +1065,75 @@ EOF
   grep -Fq "Invalid Git branch name." "$HOME/invalid.stderr"
 }
 
+@test "git local changes: stash branch refuses an ignored file that the stash base tracks" {
+  run run_zsh "$(local_repo)"'
+    # The stash base still tracks local.env, which a later commit stopped
+    # tracking and now ignores; checking out that base would replace it.
+    print -r -- "v1 tracked" > local.env
+    command git add local.env || return 9
+    command git commit -q -m "track local.env" || return 9
+    print -r -- "branch work" > a.txt
+    command git stash push -q -m work || return 9
+    command git rm -q --cached local.env || return 9
+    print -r -- "local.env" >> .git/info/exclude
+    command git commit -q -m "stop tracking local.env" || return 9
+    print -r -- "local secret" > local.env
+    local head_before=""
+    head_before=$(command git rev-parse HEAD) || return 9
+
+    git-stash branch "stash@{0}" from-stash --yes \
+      >"$HOME/branch.stdout" 2>"$HOME/branch.stderr"
+    local -i branch_rc=$?
+    [[ "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git rev-parse HEAD)" == "$head_before" ]] || return 11
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+    command git show-ref --verify --quiet refs/heads/from-stash && return 13
+    [[ "$(command git stash list | wc -l)" -eq 1 ]] || return 14
+    print -r -- "$branch_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/branch.stdout" ]
+  grep -Fq "local.env" "$HOME/branch.stderr"
+  grep -Fq "Refusing to create a stash branch; move or remove these paths first." \
+    "$HOME/branch.stderr"
+}
+
+@test "git local changes: stash branch refuses an ignored file that appears after confirmation" {
+  run run_zsh "$(local_repo)"'
+    # The stash base tracks local.env; HEAD ignores it, and the ignored file
+    # appears only while the confirmation is open.
+    print -r -- "v1 tracked" > local.env
+    command git add local.env || return 9
+    command git commit -q -m "track local.env" || return 9
+    print -r -- "branch work" > a.txt
+    command git stash push -q -m work || return 9
+    command git rm -q --cached local.env || return 9
+    print -r -- "local.env" >> .git/info/exclude
+    command git commit -q -m "stop tracking local.env" || return 9
+    command rm -f -- local.env
+    _git_confirm_outcome() {
+      print -r -- "local secret" > local.env
+      REPLY=confirmed
+    }
+    git-stash branch "stash@{0}" from-stash \
+      >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    [[ "$(<local.env)" == "local secret" ]] || return 10
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 11
+    command git show-ref --verify --quiet refs/heads/from-stash && return 12
+    [[ "$(command git stash list | wc -l)" -eq 1 ]] || return 13
+    print -r -- "$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/late.stdout" ]
+  grep -Fq "Refusing to create a stash branch; move or remove these paths first." \
+    "$HOME/late.stderr"
+}
+
 @test "git local changes: stash mutations fail closed without a terminal and honor a declined confirmation" {
   run run_zsh "$(local_repo)"'
     print -r -- "kept" > a.txt

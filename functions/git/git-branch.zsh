@@ -548,6 +548,51 @@ _git_switch_obstacles() {
   reply=("${(@u)obstacle_paths}")
 }
 
+# Refuses an operation that writes the tree of TARGET_OID over HEAD_OID (empty
+# for an unborn HEAD) while an untracked or ignored path is in its way, and
+# lists those paths. Git silently replaces ignored files on checkout, merge,
+# rebase, and git stash branch, and --no-overwrite-ignore exists only for
+# checkout, switch, and fast-forward merges. EXTRA_PATHS_NAME names an array
+# of more paths the operation writes, such as those of replayed commits.
+# Git Pull (git-sync.zsh), Git Stashes, and Git Pull Requests call it.
+# Usage: _git_require_clear_target ROOT HEAD_OID TARGET_OID SUBJECT REFUSAL
+#   [EXTRA_PATHS_NAME]
+_git_require_clear_target() {
+  emulate -L zsh
+
+  local repo_root="$1"
+  local head_oid="$2"
+  local target_oid="$3"
+  local subject="$4"
+  local refusal="$5"
+  local extra_paths_name="${6:-}"
+  local obstacle_path=""
+  local -a reply=() target_paths=() obstacle_paths=()
+
+  _git_switch_diff_paths "$repo_root" "$head_oid" "$target_oid" || {
+    _git_error "Unable to compare the current and target commits."
+    return 1
+  }
+  target_paths=("${reply[@]}")
+  if [[ -n "$extra_paths_name" ]]; then
+    target_paths+=("${(@P)extra_paths_name}")
+    target_paths=("${(@u)target_paths:#}")
+  fi
+  _git_switch_obstacles "$repo_root" target_paths || {
+    _git_error "Unable to inspect untracked and ignored paths."
+    return 1
+  }
+  obstacle_paths=("${reply[@]}")
+  (( ${#obstacle_paths[@]} == 0 )) && return 0
+
+  _git_warn "$subject would overwrite or remove these untracked or ignored paths:"
+  for obstacle_path in "${obstacle_paths[@]}"; do
+    _git_dim "${(V)obstacle_path}"
+  done
+  _git_error "$refusal; move or remove these paths first."
+  return 1
+}
+
 # --- Switch: plan and execution ---------------------------------------------------
 
 _git_switch_usage() {
@@ -668,12 +713,15 @@ _git_switch_execute() {
     _git_outcome_line "Stash the changes" done "stash@{0} ${stash_oid[1,12]}"
   fi
 
+  # --no-overwrite-ignore makes Git refuse an ignored file that appeared at a
+  # target path after the obstacle check.
   if [[ "$target_kind" == "remote" ]]; then
     _git_run_captured "git switch -c $target_name ${target_oid[1,12]}" \
-      command git switch --no-guess --no-track -c "$target_name" "$target_oid"
+      command git switch --no-guess --no-track --no-overwrite-ignore \
+      -c "$target_name" "$target_oid"
   else
     _git_run_captured "git switch $target_name" \
-      command git switch --no-guess "$target_name"
+      command git switch --no-guess --no-overwrite-ignore "$target_name"
   fi
   command_code=$?
 
@@ -841,6 +889,17 @@ git-switch() {
   local -A _git_branch_heads=() _git_branch_tracking=()
   _git_branch_inventory || return 1
 
+  # The picker shows the change count, so a snapshot taken with that inventory
+  # lets a change made while the picker is open refuse the switch.
+  local -a picker_snapshot=()
+  if (( ! target_given )); then
+    _git_stash_context_capture tracked || {
+      _git_error "Unable to capture repository state."
+      return 1
+    }
+    picker_snapshot=("${reply[@]}")
+  fi
+
   local -a _git_switch_changed=()
   _git_switch_tracked_changes || {
     _git_error "Unable to inspect local changes."
@@ -864,6 +923,11 @@ git-switch() {
     _git_switch_pick "$head_ref" "$picker_context" || return $?
     target=("${reply[@]}")
     (( ${#target[@]} == 5 )) || return 0
+    _git_stash_context_matches picker_snapshot tracked "" yes || {
+      _git_error \
+        "Repository state changed while the picker was open; nothing was switched. Run git-switch again."
+      return 1
+    }
   elif [[ "$requested" == "-" ]]; then
     _git_switch_resolve_previous || return 1
     target=("${reply[@]}")

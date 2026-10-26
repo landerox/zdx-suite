@@ -98,6 +98,24 @@ show_failure() {
   cat "$HOME"/*.stderr >&2 2>/dev/null || true
 }
 
+# Wraps the standard fzf mock. A picker call that finds the fixture
+# $HOME/picker-side-effect renames it and runs it once with /bin/sh, as if an
+# editor or another tool changed the repository while the picker was open,
+# and then answers like the standard mock.
+wrap_fzf_with_side_effect() {
+  mv "$TEST_MOCK_BIN/fzf" "$TEST_MOCK_BIN/fzf-standard"
+  cat > "$TEST_MOCK_BIN/fzf" <<'EOF'
+#!/usr/bin/env bash
+side_effect="$HOME/picker-side-effect"
+if [[ -f "$side_effect" ]]; then
+  mv -f -- "$side_effect" "$side_effect.ran" || exit 96
+  /bin/sh "$side_effect.ran" </dev/null >&2 || exit 95
+fi
+exec "$TEST_MOCK_BIN/fzf-standard" "$@"
+EOF
+  chmod +x "$TEST_MOCK_BIN/fzf"
+}
+
 # --- git-switch ----------------------------------------------------------------
 
 @test "git branches: a clean switch moves at once and needs no terminal" {
@@ -598,6 +616,138 @@ show_failure() {
 
   [ "$status" -eq 0 ] || { show_failure; false; }
   [ ! -s "$HOME/cancel.stdout" ]
+}
+
+@test "git branches: a change made while the switch picker is open refuses the switch" {
+  wrap_fzf_with_side_effect
+  # The picker showed a clean tree, so the switch would take the path that
+  # asks no question and carry the new edit without a reviewed plan.
+  cat > "$HOME/picker-side-effect" <<'EOF'
+cd "$HOME/repository" || exit 1
+printf '%s\n' "edited while the picker was open" > a.txt
+EOF
+  export MOCK_FZF_MODE=match
+  export MOCK_FZF_MATCH=$'\tlocal\t'
+  run run_zsh "$(branch_repo)"'
+    _git_require_interactive() { return 0; }
+    git-switch >"$HOME/race.stdout" 2>"$HOME/race.stderr"
+    local -i race_rc=$?
+    [[ -e "$HOME/picker-side-effect.ran" ]] || return 9
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 10
+    [[ "$(<a.txt)" == "edited while the picker was open" ]] || return 11
+    print -r -- "$race_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/race.stdout" ]
+  grep -Fq "Repository state changed while the picker was open; nothing was switched. Run git-switch again." \
+    "$HOME/race.stderr"
+}
+
+@test "git branches: a clean switch never overwrites an ignored file that appears after review" {
+  export REAL_GIT
+  REAL_GIT=$(command -v git)
+  # As an editor or a build could after the plan, an ignored file appears at
+  # a path the target tracks just before git switch runs.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == switch && " $* " == *" --no-guess "* \
+  && ! -e "$HOME/.ignored-appeared" ]]; then
+  : > "$HOME/.ignored-appeared"
+  printf '%s\n' "local secret" > build.log
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+  run run_zsh "$(branch_repo)"'
+    command git switch -q topic || return 9
+    print -r -- "tracked log" > build.log
+    command git add -f build.log || return 9
+    command git commit -q -m "feat: tracked log" || return 9
+    command git switch -q main || return 9
+
+    git-switch topic >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    [[ -e "$HOME/.ignored-appeared" ]] || return 10
+    [[ "$(<build.log)" == "local secret" ]] || return 11
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+    print -r -- "$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/late.stdout" ]
+  # Git names the path it refused to overwrite.
+  grep -Fq "build.log" "$HOME/late.stderr"
+}
+
+@test "git branches: creating a tracking branch never overwrites an ignored file that appears after review" {
+  export REAL_GIT
+  REAL_GIT=$(command -v git)
+  # The ignored file appears just before git switch -c runs, after the
+  # obstacle check; --no-overwrite-ignore makes the switch refuse it.
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == switch && " $* " == *" --no-guess "* && " $* " == *" -c "* \
+  && ! -e "$HOME/.ignored-appeared" ]]; then
+  : > "$HOME/.ignored-appeared"
+  printf '%s\n' "local secret" > build.log
+fi
+exec "$REAL_GIT" "$@"
+MOCK
+  chmod +x "$TEST_MOCK_BIN/git"
+  run run_zsh "$(branch_repo)$(branch_remote)"'
+    # A branch that exists only on the remote and tracks an ignored path.
+    command git switch -q -c logs || return 9
+    print -r -- "tracked log" > build.log
+    command git add -f build.log || return 9
+    command git commit -q -m "feat: tracked log" || return 9
+    command git push -q origin logs 2>/dev/null || return 9
+    command git switch -q main || return 9
+    command git branch -q -D logs || return 9
+    command rm -f -- build.log
+
+    git-switch logs >"$HOME/late.stdout" 2>"$HOME/late.stderr"
+    local -i late_rc=$?
+    [[ -e "$HOME/.ignored-appeared" ]] || return 10
+    [[ "$(<build.log)" == "local secret" ]] || return 11
+    [[ "$(command git symbolic-ref HEAD)" == refs/heads/main ]] || return 12
+    command git show-ref --verify --quiet refs/heads/logs && return 13
+    print -r -- "$late_rc"
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ "$output" = "1" ]
+  [ ! -s "$HOME/late.stdout" ]
+  grep -Fq "build.log" "$HOME/late.stderr"
+}
+
+@test "git branches: a switch plan run from a subdirectory with diff.relative lists every changed path" {
+  run run_zsh "$(branch_repo)"'
+    mkdir -p sub || return 9
+    print -r -- "base s" > sub/s.txt
+    command git add sub/s.txt || return 9
+    command git commit -q -m "feat: sub" || return 9
+    command git switch -q -c other || return 9
+    print -r -- "other" > other.txt
+    command git add other.txt || return 9
+    command git commit -q -m "feat: other" || return 9
+    command git switch -q main || return 9
+    command git config diff.relative true || return 9
+    print -r -- "edited a" > a.txt
+    print -r -- "edited s" > sub/s.txt
+    cd sub || return 9
+    git-switch other --carry --dry-run \
+      >"$HOME/relative.stdout" 2>"$HOME/relative.stderr" || return 10
+  '
+
+  [ "$status" -eq 0 ] || { show_failure; false; }
+  [ ! -s "$HOME/relative.stdout" ]
+  grep -Eq "Unstaged: +2 files" "$HOME/relative.stderr"
+  # The table names the same repository-wide paths as the counts.
+  grep -Eq '^ +1 +modified +a\.txt$' "$HOME/relative.stderr"
+  grep -Eq '^ +2 +modified +sub/s\.txt$' "$HOME/relative.stderr"
 }
 
 @test "git branches: a tracking branch that differs only in letter case is refused" {

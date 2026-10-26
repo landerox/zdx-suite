@@ -3,7 +3,8 @@
 # Git Stash: save, inspect, apply, pop, branch from, and drop stashes
 # =============================================================================
 #
-# Loaded by git-menu.zsh after git-common.zsh.
+# Loaded by git-menu.zsh after git-common.zsh; stash branch also calls
+# git-branch.zsh, which loads next.
 # Safe to re-source; defines functions only.
 #
 
@@ -416,9 +417,11 @@ _git_stash_collect_save_pairs() {
     return 2
   }
 
-  _git_name_status_pairs --cached -- || return 1
+  # --no-relative keeps the table repository-wide under diff.relative, like
+  # the counts and the snapshot, when git-switch runs below the root.
+  _git_name_status_pairs --cached --no-relative -- || return 1
   staged_pairs=("${reply[@]}")
-  _git_name_status_pairs -- || return 1
+  _git_name_status_pairs --no-relative -- || return 1
   worktree_pairs=("${reply[@]}")
   for (( pair_index = 1; pair_index <= ${#staged_pairs[@]}; pair_index += 2 )); do
     file_name="${staged_pairs[pair_index + 1]}"
@@ -1404,6 +1407,13 @@ _git_stash_branch_one() {
   }
   _git_stash_require_clear_targets \
     target_paths "create a stash branch" || return 1
+  # git stash branch first checks out the stash base, and Git silently
+  # replaces an ignored file at a path that base tracks.
+  local head_for_base="${snapshot[4]}"
+  [[ "$head_for_base" != "UNBORN" ]] || head_for_base=""
+  _git_require_clear_target "${snapshot[1]}" "$head_for_base" "$base_oid" \
+    "Checking out the stash base ${base_oid[1,12]}" \
+    "Refusing to create a stash branch" || return 1
   _git_stash_require_same_context \
     snapshot "obstacles" target_paths "yes" || return 1
   _git_warn "Success checks out the new branch and drops the stash."
@@ -1421,6 +1431,9 @@ _git_stash_branch_one() {
     snapshot "obstacles" target_paths "yes" || return 1
   _git_stash_require_clear_targets \
     target_paths "create a stash branch" || return 1
+  _git_require_clear_target "${snapshot[1]}" "$head_for_base" "$base_oid" \
+    "Checking out the stash base ${base_oid[1,12]}" \
+    "Refusing to create a stash branch" || return 1
   _git_ref_case_guard stash_branch_refs refs/heads \
     "Choose a branch name that differs by more than letter case." || return 1
   _git_require_not_symbolic_ref "refs/heads/$branch_name" branch || return 1
