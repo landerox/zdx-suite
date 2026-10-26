@@ -1302,6 +1302,16 @@ in a compromised release channel and then installed, potentially as root.
   Windows launcher on the appended `PATH` cannot stand in for a missing
   backend. A project or state directory on a DrvFs drive without metadata
   reports mode `777` and stays refused as private state.
+- System cleanup runs every pip probe (`--version`, `cache dir`) and the pip
+  cache purge from `/` in a subshell, and runs `python3 -m pip` with
+  `PYTHONSAFEPATH=1`, so a `pip.py` or `pip/` package in the caller's working
+  directory is never imported, not even by `clean-system --dry-run`. The
+  module form keeps the user site, because the `python3 -m pip` fallback
+  exists for hosts where pip lives only there, so it does not use `-I`; on
+  Python older than 3.11 only the neutral directory protects it.
+  `sys_maintenance.bats` plants pip code next to a real pip-less interpreter
+  and records the directory and environment of every pip call. The uv, npm,
+  and Go cache probes still run in the caller's directory.
 - The Py suite never bootstraps a package backend or invokes ambient `pip`.
   Project package and isolated-tool mutations disclose that index content is
   executable code, require an explicit reviewed plan, and bind execution to the

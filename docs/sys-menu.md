@@ -1171,7 +1171,12 @@ function, is omitted from the plan with a warning; nothing is removed for it.
 The pip cache belongs to the first usable `pip`, then `pip3`, which is all
 that Homebrew Python provides, then `python3 -m pip` when that module answers a
 bounded `--version` probe; the purge uses the same command. A `python3` without
-pip is no pip cache and no warning. The mode prompt and confirmation name only
+pip is no pip cache and no warning. Every pip probe and the purge run from the
+root directory in a subshell, and the module form also runs with
+`PYTHONSAFEPATH=1`, which Python 3.11 and later honor, so a `pip.py` or `pip/`
+package in the working directory is never imported, not even by a dry run.
+The module form does not run with `-I`, because the user site may hold the
+only pip. The mode prompt and confirmation name only
 targets that exist on the platform: old journal logs only with systemd,
 thumbnails only on Linux, and Homebrew cleanup only with Homebrew.
 

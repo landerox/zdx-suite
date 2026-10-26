@@ -12,6 +12,9 @@ verification, and remaining limitations.
   letter case, and a second `[Interface]`, whatever options the calling shell
   sets. Before, an inherited `PIPE_FAIL` let a padded profile carry a `PreUp`
   hook that `wg-quick` then ran as root.
+- System: `clean-system` runs its pip probes and the pip cache purge from
+  the root directory, so pip code planted in the working directory no longer
+  runs, not even in a dry run.
 
 ### Fixed
 
