@@ -475,6 +475,7 @@ printf '# edited\\n' >> "\$1"
 EOF
   chmod 755 "$TEST_MOCK_BIN/fixture-editor"
   cat > "$VPN_EDIT_CHILD" <<'EOF'
+emulate -R zsh
 source "$ZSH_CUSTOM/functions/vpn-menu.zsh" || exit 91
 source "$VPN_DARWIN_SETUP" || exit 92
 export VPN_CONFIG_DIR="$VPN_PROFILE_DIR" EDITOR=fixture-editor
@@ -491,6 +492,10 @@ EOF
     run run_zsh '
       zmodload zsh/zpty || return 80
       zmodload zsh/datetime || return 79
+      # vpn-config-edit needs a terminal on standard input, which the
+      # pseudo-terminal provides; -i runs the editor as a foreground job, as
+      # the shell a person types in does. -d and -f skip every startup file
+      # except the system zshenv.
       zpty -b vpn-edit zsh -dfi "$VPN_EDIT_CHILD" || return 81
       {
         local -F deadline=$(( EPOCHREALTIME + 30 ))

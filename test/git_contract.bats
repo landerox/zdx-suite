@@ -227,6 +227,7 @@ assert_git_contract_matches() {
 @test "git contract: contextual completion supports direct and nested grammar" {
   run env COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_git-menu" \
     zsh -f -c '
+      emulate -R zsh
       capture_specs() {
         local -a words=("$@")
         local -i CURRENT=${#words[@]}

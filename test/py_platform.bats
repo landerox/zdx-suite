@@ -70,6 +70,7 @@ make_venv() {
 
 @test "py platform: a standalone source needs timeout or gtimeout and fails closed" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/py-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -91,6 +92,7 @@ exec "$@"
 SH
   chmod +x "$TEST_MOCK_BIN/gtimeout"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/py-menu.zsh" || exit 90
     whence() {
       [[ "$1" == -p && "$2" == timeout ]] && return 1
@@ -392,6 +394,7 @@ SH
   [[ "$output" == *$'\n  ● List Global Tools|tool-list|'* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/py-menu.zsh" || exit 90
     source "$2" || exit 91
     _py_menu_rows

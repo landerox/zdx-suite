@@ -12,7 +12,8 @@ teardown() {
 }
 
 @test "output: services load in eager and lazy modes before any suite" {
-  run zsh -c '
+  run zsh -f -c '
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export ZSH_CUSTOM="$1" HOME="$2"
     source "$ZSH_CUSTOM/functions.zsh" || exit 1
@@ -272,10 +273,11 @@ teardown() {
   mkdir -m 700 "$HOME/capture-tmp"
   run run_zsh '
     export TMPDIR="$HOME/capture-tmp"
-    _zdx_run_captured "quiet tool" "" "" zsh -c "echo success-out; echo success-err >&2" \
+    _zdx_run_captured "quiet tool" "" "" zsh -f -c "emulate -R zsh; echo success-out; echo success-err >&2" \
       > "$HOME/stdout"
     print -r -- "success:$?"
-    _zdx_run_captured "noisy tool" "" "" zsh -c '"'"'
+    _zdx_run_captured "noisy tool" "" "" zsh -f -c '"'"'
+      emulate -R zsh
       for i in {1..100}; do printf "bounded-%03d\n" $i; done
       print -r -- "token=abc123"
       print -r -- "https://user:pass@example.invalid/repo"
@@ -310,9 +312,9 @@ teardown() {
   run run_zsh '
     export TMPDIR="$HOME/capture-tmp"
     umask 022
-    _zdx_run_captured "write file" "" "" zsh -c "print created > \"\$HOME/created\"" || return 1
+    _zdx_run_captured "write file" "" "" zsh -f -c "emulate -R zsh; print created > \"\$HOME/created\"" || return 1
     print -r -- "must-not-reach" | _zdx_run_captured "stdin check" "" "" \
-      zsh -c '"'"'if IFS= read -r line; then print -r -- "unexpected:$line"; exit 97; fi'"'"'
+      zsh -f -c '"'"'emulate -R zsh; if IFS= read -r line; then print -r -- "unexpected:$line"; exit 97; fi'"'"'
   '
   [ "$status" -eq 0 ]
   [ "$(file_mode "$HOME/created")" = "644" ]
@@ -324,12 +326,12 @@ teardown() {
   mkdir -m 700 "$HOME/capture-tmp"
   run run_zsh '
     export TMPDIR="$HOME/capture-tmp"
-    ZDX_VERBOSE=1 _zdx_run_captured "live tool" "" "" zsh -c "echo streamed-line" \
+    ZDX_VERBOSE=1 _zdx_run_captured "live tool" "" "" zsh -f -c "emulate -R zsh; echo streamed-line" \
       > "$HOME/stdout"
     print -r -- "live:$?"
-    _zdx_run_captured "vendor updater" "" 0 zsh -c "echo vendor-secret; exit 3"
+    _zdx_run_captured "vendor updater" "" 0 zsh -f -c "emulate -R zsh; echo vendor-secret; exit 3"
     print -r -- "hidden:$?"
-    ZDX_VERBOSE=1 _zdx_run_captured "vendor updater" "" 0 zsh -c "echo vendor-secret-2; exit 4"
+    ZDX_VERBOSE=1 _zdx_run_captured "vendor updater" "" 0 zsh -f -c "emulate -R zsh; echo vendor-secret-2; exit 4"
     print -r -- "hidden-verbose:$?"
   '
   [ "$status" -eq 0 ]

@@ -177,7 +177,7 @@ vpn_darwin_record() {
 vpn_darwin_socket() {
   (
     cd "$VPN_RUN_DIR" || exit 1
-    zsh -fc 'zmodload zsh/net/socket && zsocket -l "$1"' _ "$1.sock"
+    zsh -fc 'emulate -R zsh; zmodload zsh/net/socket && zsocket -l "$1"' _ "$1.sock"
   ) || return 1
   vpn_set_mtime "$VPN_RUN_DIR/$1.sock" "$2"
 }

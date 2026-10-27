@@ -51,6 +51,7 @@ status_zsh() {
   local program="$1"
   shift
   zsh -f -c '
+    emulate -R zsh
     source "$STATUS_ROOT/functions.zsh" || exit 90
     cd "$1" || exit 91
     OSTYPE=linux-gnu
@@ -65,6 +66,7 @@ status_zsh() {
 
 @test "zdx status: the module loads silently, idempotently, and evaluator-free" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-status.zsh" || exit
     first_definition="${functions[zdx-status]}"
     source "$1/functions/zdx-status.zsh" || exit
@@ -83,6 +85,7 @@ status_zsh() {
 
 @test "zdx status: help uses stderr and invalid grammar fails before any probe" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     _zdx_status_collect() { print -r -- UNEXPECTED_PROBE; }
     zdx-status --help >"$2/help.out" 2>"$2/help.err" || exit 1
@@ -102,6 +105,7 @@ status_zsh() {
 
 @test "zdx status: router, help, completion, catalog, reserved name, and lazy stub agree" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit 90
     _zdx_usage 2>&1 | grep -Eq "^  status \[--json\] " || exit 1
     _zdx_menu_model | grep -Fq "|status|" || exit 2
@@ -120,6 +124,7 @@ status_zsh() {
 
   # The ZDX Tools group lists status before the doctor and plugin manager.
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit 90
     _zdx_menu_model | awk -F "|" "/ZDX Tools/ { in_tools=1; next }
       in_tools && \$2 != \":\" { print \$2 }"
@@ -128,6 +133,7 @@ status_zsh() {
   [ "$(printf '%s\n' "$output" | head -n 3 | tr '\n' ' ')" = "status doctor plugins " ]
 
   run zsh -f -c '
+    emulate -R zsh
     _arguments() { state=suite; }
     _describe() { local array_name="$4"; print -rl -- "${(@P)array_name}"; }
     _test_completion() { source "$1/completions/_zdx-menu"; }
@@ -139,6 +145,7 @@ status_zsh() {
 
   # `zdx status <TAB>` and `zdx-status <TAB>` offer the same two options.
   run zsh -f -c '
+    emulate -R zsh
     _arguments() {
       if [[ "$1" == -C ]]; then state=suite-arguments; return 0; fi
       print -rl -- "$@"
@@ -157,6 +164,7 @@ status_zsh() {
     | grep -Fqx '#compdef zdx zdx-menu zdx-status zdx-plugins zdx-doctor'
 
   run zsh -f -c '
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export HOME="$2"
     source "$1/functions.zsh" || exit 90
@@ -174,6 +182,7 @@ status_zsh() {
     "$TEST_SUITE_ROOT/pyproject.toml")
   [ -n "$project_version" ]
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-status.zsh" || exit 90
     _zdx_status_release
     print -r -- "$REPLY"
@@ -414,6 +423,7 @@ status_zsh() {
 
 @test "zdx status: --json without jq reports the capability and prints nothing" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     _zdx_status_collect() { print -r -- UNEXPECTED_PROBE; }
     path=("$2")
@@ -463,6 +473,7 @@ EOF
   printf 'INTERFACE=wg-office\nDEVTYPE=wireguard' > "$net/wg-office/uevent"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     OSTYPE=linux-gnu
     _zdx_status_wireguard_interfaces "$2" || exit 1
@@ -488,6 +499,7 @@ EOF
   printf '0.25 0.50 1.75 1/100 42\n' > "$root/proc/loadavg"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     unset WSL_DISTRO_NAME WSL_INTEROP
     OSTYPE=linux-gnu
@@ -546,6 +558,7 @@ EOF
   mkdir -p "$repo"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     cd "$2" || exit 91
     OSTYPE=darwin23
@@ -563,6 +576,7 @@ EOF
   [ ! -s "$STATUS_PROBE_LOG" ]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     cd "$2" || exit 91
     OSTYPE=darwin23
@@ -575,6 +589,7 @@ EOF
 
 @test "zdx status: settings, plugins, and the byte formatter are exact" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     local REPLY=""
     for bytes in 0 1023 1024 1536 1048576 1073741824 5497558138880; do
@@ -612,6 +627,7 @@ EOF
   mkdir -p "$copy"
   cp -R "$TEST_SUITE_ROOT/functions" "$TEST_SUITE_ROOT/functions.zsh" "$copy/"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
     zdx-status --json 2>/dev/null
@@ -628,6 +644,7 @@ EOF
   local short
   short=$(git -C "$copy" rev-parse --short=7 HEAD)
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
   ' _ "$copy"
@@ -635,6 +652,7 @@ EOF
 
   printf '\n' >> "$copy/functions/zdx-status.zsh"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
     NO_COLOR=1 zdx-status 2>&1 | grep "Version:"
@@ -655,6 +673,7 @@ EOF
   git -C "$outer" -c user.name=T -c user.email=t@example.invalid \
     commit -q -m outer
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
   ' _ "$outer/vendor/zdx"
@@ -704,6 +723,7 @@ MOCK
   printf 'token: CANARY-KUBE-SECRET\n' > "$HOME/.kube/config"
   chmod 600 "$HOME/.kube/config"
   run env PATH="$bin" "$(command -v zsh)" -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     cd "$HOME" || exit 91
     _zdx_status_wireguard_interfaces() { reply=(); }
@@ -721,6 +741,7 @@ MOCK
 
   chmod 644 "$HOME/.kube/config"
   run env PATH="$bin" "$(command -v zsh)" -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     zdx-status --json 2>/dev/null
   ' _ "$TEST_SUITE_ROOT"
@@ -728,6 +749,7 @@ MOCK
 
   rm "$bin/kubectl"
   run env PATH="$bin" "$(command -v zsh)" -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     zdx-status --json 2>/dev/null
     NO_COLOR=1 zdx-status 2>&1

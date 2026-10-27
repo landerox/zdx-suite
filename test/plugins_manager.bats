@@ -86,6 +86,7 @@ teardown() {
 @test "zdx-plugins: completion offers actions, installed names, and unused flags" {
   mkdir -p "$PLUGINS_ROOT/alpha" "$PLUGINS_ROOT/beta" "$PLUGINS_ROOT/bad.name"
   run zsh -f -c '
+    emulate -R zsh
     _describe() { local array_name="$4"; print -rl -- "${(@P)array_name}"; }
     _message() { print -r -- "message: $1"; }
     _test_completion() { source "$1/completions/_zdx-menu"; }
@@ -405,6 +406,7 @@ MOCK
 
 @test "zdx-plugins: sourcing the manager twice is silent and defines no workflow" {
   run zsh -fc '
+    emulate -R zsh
     source "$1/functions/zdx-plugins.zsh" || exit 1
     source "$1/functions/zdx-plugins.zsh" || exit 1
     (( ${+functions[zdx-plugins]} )) || exit 2
@@ -417,6 +419,7 @@ MOCK
 @test "zdx-plugins: lifecycle actions fail closed without the core runtime" {
   plugin_origin_create alpha
   run zsh -fc '
+    emulate -R zsh
     source "$1/functions/zdx-plugins.zsh" || exit 1
     zdx-plugins --install "$2" --yes
   ' _ "$TEST_SUITE_ROOT" "$(plugin_origin_url alpha)"

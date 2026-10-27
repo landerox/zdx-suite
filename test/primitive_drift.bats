@@ -59,6 +59,7 @@ assert_identical_bodies() {
 
 @test "primitive drift: every counted noun behaves like the core service" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     local common prefix case expected actual
     for common in "$1"/functions/*-common.zsh; do source "$common" 2>/dev/null; done
@@ -77,6 +78,7 @@ assert_identical_bodies() {
 
 @test "primitive drift: every suite timeout fallback stays bounded without the core" {
   run zsh -f -c '
+    emulate -R zsh
     local prefix common started rc
     zmodload zsh/datetime
     for prefix in git dev py ws env file vpn sys; do

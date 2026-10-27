@@ -338,6 +338,7 @@ EOF
 
   run env ZSH_CUSTOM="$TEST_SUITE_ROOT" NO_COLOR=1 TERM=dumb \
     zsh -f -c '
+    emulate -R zsh
     source "$ZSH_CUSTOM/functions/dev-menu.zsh" || exit
     cd "$HOME" || exit
     _dev_require_python_toml
@@ -515,6 +516,7 @@ EOF
     DEV_BACKUP_DIR="" \
     ZDX_TEST_ROOT="$TEST_SUITE_ROOT" \
     zsh -f -c '
+      emulate -R zsh
       source "$ZDX_TEST_ROOT/functions/dev-menu.zsh" || exit
       print -r -- "backup-dir=<$DEV_BACKUP_DIR>"
     '
@@ -551,6 +553,7 @@ EOF
     "$copied_root/functions/dev-common.zsh"
 
   run env COPIED_ROOT="$copied_root" zsh -f -c '
+    emulate -R zsh
     source "$COPIED_ROOT/functions/dev-menu.zsh"
     source_status=$?
     (( ! ${+_DEV_MENU_SOURCED} )) || exit 99
@@ -578,6 +581,7 @@ EOF
   grep -q 'Confirm automatic remediation' "$completion"
 
   run env COMPLETION="$completion" zsh -f -c '
+    emulate -R zsh
     typeset -a words=(dev-run-audit)
     _arguments() { print -rl -- "$@"; }
     source "$COMPLETION"
@@ -587,6 +591,7 @@ EOF
   [[ "$output" != *"Confirm automatic remediation"* ]]
 
   run env COMPLETION="$completion" zsh -f -c '
+    emulate -R zsh
     typeset -a words=(dev-run-audit --fix)
     _arguments() { print -rl -- "$@"; }
     source "$COMPLETION"
@@ -595,6 +600,7 @@ EOF
   [[ "$output" == *"--yes[Confirm automatic remediation]"* ]]
 
   run env COMPLETION="$completion" zsh -f -c '
+    emulate -R zsh
     typeset -a words=(dev-menu dev-update-deps --)
     integer CURRENT=3
     _arguments() {

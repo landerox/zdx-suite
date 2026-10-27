@@ -57,6 +57,7 @@ widget_zsh() {
   local program="$1"
   shift
   zsh -f -c '
+    emulate -R zsh
     source "$WIDGET_ROOT/functions.zsh" || exit 90
     cd "$1" || exit 91
     zle() { print -r -- "zle $*" >> "$WIDGET_ZLE_LOG"; }
@@ -107,6 +108,7 @@ make_branch_repo() {
 widget_pty() {
   local setup_file="$TEST_TEMP_DIR/pty-setup.zsh"
   cat > "$setup_file" <<'SETUP'
+emulate -R zsh
 unset -m 'ZDX_*'
 bindkey -e
 setopt hist_ignore_space
@@ -134,6 +136,7 @@ bindkey '^Xm' probe_minibuffer
 print -r -- "binding:$(bindkey -M main -- '^G')"
 SETUP
   WIDGET_PTY_SETUP="$setup_file" zsh -f -c '
+    emulate -R zsh
     zmodload zsh/zpty || exit 80
     zmodload zsh/datetime || exit 79
     local enter="${(#):-13}" out="" chunk=""
@@ -183,6 +186,7 @@ SETUP
 
 @test "widgets: the module loads silently, idempotently, and only edits LBUFFER" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-widgets.zsh" || exit
     first_definition="${functions[_zdx_widget_insert]}"
     source "$1/functions/zdx-widgets.zsh" || exit
@@ -511,8 +515,12 @@ EOF
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
 
+# The plugin binds its chords only in an interactive shell ([[ -o interactive ]]),
+# so the binding tests start `zsh -f -i`; -f skips every startup file but the
+# system zshenv.
 @test "widgets: chords bind only while unbound and follow the override variables" {
   run zsh -f -i -c '
+    emulate -R zsh
     bindkey -M main "^Xp" backward-word
     export ZDX_KEY_INSERT_PORT="^[o"
     export ZDX_KEY_INSERT_VENV=""
@@ -534,6 +542,7 @@ EOF
   [[ "$output" == *"pr-widget:user:_zdx_insert_pr_widget"* ]]
 
   run zsh -f -i -c '
+    emulate -R zsh
     export ZDX_KEYBINDINGS=0
     source "$1/zdx-suite.plugin.zsh" || exit 90
     print -r -- "branch-widget:${widgets[zdx-insert-branch]-missing}"
@@ -546,6 +555,7 @@ EOF
   [[ "$output" == *"git-widget:missing"* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/zdx-suite.plugin.zsh" || exit 90
     (( ! ${+functions[_zdx_insert_widget]} ))
   ' _ "$TEST_SUITE_ROOT"
@@ -554,6 +564,7 @@ EOF
 
 @test "widgets: ZDX_KEY_GIT moves the git-menu chord and an empty value unbinds it" {
   run zsh -f -i -c '
+    emulate -R zsh
     source "$1/zdx-suite.plugin.zsh" || exit 90
     print -r -- "default:$(bindkey -M main -- "^G")"
   ' _ "$TEST_SUITE_ROOT"
@@ -561,6 +572,7 @@ EOF
   [[ "$output" == *'default:"^G" git-menu-widget'* ]]
 
   run zsh -f -i -c '
+    emulate -R zsh
     export ZDX_KEY_GIT="^[g"
     source "$1/zdx-suite.plugin.zsh" || exit 90
     print -r -- "moved:$(bindkey -M main -- "^[g")"
@@ -571,6 +583,7 @@ EOF
   [[ "$output" != *'previous:"^G" git-menu-widget'* ]]
 
   run zsh -f -i -c '
+    emulate -R zsh
     export ZDX_KEY_GIT=""
     source "$1/zdx-suite.plugin.zsh" || exit 90
     print -r -- "empty:$(bindkey -M main -- "^G")"
@@ -636,6 +649,7 @@ EOF
 
   export WIDGET_FZF_MATCH=.venv
   run zsh -f -i -c '
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     source "$1/zdx-suite.plugin.zsh" || exit 90
     (( ! ${+functions[_zdx_widget_insert]} )) || exit 1

@@ -2,9 +2,11 @@
 # shellcheck disable=SC2016,SC2030,SC2031
 
 setup() {
+  load test_helper
+  # The helper clears every GIT_* variable, so resolve the real git after it,
+  # and before the mock below shadows it.
   export GIT_RECOVERY_REAL_GIT
   GIT_RECOVERY_REAL_GIT="$(type -P git)"
-  load test_helper
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0
   unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR

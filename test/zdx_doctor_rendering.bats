@@ -35,6 +35,7 @@ teardown() { cleanup_sandbox; }
 
 @test "doctor rendering: version probe isolates fzf defaults and leaves caller state intact" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     export FZF_DEFAULT_OPTS="--header-lines=999"
     export FZF_DEFAULT_OPTS_FILE="$HOME/unreadable-options"
@@ -52,6 +53,7 @@ teardown() { cleanup_sandbox; }
 
 @test "doctor rendering: version failures and interruptions cannot become empty success" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     local expected_rc=0
     for expected_rc in 19 130 143; do
@@ -74,6 +76,7 @@ teardown() { cleanup_sandbox; }
 
 @test "doctor rendering: report distinguishes a valid fzf version from a failed probe" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     source "$2/doctor-fixture.zsh" || exit
     zdx-doctor >"$HOME/stdout" 2>"$HOME/valid-report"
@@ -98,6 +101,7 @@ teardown() { cleanup_sandbox; }
   for expected_rc in 130 143; do
     export MOCK_DOCTOR_FZF_RC="$expected_rc"
     run zsh -f -c '
+      emulate -R zsh
       source "$1/functions/zdx-doctor.zsh" || exit
       source "$2/doctor-fixture.zsh" || exit
       zdx-doctor >"$HOME/stdout"
@@ -114,6 +118,7 @@ teardown() { cleanup_sandbox; }
   mkdir "$copied_dir"
   cp "$TEST_SUITE_ROOT/functions/zdx-doctor.zsh" "$copied_dir/zdx-doctor.zsh"
   run zsh -f -c '
+    emulate -R zsh
     source "$1" || exit
     [[ "$_ZDX_DOCTOR_SOURCE_FILE" == "${1:A}" ]] || exit 1
     export TERM=$'\''vt100\033[31m\nforged-line'\''
@@ -138,6 +143,7 @@ teardown() { cleanup_sandbox; }
 
 @test "doctor rendering: explicit plain mode takes precedence over a custom theme" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     unset NO_COLOR
     export ZDX_FZF_PLAIN=1 ZDX_FZF_THEME="PRIVATE_THEME_VALUE" TERM=xterm-256color
@@ -181,6 +187,7 @@ _doctor_fixture_macos_tools() {
 @test "doctor rendering: WSL is detected from interop, late interop, or the kernel release" {
   local fixture="$TEST_TEMP_DIR/proc"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     unset WSL_DISTRO_NAME WSL_INTEROP
     OSTYPE=linux-gnu
@@ -211,6 +218,7 @@ _doctor_fixture_macos_tools() {
   _doctor_fixture_command apt-get 'apt fixture'
   _doctor_fixture_command dnf 'dnf fixture'
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     print -r -- "linux=$(PATH="$2"; _zdx_doctor_detect_pkg_manager Linux)"
     print -r -- "wsl=$(PATH="$2"; _zdx_doctor_detect_pkg_manager WSL)"
@@ -228,6 +236,7 @@ _doctor_fixture_macos_tools() {
 @test "doctor rendering: a healthy macOS host passes with platform rows not applicable" {
   _doctor_fixture_macos_tools
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     OSTYPE=darwin23.0
     PATH="$2"
@@ -255,6 +264,7 @@ _doctor_fixture_macos_tools() {
 @test "doctor rendering: command names that hide executables are reported, not counted" {
   _doctor_fixture_macos_tools
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     OSTYPE=darwin23.0
     PATH="$2"
@@ -264,6 +274,7 @@ _doctor_fixture_macos_tools() {
   [[ "$output" != *"Command Names"* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     typeset -gA _ZDX_LAZY_FILES=(git-status git-menu.zsh sys-info sys-menu.zsh)
     OSTYPE=darwin23.0
@@ -277,6 +288,7 @@ _doctor_fixture_macos_tools() {
   _doctor_fixture_command git-status 'shadowed fixture'
   _doctor_fixture_command sys-info 'shadowed fixture'
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     typeset -gA _ZDX_LAZY_FILES=(git-status git-menu.zsh sys-info sys-menu.zsh zdx zdx-menu.zsh)
     OSTYPE=darwin23.0
@@ -293,6 +305,7 @@ _doctor_fixture_macos_tools() {
   _doctor_fixture_macos_tools
   rm "$TEST_TEMP_DIR/doctor-bin/gtar"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     OSTYPE=darwin23.0
     PATH="$2"
@@ -309,6 +322,7 @@ _doctor_fixture_macos_tools() {
 @test "doctor rendering: Apple placeholders are reported missing instead of being run" {
   _doctor_fixture_command xcode-select 'xcode-select: error: no developer tools' 2
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     PATH="$2:$PATH"
     OSTYPE=darwin23.0
@@ -325,6 +339,7 @@ _doctor_fixture_macos_tools() {
   mkdir -p "$TEST_TEMP_DIR/CommandLineTools"
   _doctor_fixture_command xcode-select "$TEST_TEMP_DIR/CommandLineTools"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     PATH="$2:$PATH"
     OSTYPE=darwin23.0
@@ -343,6 +358,7 @@ _doctor_fixture_macos_tools() {
   rm "$TEST_TEMP_DIR/doctor-bin/git" "$TEST_TEMP_DIR/doctor-bin/python3"
   _doctor_fixture_command xcode-select 'xcode-select: error: no developer tools' 2
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     OSTYPE=darwin23.0
     PATH="$2:/usr/bin"
@@ -364,6 +380,7 @@ _doctor_fixture_macos_tools() {
   _doctor_fixture_command python3 'unexpected output'
   rm "$TEST_TEMP_DIR/doctor-bin/wg"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     OSTYPE=darwin23.0
     PATH="$2"
@@ -383,6 +400,7 @@ _doctor_fixture_macos_tools() {
   _doctor_fixture_macos_tools
   _doctor_fixture_command tar 'tar (GNU tar) 1.35'
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     unset WSL_DISTRO_NAME WSL_INTEROP
     OSTYPE=linux-gnu

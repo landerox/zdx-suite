@@ -733,6 +733,7 @@ EOF
 
   local completion="$TEST_SUITE_ROOT/completions/_dev-menu"
   run env COMPLETION="$completion" zsh -f -c '
+    emulate -R zsh
     typeset -a words=(dev-update-actions)
     _arguments() { print -rl -- "$@"; }
     source "$COMPLETION"

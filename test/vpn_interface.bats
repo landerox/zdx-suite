@@ -17,7 +17,8 @@ teardown() {
   local stdout_file="$TEST_TEMP_DIR/stdout"
   local stderr_file="$TEST_TEMP_DIR/stderr"
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$TEST_SUITE_ROOT/functions/vpn-menu.zsh'
@@ -31,7 +32,8 @@ teardown() {
 }
 
 @test "vpn interface: standalone sourcing works without the core runtime" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$TEST_SUITE_ROOT/functions/vpn-menu.zsh' || exit 1
@@ -47,7 +49,8 @@ teardown() {
 }
 
 @test "vpn interface: sourcing opens no fzf, prompts nothing, requests no sudo" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     fzf() { print -u2 -r -- 'FZF OPENED'; return 1; }
@@ -73,7 +76,8 @@ teardown() {
   done
   printf 'if true; then\n' > "$broken_root/vpn/vpn-control.zsh"
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     source '$broken_root/vpn-menu.zsh'
@@ -486,6 +490,7 @@ EOF
   chmod +x "$TEST_MOCK_BIN/fzf"
 
   cat > "$VPN_PTY_CHILD" <<'EOF'
+emulate -R zsh
 setopt MONITOR
 source "$ZSH_CUSTOM/functions/vpn-menu.zsh" || exit 91
 vpn-menu
@@ -499,6 +504,8 @@ EOF
     _vpn_pty_foreground_check() {
       zmodload zsh/zpty || return 80
       zmodload zsh/datetime || return 79
+      # Job control needs an interactive shell (-i) that owns the pseudo-terminal;
+      # -d and -f skip every startup file except the system zshenv.
       zpty -b vpn-foreground zsh -dfi "$VPN_PTY_CHILD" || return 81
       {
         # A wall-clock bound sized for slow hosted runners; the loop still
@@ -730,6 +737,7 @@ EOF
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_EAGER_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f _vpn_dispatch &>/dev/null || return 2
       print -rl -- ${(ok)functions[(I)vpn-*]} > "$2"
@@ -745,6 +753,7 @@ EOF
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_LAZY_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f vpn-menu &>/dev/null || return 2
       typeset -f _vpn_dispatch &>/dev/null && return 3
@@ -783,6 +792,7 @@ vpn_entry_points() {
       ZSH_CUSTOM="$TEST_SUITE_ROOT" \
       "$load_mode=1" \
       zsh -f -c '
+        emulate -R zsh
         source "$1/functions.zsh" || exit 90
         if [[ "$2" == ZDX_LAZY_LOAD ]]; then
           (( ${+functions[_vpn_dispatch]} )) && exit 91

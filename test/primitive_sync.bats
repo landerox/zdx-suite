@@ -40,6 +40,7 @@ teardown() {
 # PICK_OUTPUT and exits with PICK_STATUS.
 capture_fixture() {
   cat <<'ZSH'
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     command mkdir -m 700 "$HOME/picker-root"
     export TMPDIR="$HOME/picker-root"
@@ -132,6 +133,7 @@ leftovers=0" ]
 # result opened write-only must fail with 125 and the read error.
 builtin_read_fixture() {
   cat <<'ZSH'
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     local suite=""
     for suite in git sys dev py ws env file zdx; do
@@ -220,6 +222,7 @@ MOCK
   printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_MOCK_BIN/fzf"
   chmod +x "$TEST_MOCK_BIN/fzf"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     _fixture_error() { print -u2 -r -- "error: $1"; }
     _fixture_terminal() { return 0; }
@@ -247,6 +250,7 @@ MOCK
 
 @test "primitive sync: the earlier tk names only wrap the zdx helpers" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     [[ "$(_tk_fzf_color_opts)" == "$(_zdx_fzf_color_opts)" ]] || exit 91
     ZDX_FZF_TEMPLATES=1 _tk_fzf_nth_template_option --with-nth=2 || exit 92

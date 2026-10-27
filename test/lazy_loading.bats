@@ -9,7 +9,8 @@ teardown() {
 }
 
 @test "lazy_loading: stubs are registered instead of eagerly loading in standard shell" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -38,7 +39,8 @@ teardown() {
 }
 
 @test "lazy_loading: invoking a stub unsets it, sources actual file, and executes real function" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -70,7 +72,8 @@ teardown() {
 }
 
 @test "lazy_loading: every public command has a cold stub" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -105,6 +108,7 @@ teardown() {
 
 @test "lazy_loading: a direct command stub loads its suite on first use" {
   run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -136,6 +140,7 @@ teardown() {
 
 @test "lazy_loading: ZDX_DIRECT_COMMANDS=0 registers only the entrypoints" {
   run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -172,6 +177,7 @@ teardown() {
   cp "$TEST_SUITE_ROOT/functions.zsh" "$suite_copy/functions.zsh"
 
   local probe="
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export HOME='$HOME'
@@ -218,6 +224,7 @@ teardown() {
     > "$suite_copy/functions/zclean.zsh"
 
   run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export HOME='$HOME'
@@ -244,7 +251,8 @@ teardown() {
 }
 
 @test "lazy_loading: setting ZDX_EAGER_LOAD=1 bypasses lazy loading" {
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
     export HOME='$HOME'
     export PATH='$PATH'
@@ -275,7 +283,8 @@ typeset -g _ZDX_TEST_LOAD_TIME_CUSTOM="${ZSH_CUSTOM:-}"
 probe-menu() { return 0; }
 EOF
 
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     export ZSH_CUSTOM='$caller_custom'
@@ -317,6 +326,7 @@ EOF
   # so the plugins loaded at startup must stay recorded after it returns.
   # shellcheck disable=SC2016
   run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME "$(command -v zsh)" -f -c '
+    emulate -R zsh
     unset -m "ZDX_*"
     ZDX_EAGER_LOAD=1 NO_COLOR=1
     _omz_source() {
@@ -340,6 +350,7 @@ EOF
   : > "$registration_log"
 
   run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR
     unset BATS_TEST_DIRNAME
     export HOME='$HOME'

@@ -2178,6 +2178,7 @@ EOF
     : > "$UV_UPDATE_LOG"
     # shellcheck disable=SC2016
     run zsh -f -c '
+      emulate -R zsh
       unset TEST_TEMP_DIR BATS_TEST_DIRNAME
       export ZSH_CUSTOM="$1" ZDX_DIRECT_COMMANDS="$2" NO_COLOR=1
       source "$ZSH_CUSTOM/functions.zsh" || exit 90

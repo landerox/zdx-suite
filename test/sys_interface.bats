@@ -340,6 +340,7 @@ teardown() {
     HOME="$HOME" \
     PATH="$PATH" \
     zsh -f -c '
+      emulate -R zsh
       typeset probe_log="$3"
       fzf() { print -r -- "fzf" >>"$probe_log"; return 99; }
       sudo() { print -r -- "sudo" >>"$probe_log"; return 99; }
@@ -379,6 +380,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_LAZY_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f sys-menu &>/dev/null || return 2
       typeset -f _sys_dispatch &>/dev/null && return 3
@@ -407,6 +409,7 @@ teardown() {
     ZSH_CUSTOM="$TEST_SUITE_ROOT" \
     ZDX_EAGER_LOAD=1 \
     zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || return 1
       typeset -f _sys_dispatch &>/dev/null || return 2
 

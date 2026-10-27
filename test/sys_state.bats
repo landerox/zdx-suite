@@ -14,7 +14,8 @@ teardown() {
 run_sys_state_zsh() {
   local command_text="$1"
 
-  zsh -c "
+  zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
@@ -33,7 +34,8 @@ run_sys_state_zsh() {
 run_core_state_zsh() {
   local command_text="$1"
 
-  zsh -c "
+  zsh -f -c "
+    emulate -R zsh
     export HOME='$HOME'
     export PATH='$PATH'
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'

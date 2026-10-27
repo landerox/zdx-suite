@@ -20,6 +20,7 @@ teardown() {
 # and whether the zdx router exists.
 trust_start() {
   HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "probe=${ZDX_TRUST_PROBE:-unset}"
     print -r -- "refused=${(j:,:)_ZDX_REFUSED_USER_FILES}"
@@ -109,6 +110,7 @@ trust_start() {
 
 @test "trusted user code: read-only root-owned Nix store files are accepted" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     typeset -gA fake_state=(
       /nix "0 $(( 8#040755 ))"
@@ -146,6 +148,7 @@ trust_start() {
   printf '%s\n' 'demo-menu() { :; }' > "$plugins/demo/demo-menu.zsh"
   chmod 644 "$plugins/demo/demo-menu.zsh"
   run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
   ' _ "$TEST_SUITE_ROOT"
@@ -153,6 +156,7 @@ trust_start() {
 
   chmod 664 "$plugins/demo/demo-menu.zsh"
   run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
   ' _ "$TEST_SUITE_ROOT"
@@ -162,6 +166,7 @@ trust_start() {
   chmod 644 "$plugins/demo/demo-menu.zsh"
   chmod 775 "$plugins/demo"
   run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
   ' _ "$TEST_SUITE_ROOT"
@@ -174,6 +179,7 @@ trust_start() {
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=config' > "$TRUST_HOME/.config/zdx/config.zsh"
   chmod 666 "$TRUST_HOME/.config/zdx/config.zsh"
   run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null
     source "$1/functions/zdx-doctor.zsh"
     zdx-doctor </dev/null 2>&1
@@ -188,6 +194,7 @@ trust_start() {
   chmod 600 "$TRUST_HOME/.config/zdx/overrides.zsh"
   run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$TRUST_HOME" \
     ZDX_LAZY_LOAD=1 zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || exit 90
       git-status
       git-switch --help >/dev/null 2>&1
@@ -198,6 +205,7 @@ trust_start() {
   [ "$output" = $'override:git-status\nsuite=loaded\noverride:git-status' ]
 
   run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
     source "$1/functions.zsh" || exit 90
     git-status
   ' _ "$TEST_SUITE_ROOT"

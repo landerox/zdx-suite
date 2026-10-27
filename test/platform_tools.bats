@@ -89,7 +89,7 @@ SH
     local -i timeout_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 8 )) || return 93
-    _zdx_run_with_timeout 5 zsh -fc "exit 7"
+    _zdx_run_with_timeout 5 zsh -fc "emulate -R zsh; exit 7"
     print -r -- "bounded=$timeout_rc passthrough=$?"
   '
 
@@ -113,6 +113,7 @@ SH
     zmodload zsh/zselect || return 93
     export TMPDIR="$TEST_TEMP_DIR/alias/tmp"
     _zdx_run_with_timeout 3 zsh -fc "
+      emulate -R zsh
       sleep 60 </dev/null >/dev/null 2>&1 3>&- &
       print -r -- \$! > \"\$HOME/descendant.pid\"
       markers=(\"\$PLATFORM_CANONICAL\"/zdx-timeout.*(N))
@@ -165,6 +166,7 @@ SH
   chmod 777 "$TEST_TEMP_DIR/shared"
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -192,6 +194,7 @@ SH
   [ "$output" = "core:3 printf ok" ]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -225,21 +228,25 @@ _platform_pass_helpers() {
   export PLATFORM_THREE_LEVEL_TREE="$TEST_TEMP_DIR/three-level-tree.zsh"
   export PLATFORM_TRAPPING_CHILD="$TEST_TEMP_DIR/trapping-child.zsh"
   cat > "$PLATFORM_TREE" <<'ZSH'
+emulate -R zsh
 sleep 60 </dev/null >/dev/null 2>&1 3>&- &
 print -r -- $! > "$HOME/descendant.pid"
 wait
 ZSH
   cat > "$PLATFORM_TERM_IGNORING_TREE" <<'ZSH'
+emulate -R zsh
 trap '' TERM
-zsh -fc 'trap "" TERM; exec sleep 60' </dev/null >/dev/null 2>&1 3>&- &
+zsh -fc 'emulate -R zsh; trap "" TERM; exec sleep 60' </dev/null >/dev/null 2>&1 3>&- &
 print -r -- $! > "$HOME/descendant.pid"
 wait
 ZSH
   cat > "$PLATFORM_THREE_LEVEL_TREE" <<'ZSH'
+emulate -R zsh
 zsh -f "$PLATFORM_TRAPPING_CHILD" </dev/null >/dev/null 2>&1 3>&- &
 wait
 ZSH
   cat > "$PLATFORM_TRAPPING_CHILD" <<'ZSH'
+emulate -R zsh
 trap 'print -r -- TERM >| "$HOME/child.signal"; exit 143' TERM
 print -r -- $$ > "$HOME/child.pid"
 sleep 12 </dev/null >/dev/null 2>&1 3>&- &
@@ -411,6 +418,7 @@ ZSH
   _platform_pass_helpers
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -433,6 +441,7 @@ ZSH
   _platform_pass_helpers
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -457,6 +466,7 @@ ZSH
   _platform_pass_helpers
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -535,6 +545,7 @@ ZSH
   _platform_pass_helpers
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -653,7 +664,7 @@ ZSH
     source "$PLATFORM_ONE_SHOT_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
     local -F started=$EPOCHREALTIME
-    _zdx_run_with_timeout 1 zsh -fc "sleep 2"
+    _zdx_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; return 93; }
@@ -672,13 +683,14 @@ ZSH
   _platform_one_shot_no_timeout
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
     zmodload zsh/datetime || exit 92
     export TMPDIR="$3"
     local -F started=$EPOCHREALTIME
-    _sys_run_with_timeout 1 zsh -fc "sleep 2"
+    _sys_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; exit 93; }
@@ -699,7 +711,7 @@ ZSH
     export TMPDIR="$PLATFORM_TMP"
     TRAPTERM() { return 0; }
     local -F started=$EPOCHREALTIME
-    _zdx_run_with_timeout 6 zsh -fc "exit 7"
+    _zdx_run_with_timeout 6 zsh -fc "emulate -R zsh; exit 7"
     local -i command_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 3 )) || { print -r -- "returned after ${elapsed}s"; return 93; }
@@ -724,7 +736,7 @@ ZSH
     source "$PLATFORM_ONE_SHOT_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
     local -F started=$EPOCHREALTIME
-    _zdx_run_with_timeout 1 zsh -fc "sleep 2"
+    _zdx_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 7 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; return 93; }
@@ -743,13 +755,14 @@ ZSH
   _platform_one_shot_no_timeout
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
     zmodload zsh/datetime || exit 92
     export TMPDIR="$3"
     local -F started=$EPOCHREALTIME
-    _sys_run_with_timeout 1 zsh -fc "sleep 2"
+    _sys_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 7 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; exit 93; }
@@ -788,6 +801,7 @@ ZSH
   _platform_one_shot_no_timeout
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -822,7 +836,7 @@ zmodload zsh/system zsh/zselect || exit 93
     return 0
   }
   print -r -- "${sysparams[pid]}" >| "$HOME/caller.pid"
-  "$PLATFORM_BOUNDED" 2 zsh -fc "sleep 30 </dev/null >/dev/null 2>&1 3>&- & wait"
+  "$PLATFORM_BOUNDED" 2 zsh -fc "emulate -R zsh; sleep 30 </dev/null >/dev/null 2>&1 3>&- & wait"
 ) </dev/null >/dev/null 2>&1 3>&- &
 local -i attempt=0
 while [[ ! -s "$HOME/watchdog.pid" ]] && (( ++attempt <= 500 )); do zselect -t 2; done
@@ -862,6 +876,7 @@ ZSH
   _platform_orphaned_watchdog_program
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -905,6 +920,7 @@ ZSH
   _platform_pass_helpers
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -932,6 +948,7 @@ ZSH
 
 @test "platform tools: a caller's TRAPTERM cannot hold the standalone System watchdog" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     source "$2" || exit 92
@@ -939,7 +956,7 @@ ZSH
     export TMPDIR="$3"
     TRAPTERM() { return 0; }
     local -F started=$EPOCHREALTIME
-    _sys_run_with_timeout 6 zsh -fc "exit 7"
+    _sys_run_with_timeout 6 zsh -fc "emulate -R zsh; exit 7"
     local -i command_rc=$?
     local -F elapsed=$(( EPOCHREALTIME - started ))
     (( elapsed < 3 )) || { print -r -- "returned after ${elapsed}s"; exit 93; }
@@ -968,6 +985,7 @@ ZSH
   command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1 \
     || bounded=1
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/git-common.zsh" || exit 90
     (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
     _git_run_with_timeout 1 sleep 20 2>/dev/null
@@ -986,6 +1004,7 @@ ZSH
   mkdir -p "$bin"
   ln -s "$(command -v touch)" "$bin/touch"
   run env PATH="$bin" "$(command -v zsh)" -f -c '
+    emulate -R zsh
     source "$1/functions/git-common.zsh" || exit 90
     _git_run_with_timeout 5 touch "$2"
     print -r -- "rc=$?"
@@ -1102,6 +1121,7 @@ SH
 
 @test "platform tools: the plugin entrypoint keeps the external stat command" {
   run zsh -fc '
+    emulate -R zsh
     source "$1/zdx-suite.plugin.zsh" >/dev/null 2>&1 || exit 3
     (( ${+builtins[zstat]} )) || exit 4
     (( ! ${+builtins[stat]} )) || exit 5

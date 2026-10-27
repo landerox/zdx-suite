@@ -32,6 +32,7 @@ teardown() {
   for mode in eager lazy; do
     run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$API_HOME" \
       ZDX_LAZY_LOAD="$([[ "$mode" == lazy ]] && echo 1 || echo 0)" zsh -f -c '
+        emulate -R zsh
         source "$1/functions.zsh" || exit 90
         [[ "$ZDX_PLUGIN_API" == 1 ]] || exit 91
         ( ZDX_PLUGIN_API=2 ) 2>/dev/null && exit 92
@@ -56,6 +57,7 @@ MOCK
   chmod +x "$TEST_MOCK_BIN/fzf"
   run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$API_HOME" \
     ZDX_LAZY_LOAD=1 NO_COLOR=1 zsh -f -c '
+      emulate -R zsh
       source "$1/functions.zsh" || exit 90
       mytool-status
       print -r -- "loaded=${(j:,:)ZDX_LOADED_PLUGINS}"
@@ -69,6 +71,7 @@ MOCK
   [[ "$output" != *"refusing plugin"* ]]
 
   run zsh -f -c '
+    emulate -R zsh
     source "$1"
     mytool-status
   ' _ "$API_PLUGINS/mytool/mytool-menu.zsh"
@@ -81,6 +84,7 @@ MOCK
     > "$API_PLUGINS/mytool/_mytool-menu"
   chmod 644 "$API_PLUGINS/mytool/_mytool-menu"
   run env HOME="$API_HOME" zsh -f -c '
+    emulate -R zsh
     autoload -Uz compinit && compinit -u -d "$HOME/.zcompdump" || exit 90
     source "$1/zdx-suite.plugin.zsh" || exit 91
     print -r -- "menu=${_comps[mytool-menu]-} status=${_comps[mytool-status]-}"
@@ -92,6 +96,7 @@ MOCK
 
   printf '%s\n' '#compdef mytool-menu git-push' > "$API_PLUGINS/mytool/_mytool-menu"
   run env HOME="$API_HOME" zsh -f -c '
+    emulate -R zsh
     autoload -Uz compinit && compinit -u -d "$HOME/.zcompdump" || exit 90
     source "$1/zdx-suite.plugin.zsh" || exit 91
     print -r -- "push=${_comps[git-push]-}"

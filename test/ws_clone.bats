@@ -217,6 +217,9 @@ clone_count() {
   export MOCK_CLONE=terminal-interrupt
   export WS_PTY_LOG="$TEST_TEMP_DIR/pty.log"
   export WS_PTY_CODE='
+    emulate -R zsh
+    # emulate -R keeps job control; the -fic case depends on it.
+    [[ "$WS_PTY_MODE" == -fc || -o monitor ]] || exit 97
     source "$TEST_SUITE_ROOT/functions/ws-menu.zsh" || exit 98
     typeset -gA ZDX_GIT_IDENTITIES=(personal "Name|Jane Doe;Email|jane@example.com")
     git-menu() { print -r -- "git-menu:$*" >> "$MOCK_GIT_MENU_LOG"; }

@@ -167,6 +167,7 @@ assert_contract_matches() {
 @test "sys contract: contextual completions exclude invalid mode combinations" {
   run env COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_sys-menu" \
     zsh -f -c '
+      emulate -R zsh
       capture_specs() {
         local -a words=("$@")
         local -i CURRENT=${#words[@]}

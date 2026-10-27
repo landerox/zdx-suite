@@ -835,7 +835,7 @@ EOF
       builtin command "$@"
     }
 
-    _sys_run_with_timeout 1 zsh -c "sleep 5"
+    _sys_run_with_timeout 1 zsh -f -c "emulate -R zsh; sleep 5"
     local timeout_rc=$?
     local -a marker_files=("$TMPDIR"/zdx-timeout.*(N))
     (( ${#marker_files} == 0 )) || return 99
@@ -862,7 +862,7 @@ EOF
     # to start it, and it outlives the bound and the wait below. Its streams
     # never hold the BATS pipes open.
     _sys_run_with_timeout 3 zsh -fc \
-      "sleep 60 </dev/null >/dev/null 2>&1 3>&- &
+      "emulate -R zsh; sleep 60 </dev/null >/dev/null 2>&1 3>&- &
       print -r -- \$! > \"\$HOME/descendant.pid\"
       wait"
     local timeout_rc=$?

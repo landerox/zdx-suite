@@ -12,6 +12,7 @@ teardown() {
 
 @test "ws: standalone sourcing is silent, idempotent, and sets the sentinel last" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/ws-menu.zsh" || exit
     first_definition="${functions[ws-menu]}"
     source "$1/functions/ws-menu.zsh" || exit
@@ -43,6 +44,7 @@ EOF
   cp "$TEST_MOCK_BIN/find" "$TEST_MOCK_BIN/git"
   chmod +x "$TEST_MOCK_BIN/find" "$TEST_MOCK_BIN/fd" "$TEST_MOCK_BIN/git"
   run zsh -f -c '
+    emulate -R zsh
     export PATH="$2:$PATH"
     source "$1/functions/ws-menu.zsh"
   ' _ "$TEST_SUITE_ROOT" "$TEST_MOCK_BIN"
@@ -58,6 +60,7 @@ EOF
     "$TEST_SUITE_ROOT/functions/ws-common.zsh" "$broken_root/"
   cp "$TEST_SUITE_ROOT/functions/ws/ws-jump.zsh" "$broken_root/ws/"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/ws-menu.zsh"
     (( $? != 0 )) || exit 1
     [[ -z "${_WS_MENU_SOURCED:-}" ]] || exit 2
@@ -71,6 +74,7 @@ EOF
   local command_name
   for command_name in ws-menu ws-status ws-jump ws-clone; do
     run zsh -f -c '
+      emulate -R zsh
       source "$1/functions/ws-menu.zsh" || exit
       "$3" --help >"$2/help.stdout" 2>"$2/help.stderr" || exit
       [[ ! -s "$2/help.stdout" && -s "$2/help.stderr" ]]
@@ -79,6 +83,7 @@ EOF
     grep -q '^Usage' "$TEST_TEMP_DIR/help.stderr"
   done
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/ws-menu.zsh" || exit
     ws-menu --help 2>&1
   ' _ "$TEST_SUITE_ROOT"
@@ -216,6 +221,7 @@ EOF
 
 @test "ws: the cleared Git variables cover every name the installed Git reports" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/ws-menu.zsh" || exit 90
     print -rl -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"
   ' _ "$TEST_SUITE_ROOT"
@@ -244,6 +250,7 @@ EOF
 
 @test "ws: zdx routes ws to the suite and reserves the name for plugins" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     ws-menu() { print -r -- "ws-menu:$#:${(j.|.)@}"; }
     zdx ws ws-status --json || exit
@@ -258,6 +265,7 @@ EOF
 
 @test "ws: the master catalog lists the suite first in the Projects group" {
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
     _zdx_menu_model
   ' _ "$TEST_SUITE_ROOT"
@@ -271,6 +279,7 @@ EOF
   printf '#!/bin/sh\nexit 0\n' > "$TEST_TEMP_DIR/fd-bin/fdfind"
   chmod +x "$TEST_TEMP_DIR/fd-bin/fdfind"
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
     PATH="$2"
     _zdx_doctor_fd_command || exit 1
@@ -291,7 +300,8 @@ EOF
 
 @test "ws: lazy stubs load the suite and ws-jump changes the calling shell" {
   mkdir -p "$HOME/workspaces/github/personal/alpha"
-  run zsh -c "
+  run zsh -f -c "
+    emulate -R zsh
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME
     export HOME='$HOME' PATH='$PATH' WS_BASE_DIR='$HOME/workspaces'
     source '$TEST_SUITE_ROOT/functions.zsh' || exit 1

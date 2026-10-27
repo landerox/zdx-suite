@@ -2941,8 +2941,11 @@ EOF
 @test "sys maintenance: one interactive aggregate authorization covers every step" {
   has_util_linux_script || skip "util-linux script is unavailable"
 
+  # script runs its command through $SHELL -c; a Zsh there would start
+  # without -f.
+  export SHELL=/bin/sh
   run script -qefc \
-    "zsh -fc 'source \"$TEST_SUITE_ROOT/functions/sys-menu.zsh\" || exit 98
+    "zsh -fc 'emulate -R zsh; source \"$TEST_SUITE_ROOT/functions/sys-menu.zsh\" || exit 98
 _sys_capabilities_refresh_for_command() { return 0 }
 _sys_step_applies() { [[ \"\$1\" == \"update-fzf\" ]] }
 update-fzf() { print -r -- \"fzf:\${(j: :)@}\" >> \"\$MAINT_MUTATION_LOG\" }
@@ -3422,6 +3425,9 @@ EOF
   chmod +x "$TEST_MOCK_BIN/sudo"
 
   export ZDX_KEEPALIVE_PTY_CODE='
+    emulate -R zsh
+    # emulate -R keeps job control, without which no job UI could show.
+    [[ -o monitor ]] || exit 97
     source "$TEST_SUITE_ROOT/functions/sys-menu.zsh" || exit 98
     _SYS_CAPABILITIES=(
       architecture x86_64
@@ -3473,6 +3479,10 @@ EOF
     print -r -- PTY_AFTER
   '
 
+  # The keepalive must not show job UI, which needs an interactive shell (-i)
+  # on the pseudo-terminal; -f skips every startup file but the system zshenv.
+  # script runs its command through $SHELL -c, so that shell is /bin/sh.
+  export SHELL=/bin/sh
   run script -qefc 'NO_COLOR=1 zsh -fic "$ZDX_KEEPALIVE_PTY_CODE"' \
     /dev/null
 
@@ -4837,6 +4847,7 @@ EOF
 
   # Without the core, the suite root comes from this suite's own location.
   run zsh -f -c '
+    emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 98
     (( ! ${+_ZDX_FUNCTIONS_DIR} )) || exit 97
     [[ "$_SYS_CLEAN_SUITE_ROOT" == "${1:A}" ]] || exit 96
@@ -5947,7 +5958,7 @@ EOF
       return 0
     }
     probe_lock() {
-      zsh -c "zmodload zsh/system && zsystem flock -t 0 \"\$1\"" \
+      zsh -f -c "emulate -R zsh; zmodload zsh/system && zsystem flock -t 0 \"\$1\"" \
         zsh "$UPDATE_LOCK_PATH" 2>/dev/null
     }
 

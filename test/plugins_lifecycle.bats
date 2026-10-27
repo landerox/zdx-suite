@@ -486,6 +486,7 @@ MOCK
   local before
   before=$(plugin_tree_fingerprint "$PLUGINS_ROOT/alpha")
   zsh -fc '
+    emulate -R zsh
     zmodload zsh/system || exit 1
     zsystem flock -f fd "$1" || exit 1
     print -r -- held > "$2"
