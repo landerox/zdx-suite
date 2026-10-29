@@ -623,7 +623,7 @@ MOCK
   plugin_origin_commit alpha "Reenters the manager" \
     "$(plugin_source alpha v1)"$'\n''zdx-plugins --update alpha --yes || print -u2 -r -- "NESTED REFUSED"'
 
-  run run_zsh "zdx-plugins --install '$(plugin_origin_url alpha)' --yes"
+  run -0 run_zsh "zdx-plugins --install '$(plugin_origin_url alpha)' --yes"
 
   [[ "$output" == *"A zdx-plugins operation is already running in this shell."* ]]
   [[ "$output" == *"NESTED REFUSED"* ]]

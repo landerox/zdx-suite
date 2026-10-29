@@ -1848,6 +1848,13 @@ or a backdoor.
   error-level alert.
 - `CODEOWNERS` requests the maintainer's review.
 - CI runs pre-commit and BATS on pull requests.
+- ShellCheck checks BATS assertion semantics and parse errors, and a scanner
+  with positive and negative controls rejects unchecked non-final assertions
+  in literal Zsh programs (`sandbox_isolation.bats`). Python safety tests
+  record backend calls through PATH mocks, cleanup tests prove resource
+  creation before removal, and the status network guard detects forbidden
+  probes at both interior and final argument positions. Dynamic programs and
+  assertions inside functions or control-flow bodies still require review.
 - The Ubuntu quality gate installs fzf so native input-row visibility and
   inherited-option isolation checks run instead of skipping for a missing tool.
 - The macOS workflow runs the full BATS suite on an Apple Silicon runner with

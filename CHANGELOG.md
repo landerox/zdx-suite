@@ -31,6 +31,9 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Enforce assertions in BATS safety and contract tests, record Python backend
+  calls through PATH mocks, and reject unchecked non-final literal Zsh
+  assertions with a portable scanner and ShellCheck gates.
 - Run BATS in a separate session so parallel Zsh NUL readers cannot stop the
   suite on a terminal; forward INT, TERM, and HUP and wait for BATS to exit.
 - System: `clean-system` plans and dry runs list every superseded Codex,

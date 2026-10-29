@@ -213,7 +213,7 @@ status_zsh() {
       [ "$count" -ge 1 ]
     fi
   done
-  ! grep -RIn --include='*.zsh' 'v0\.[0-9]*\.[0-9]*\\n' "$TEST_SUITE_ROOT/functions"
+  ! grep -RIn --include='*.zsh' 'v0\.[0-9]*\.[0-9]*\\n' "$TEST_SUITE_ROOT/functions" || false
 }
 
 @test "zdx status: JSON reports a repository with an upstream, changes, and workspace" {
@@ -232,7 +232,7 @@ status_zsh() {
   [ "$(wc -l < "$document")" -eq 1 ]
   [ "$(head -c 1 "$document")" = "{" ]
   [ "$(tail -c 2 "$document" | od -An -c | tr -d ' ')" = '}\n' ]
-  run grep -c $'\033' "$document"
+  run -1 grep -c $'\033' "$document"
   [ "$output" -eq 0 ]
   [ "$("$STATUS_REAL_JQ" -r 'keys_unsorted[0]' "$document")" = schema ]
   "$STATUS_REAL_JQ" -e --arg root "$repo" '
@@ -275,7 +275,7 @@ status_zsh() {
   [ "$status" -eq 0 ]
   [ ! -s "$TEST_TEMP_DIR/text.out" ]
   local report="$TEST_TEMP_DIR/text.err"
-  run grep -c $'\033' "$report"
+  run -1 grep -c $'\033' "$report"
   [ "$output" -eq 0 ]
   [ "$(grep -c '^════ ZDX Status ════$' "$report")" -eq 1 ]
   grep -Fxq '▸ Repository' "$report"
@@ -374,7 +374,7 @@ status_zsh() {
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | "$STATUS_REAL_JQ" -e '
     .repository.operation == "merge" and .repository.conflicted == 1'
-  run status_zsh 'NO_COLOR=1 zdx-status' "$repo"
+  run -0 status_zsh 'NO_COLOR=1 zdx-status' "$repo"
   [[ "$output" == *"Operation:         merge in progress"* ]]
 
   git -C "$repo" merge --abort
@@ -385,8 +385,26 @@ status_zsh() {
     .repository.detached == true and .repository.branch == null
     and (.repository.commit | test("^[0-9a-f]{40}$"))
     and .repository.upstream == null and .repository.ahead == null'
-  run status_zsh 'NO_COLOR=1 zdx-status' "$repo"
+  run -0 status_zsh 'NO_COLOR=1 zdx-status' "$repo"
   [[ "$output" == *"Branch:            detached at "* ]]
+}
+
+# Match a complete recorded word, including the final word of a probe.
+status_network_probe_seen() {
+  grep -Eq '(^| )(fetch|pull|ls-remote|sudo|curl|gh)( |$)' "$1"
+}
+
+@test "zdx status: the network recorder detects every forbidden probe word" {
+  local probe
+  for probe in '3 git fetch' '5 git pull' '5 git ls-remote' \
+    '3 sudo -n' '3 curl' '3 gh api'; do
+    printf '%s\n' "$probe" > "$STATUS_PROBE_LOG"
+    run status_network_probe_seen "$STATUS_PROBE_LOG"
+    [ "$status" -eq 0 ]
+  done
+  printf '%s\n' '3 git config fetch.prune' > "$STATUS_PROBE_LOG"
+  run status_network_probe_seen "$STATUS_PROBE_LOG"
+  [ "$status" -eq 1 ]
 }
 
 @test "zdx status: every external probe is bounded and a timeout leaves null facts" {
@@ -416,7 +434,7 @@ status_zsh() {
   grep -Eq '^[1-9][0-9]* git config$' "$STATUS_PROBE_LOG"
   grep -Eq '^[1-9][0-9]* df -P$' "$STATUS_PROBE_LOG"
   # Nothing reaches the network or asks for privilege.
-  run grep -Eq ' (fetch|pull|ls-remote|sudo|curl|gh) ' "$STATUS_PROBE_LOG"
+  run status_network_probe_seen "$STATUS_PROBE_LOG"
   [ "$status" -eq 1 ]
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
@@ -643,7 +661,7 @@ EOF
     commit -q -m fixture
   local short
   short=$(git -C "$copy" rev-parse --short=7 HEAD)
-  run zsh -f -c '
+  run -0 zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
@@ -651,7 +669,7 @@ EOF
   [ "$output" = "ZDX (Zsh Developer Experience) v$release ($short)" ]
 
   printf '\n' >> "$copy/functions/zdx-status.zsh"
-  run zsh -f -c '
+  run -0 zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
@@ -672,7 +690,7 @@ EOF
   git -C "$outer" add -A
   git -C "$outer" -c user.name=T -c user.email=t@example.invalid \
     commit -q -m outer
-  run zsh -f -c '
+  run -0 zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     zdx --version
@@ -702,9 +720,9 @@ status_tool_path() {
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | "$STATUS_REAL_JQ" -e '
     .project.files == ["dbt_project.yml"] and .project.dbt_target == "prod"'
-  run status_zsh 'DBT_TARGET="prod;rm -rf" zdx-status --json 2>/dev/null' "$TEST_TEMP_DIR/lake"
+  run -0 status_zsh 'DBT_TARGET="prod;rm -rf" zdx-status --json 2>/dev/null' "$TEST_TEMP_DIR/lake"
   printf '%s\n' "$output" | "$STATUS_REAL_JQ" -e '.project.dbt_target == null'
-  run status_zsh 'unset DBT_TARGET; NO_COLOR=1 zdx-status 2>&1' "$TEST_TEMP_DIR/lake"
+  run -0 status_zsh 'unset DBT_TARGET; NO_COLOR=1 zdx-status 2>&1' "$TEST_TEMP_DIR/lake"
   [[ "$output" == *"dbt target:"*"profile default (DBT_TARGET unset)"* ]]
 }
 
@@ -740,7 +758,7 @@ MOCK
   [ "$(grep -cv '^config view --minify -o jsonpath=' "$STATUS_PROBE_LOG")" -eq 0 ]
 
   chmod 644 "$HOME/.kube/config"
-  run env PATH="$bin" "$(command -v zsh)" -f -c '
+  run -0 env PATH="$bin" "$(command -v zsh)" -f -c '
     emulate -R zsh
     source "$1/functions.zsh" || exit 90
     zdx-status --json 2>/dev/null
@@ -748,7 +766,7 @@ MOCK
   printf '%s\n' "$output" | "$STATUS_REAL_JQ" -e '.kubernetes.kubeconfig_private == false'
 
   rm "$bin/kubectl"
-  run env PATH="$bin" "$(command -v zsh)" -f -c '
+  run -0 env PATH="$bin" "$(command -v zsh)" -f -c '
     emulate -R zsh
     source "$1/functions.zsh" || exit 90
     zdx-status --json 2>/dev/null

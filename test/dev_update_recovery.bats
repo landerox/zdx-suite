@@ -214,12 +214,14 @@ run_hook_update() {
 @test "dev recovery: the pre-commit update removes its PyPI cache" {
   write_hook_project
 
-  run run_zsh '
+  run -0 run_zsh '
     cd "$DEV_PROJECT"
     _dev_pypi_check_connectivity() { return 0; }
     # Like the real query, create the invocation cache on first use.
     _dev_pypi_latest() {
       _dev_pypi_cache_init || return 1
+      [[ -d "$_DEV_PYPI_CACHE_DIR" ]] || return 91
+      print -r -- "$_DEV_PYPI_CACHE_DIR" > "$HOME/cache-created"
       print -r -- "1.0.0"
     }
     _dev_exact_project_python_tool_runner() {
@@ -228,5 +230,7 @@ run_hook_update() {
     dev-update-precommit
   '
 
+  [ -s "$HOME/cache-created" ]
+  [ ! -d "$(cat "$HOME/cache-created")" ]
   [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'zdx-dev-pypi.*' -print -quit)" ]
 }

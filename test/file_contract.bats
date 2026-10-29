@@ -23,12 +23,29 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+file_fixture_unique() {
+  awk -F '\t' '
+    NF != 2 || seen[$1]++ { bad = 1 }
+    END { exit (bad || NR != 5) }
+  ' "$1"
+}
+
 @test "file contract: frozen public command fixture has five unique commands" {
-  run awk -F '\t' '
-    NF != 2 || seen[$1]++ { exit 1 }
-    END { exit !(NR == 5) }
-  ' "$TEST_SUITE_ROOT/test/fixtures/file-public-commands.tsv"
+  run file_fixture_unique "$TEST_SUITE_ROOT/test/fixtures/file-public-commands.tsv"
   [ "$status" -eq 0 ]
+}
+
+@test "file contract: a duplicate or malformed last fixture row is rejected" {
+  local fixture="$TEST_SUITE_ROOT/test/fixtures/file-public-commands.tsv"
+  head -n 4 "$fixture" > "$HOME/duplicate.tsv"
+  head -n 1 "$fixture" >> "$HOME/duplicate.tsv"
+  run file_fixture_unique "$HOME/duplicate.tsv"
+  [ "$status" -eq 1 ]
+
+  head -n 4 "$fixture" > "$HOME/malformed.tsv"
+  printf 'missing-column\n' >> "$HOME/malformed.tsv"
+  run file_fixture_unique "$HOME/malformed.tsv"
+  [ "$status" -eq 1 ]
 }
 
 @test "file contract: junk cleanup is the last menu section and names every type" {

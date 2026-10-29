@@ -1,0 +1,79 @@
+# Bad: both quote forms, an escaped single quote, every check family,
+# direct launches with combined flags, continuations, and nested shell code.
+run run_zsh '
+  [[ A == B ]]
+  print after-single
+'
+run run_zsh "
+  [[ \"A\" == B ]]
+  print after-double
+"
+run run_zsh 'print '\''quoted'\''; [ A = B ]; print after-escaped'
+run /bin/zsh -fc 'emulate -R zsh; test A = B; print after-test'
+run zsh \
+  -f \
+  -c '
+  emulate -R zsh
+  [[ A == \
+    B ]]
+  print after-continuation
+'
+run bash -c 'run_zsh '\''
+  (( count > 0 ))
+  print after-nested
+'\'''
+run run_zsh 'grep -qE pattern file; print after-grep'
+run run_zsh '! helper-command; print after-negation'
+run run_zsh '[[ A == B && C == D ]]; print after-expression'
+
+# Good: the status is final or explicitly handled. Dynamic code, functions,
+# and control-flow bodies are outside this guard's documented static scope.
+run run_zsh '[[ A == B ]] || exit 3; print guarded'
+run run_zsh '[[ A == B ]] && print conditional'
+run run_zsh 'print before-final; [[ A == B ]]'
+run run_zsh '(( count++ )); (( count += 1 )); print arithmetic-update'
+run run_zsh 'if [[ A == B ]]; then print branch; fi; print end'
+run run_zsh 'helper() { [[ A == B ]]; }; print function-definition'
+run run_zsh "$program"
+run zsh -f -c "$program"
+printf '%s\n' 'run_zsh fake-program'
+
+# Bad: a following compound command still discards the assertion's status;
+# quoted data containing list operators does not handle a failed command.
+run run_zsh '[[ A == B ]]; if true; then print end; fi'
+run run_zsh '[[ A == B ]]; helper() { print end; }'
+run run_zsh 'grep -q "left||right" file; print end'
+run run_zsh 'test A = "left&&right"; print end'
+
+# Good: real list operators following quoted data still handle status.
+run run_zsh 'grep -q "left||right" file || exit 4; print end'
+run run_zsh 'test A = "left&&right" && print conditional'
+
+# Bad: quoted data in an unrelated heredoc cannot hide a later literal.
+cat <<'DATA'
+'
+DATA
+run run_zsh '[[ A == B ]]; print after-data-heredoc'
+
+# Bad: shifts and here-strings do not consume later command strings.
+(( value = 1 << 2 ))
+run run_zsh '[[ A == B ]]; print after-shift'
+read -r value <<< 'data'
+run run_zsh '[[ A == B ]]; print after-here-string'
+
+# Bad: tab-stripping and queued delimiters still resume after data.
+cat <<-TABS
+	'
+	TABS
+run run_zsh '[[ A == B ]]; print after-tab-heredoc'
+cat <<FIRST <<'SECOND'
+'
+FIRST
+"
+SECOND
+run run_zsh '[[ A == B ]]; print after-queued-heredocs'
+
+# Good: commands inside ordinary data heredocs are not launches.
+cat <<'DATA'
+run run_zsh '[[ A == B ]]; print data-only'
+DATA

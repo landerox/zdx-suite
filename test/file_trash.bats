@@ -125,8 +125,10 @@ mount_table() {
   [[ "$output" == *"Trashed a file.txt as "* ]]
   [[ "$output" == *"Trashed -rf as "* ]]
   [[ "$output" == *"Trash completed: 4 items moved."* ]]
-  [ ! -e "$WORK/a file.txt" ] && [ ! -e "$WORK/-rf" ]
-  [ ! -e "$WORK/dir" ] && [ ! -L "$WORK/link" ]
+  [ ! -e "$WORK/a file.txt" ]
+  [ ! -e "$WORK/-rf" ]
+  [ ! -e "$WORK/dir" ]
+  [ ! -L "$WORK/link" ]
   [ "$(trash_ids | wc -l)" -eq 4 ]
 
   # Items moved by rename: the inode survives in the trash.
@@ -154,11 +156,13 @@ mount_table() {
   [ "$(cat "$WORK/a file.txt")" = spaces ]
   [ "$(cat "$WORK/-rf")" = dash ]
   [ "$(cat "$WORK/dir/nested/inner")" = inner ]
-  [ -L "$WORK/link" ] && [ "$(readlink "$WORK/link")" = "a file.txt" ]
+  [ -L "$WORK/link" ]
+  [ "$(readlink "$WORK/link")" = "a file.txt" ]
   [ "$(file_identity "$WORK/a file.txt")" = "$before_file" ]
   [ "$(file_identity "$WORK/dir")" = "$before_dir" ]
   [ -z "$(trash_ids)" ]
-  [ -z "$(ls -A "$TRASH/files")" ] && [ -z "$(ls -A "$TRASH/info")" ]
+  [ -z "$(ls -A "$TRASH/files")" ]
+  [ -z "$(ls -A "$TRASH/info")" ]
 }
 
 @test "file trash: the trash is private and records use the freedesktop format" {
@@ -247,7 +251,8 @@ mount_table() {
   [ "$status" -eq 0 ]
   [ "$(cat "$HOME/outside/target")" = secret ]
   [ -f "$HOME/outside/target" ]
-  [ ! -L "$WORK/escape" ] && [ ! -L "$WORK/escape-dir" ]
+  [ ! -L "$WORK/escape" ]
+  [ ! -L "$WORK/escape-dir" ]
 
   local id escape_id=""
   for id in $(trash_ids); do
@@ -382,7 +387,8 @@ SH
   [ "$status" -eq 1 ]
   [[ "$output" == *"Could not move the exact target into the trash."* ]]
   [[ "$output" == *"Trash failed: 2 of 2 items failed."* ]]
-  [ -f "$WORK/one" ] && [ -f "$WORK/two" ]
+  [ -f "$WORK/one" ]
+  [ -f "$WORK/two" ]
   [ -z "$(trash_ids)" ]
   [ -z "$(ls -A "$TRASH/info")" ]
 
@@ -391,7 +397,8 @@ SH
   [ "$status" -eq 130 ]
   [[ "$output" == *"Trash interrupted; later items were not changed."* ]]
   [[ "$output" == *"Not run: 1 item"* ]]
-  [ -f "$WORK/one" ] && [ -f "$WORK/two" ]
+  [ -f "$WORK/one" ]
+  [ -f "$WORK/two" ]
   [ -z "$(ls -A "$TRASH/info")" ]
 }
 
@@ -527,7 +534,8 @@ SH
   [ "$status" -eq 1 ]
   [[ "$output" == *"changed identity before execution"* ]]
   [[ "$output" != *"Restored"* ]]
-  [ ! -e "$WORK/one" ] && [ ! -e "$WORK/two" ]
+  [ ! -e "$WORK/one" ]
+  [ ! -e "$WORK/two" ]
 
   run run_zsh "
     _file_confirm_mutation() { command rm -f -- \"\$TRASH/files/$one_id\"; }
@@ -607,8 +615,10 @@ SH
   [ "$status" -eq 0 ]
   [[ "$output" == *"Deleted $old_id"* ]]
   [[ "$output" == *"Purge completed: 1 item deleted."* ]]
-  [ ! -e "$TRASH/files/$old_id" ] && [ ! -e "$TRASH/info/$old_id.trashinfo" ]
-  [ -e "$TRASH/files/$new_id" ] && [ -e "$TRASH/files/$dir_id" ]
+  [ ! -e "$TRASH/files/$old_id" ]
+  [ ! -e "$TRASH/info/$old_id.trashinfo" ]
+  [ -e "$TRASH/files/$new_id" ]
+  [ -e "$TRASH/files/$dir_id" ]
 
   run run_zsh 'file-trash purge --older-than 30 --yes'
   [ "$status" -eq 0 ]
@@ -676,7 +686,8 @@ SH
   [ "$status" -eq 1 ]
   [[ "$output" == *"must be owned by you and not group/world-writable"* ]]
   [ ! -e "$TEST_TEMP_DIR/shared/planted" ]
-  [ ! -e "$HOME/escape" ] && [ ! -e "$TEST_TEMP_DIR/escape" ]
+  [ ! -e "$HOME/escape" ]
+  [ ! -e "$TEST_TEMP_DIR/escape" ]
   [ ! -e "$WORK" ] || [ -z "$(ls -A "$WORK")" ]
   [ -f "$TEST_TEMP_DIR/elsewhere.trashinfo" ]
 
@@ -684,7 +695,8 @@ SH
   run run_zsh 'file-trash purge --all --yes'
   [ "$status" -eq 0 ]
   [[ "$output" == *"Purge completed: 13 items deleted."* ]]
-  [ -z "$(ls -A "$TRASH/files")" ] && [ -z "$(ls -A "$TRASH/info")" ]
+  [ -z "$(ls -A "$TRASH/files")" ]
+  [ -z "$(ls -A "$TRASH/info")" ]
   [ -f "$TEST_TEMP_DIR/elsewhere.trashinfo" ]
 }
 
@@ -779,7 +791,8 @@ SH
 
   run run_zsh 'file-trash'
   [ "$status" -eq 0 ]
-  [ ! -e "$WORK/one" ] && [ ! -e "$WORK/two" ]
+  [ ! -e "$WORK/one" ]
+  [ ! -e "$WORK/two" ]
 
   # The first picker selects the item row; the action dialog selects restore.
   export TRASH_PICK_ID="$two_id" TRASH_PICK_COUNT="$TEST_TEMP_DIR/picks"

@@ -1,5 +1,11 @@
 # test_helper.bash - shared helper for BATS test suite
 
+# Status assertions use run -N (BATS 1.5+). Plain Bash probes also source this
+# helper, so declare the requirement only when the BATS API is available.
+if declare -F bats_require_minimum_version >/dev/null; then
+  bats_require_minimum_version 1.5.0
+fi
+
 # Bash before 4.1 does not apply errexit to a failing [[ ]] or (( )) that is
 # not a test's last command, so most assertions would pass without checking
 # anything. Refuse such a shell (macOS /bin/bash is 3.2) instead of reporting

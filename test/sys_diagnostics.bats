@@ -42,17 +42,17 @@ teardown() {
     memory_record=$(_sys_linux_diag_memory_record) || return 1
     IFS=$'\''\t'\'' read -r total_bytes available_bytes \
       swap_total_bytes swap_free_bytes <<< "$memory_record"
-    [[ "$total_bytes" =~ ^[0-9]+$ && "$available_bytes" =~ ^[0-9]+$ ]]
-    [[ "$swap_total_bytes" =~ ^[0-9]+$ && "$swap_free_bytes" =~ ^[0-9]+$ ]]
+    [[ "$total_bytes" =~ ^[0-9]+$ && "$available_bytes" =~ ^[0-9]+$ ]] || exit 31
+    [[ "$swap_total_bytes" =~ ^[0-9]+$ && "$swap_free_bytes" =~ ^[0-9]+$ ]] || exit 32
 
     cpu_record=$(_sys_linux_diag_cpu_record) || return 2
     IFS=$'\''\t'\'' read -r core_count cpu_model <<< "$cpu_record"
-    [[ "$core_count" =~ ^[0-9]+$ && -n "$cpu_model" ]]
+    [[ "$core_count" =~ ^[0-9]+$ && -n "$cpu_model" ]] || exit 33
 
     runtime_record=$(_sys_linux_diag_runtime_record) || return 3
     IFS=$'\''\t'\'' read -r uptime_seconds load_one load_five load_fifteen \
       <<< "$runtime_record"
-    [[ "$uptime_seconds" =~ ^[0-9]+$ ]]
+    [[ "$uptime_seconds" =~ ^[0-9]+$ ]] || exit 34
     [[ -n "$load_one" && -n "$load_five" && -n "$load_fifteen" ]]
   '
 
@@ -676,7 +676,7 @@ EOF
   grep -q "1 zombie process found" "$HOME/health.stderr"
   grep -q "1 failed service" "$HOME/health.stderr"
   grep -q "2 OOM events in the available kernel log" "$HOME/health.stderr"
-  ! grep -q "(s)\|(es)" "$HOME/health.stderr" || false
+  ! grep -Eq "[(]s[)]|[(]es[)]" "$HOME/health.stderr" || false
   grep -q "broken.service" "$HOME/health.stderr"
   grep -q "kernel-test" "$HOME/health.stderr"
 }

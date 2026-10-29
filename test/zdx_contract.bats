@@ -204,7 +204,7 @@ teardown() {
     }
     END {
       verify()
-      exit invalid || hook_count != 21
+      exit invalid || hook_count != 22
     }
   ' "$pre_commit"
   grep -Fq 'entry: just check' "$pre_commit"
@@ -469,8 +469,16 @@ teardown() {
     export TMPDIR="$HOME/tmp"
     mkdir -p "$TMPDIR"
     source "$1/functions/zdx-menu.zsh" || exit
+    _zdx_fzf() {
+      command cat >/dev/null
+      local -a captures=("$TMPDIR"/zdx-zdx-fzf.*(N/))
+      (( ${#captures} == 1 )) || return 91
+      print -r -- "$captures[1]" > "$HOME/capture-created"
+      return 130
+    }
     zdx-menu || exit
-    local -a leftovers=("$TMPDIR"/zdx-menu-fzf.*(N))
+    [[ -s "$HOME/capture-created" ]] || exit 92
+    local -a leftovers=("$TMPDIR"/zdx-zdx-fzf.*(N))
     (( ${#leftovers[@]} == 0 ))
   ' _ "$TEST_SUITE_ROOT" "$HOME" "$TEST_MOCK_BIN"
 
@@ -637,7 +645,7 @@ ZSH
   [ "$status" -eq 0 ]
   [ "$(cat "$MOCK_APT_LOG")" = $'apt-get <update>\napt-get <install> <-y> <pkg.one> <pkg-two>' ]
   # Only sudo -v and sudo -n are used, each package command by absolute path.
-  run grep -c '' "$MOCK_SUDO_LOG"
+  run -0 grep -c '' "$MOCK_SUDO_LOG"
   [ "$output" -eq 5 ]
   [ "$(sed -n 1p "$MOCK_SUDO_LOG")" = "sudo -v" ]
   [ "$(grep -cvE '^sudo (-v|-n true|-n /[^ ]+/apt-get (update|install -y pkg\.one pkg-two))$' "$MOCK_SUDO_LOG")" -eq 0 ]

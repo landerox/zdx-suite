@@ -277,11 +277,11 @@ clone_count() {
   [[ "$output" == *"URL:               ssh://git@github.com/acme/other.git"* ]]
   [[ "$output" == *"SSH alias:         none (github-work does not resolve to github.com)"* ]]
 
-  run run_zsh 'NO_COLOR=1 ws-clone ssh://git@github.com:22/acme/third.git --identity personal --dry-run'
+  run -0 run_zsh 'NO_COLOR=1 ws-clone ssh://git@github.com:22/acme/third.git --identity personal --dry-run'
   [[ "$output" == *"URL:               ssh://git@github-personal:22/acme/third.git"* ]]
 
   # HTTPS URLs authenticate through credential helpers and keep their host.
-  run run_zsh 'NO_COLOR=1 ws-clone https://github.com/acme/web.git --identity personal --dry-run'
+  run -0 run_zsh 'NO_COLOR=1 ws-clone https://github.com/acme/web.git --identity personal --dry-run'
   [[ "$output" == *"URL:               https://github.com/acme/web.git"* ]]
   [[ "$output" != *"SSH alias"* ]]
 }

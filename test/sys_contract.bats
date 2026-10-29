@@ -306,8 +306,8 @@ assert_contract_matches() {
     }
 
     TMPDIR="$picker_root" sys-menu
-    [[ "$(<"$HOME/fzf-subshell")" == "0" ]]
-    [[ -s "$dispatch_log" ]]
+    [[ "$(<"$HOME/fzf-subshell")" == "0" ]] || exit 31
+    [[ -s "$dispatch_log" ]] || exit 32
     [[ -z "$(command find "$picker_root" -mindepth 1 -print -quit)" ]]
   '
 

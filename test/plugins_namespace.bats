@@ -90,7 +90,7 @@ ZSH
 noisy-menu() { :; }
 log() { print -r -- "$*"; }
 ZSH
-  run ns_start '(( ${+functions[log]} )) || print -r -- "log=removed"'
+  run -0 ns_start '(( ${+functions[log]} )) || print -r -- "log=removed"'
   [[ "$output" == *"refusing plugin 'noisy'"*": log"* ]]
   [[ "$output" == *"log=removed"* ]]
 }
@@ -113,7 +113,7 @@ ZSH
 zdx-status() { print -r -- hijacked; }
 return 3
 ZSH
-  run ns_start '[[ "${functions[zdx-status]}" != *hijacked* ]] && print -r -- "restored"'
+  run -0 ns_start '[[ "${functions[zdx-status]}" != *hijacked* ]] && print -r -- "restored"'
   [[ "$output" == *"refusing plugin 'broken'"* ]]
   [[ "$output" == *"restored"* ]]
 }

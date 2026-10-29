@@ -537,7 +537,7 @@ EOF
 
   run run_zsh '
     _dev_show_diff demo > "$HOME/diff-data" 2> "$HOME/diff-ui"
-    [[ ! -s "$HOME/diff-data" ]]
+    [[ ! -s "$HOME/diff-data" ]] || exit 31
     [[ -s "$HOME/diff-ui" ]]
   '
 
@@ -1072,6 +1072,11 @@ EOF
       _dev_pypi_check_connectivity() { return 0; }
       dev-check-health
     '
+    if [[ "$expected" == satisfies ]]; then
+      [ "$status" -eq 0 ]
+    else
+      [ "$status" -eq 1 ]
+    fi
     [[ "$output" == *"$expected"* ]] || { printf '%s\n' "$spec" "$output"; false; }
   done
 }

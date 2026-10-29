@@ -1269,7 +1269,7 @@ MOCK
 @test "dev health: a .python-version comment line is accepted like uv does" {
   printf '# Managed by uv\n3.12\n' > "$DEV_PROJECT/.python-version"
 
-  run run_zsh '
+  run -0 run_zsh '
     cd "$DEV_PROJECT"
     _dev_read_python_pin 2>"$TEST_TEMP_DIR/pin.stderr"
     print -r -- "pin_status=$? pin=$REPLY"
