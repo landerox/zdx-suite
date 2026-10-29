@@ -178,10 +178,16 @@ trust_start() {
   chmod +x "$TEST_MOCK_BIN/fzf"
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=config' > "$TRUST_HOME/.config/zdx/config.zsh"
   chmod 666 "$TRUST_HOME/.config/zdx/config.zsh"
-  run -0 env HOME="$TRUST_HOME" zsh -f -c '
+  # Keep the unrelated deny-by-default gh mock out of version diagnostics.
+  printf '%s\n' "#!$BASH" \
+    '[[ "$#" -eq 1 && "$1" == --version ]] || exit 97' \
+    'printf "%s\n" "gh version 2.45.0 (fixture)"' > "$TEST_MOCK_BIN/gh"
+  chmod -- 755 "$TEST_MOCK_BIN/gh"
+  run -1 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null
     source "$1/functions/zdx-doctor.zsh"
+    _zdx_doctor_detect_pkg_manager() { print -r -- none; }
     zdx-doctor </dev/null 2>&1
   ' _ "$TEST_SUITE_ROOT"
   [[ "$output" == *"[User Files]"* ]]
