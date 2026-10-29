@@ -1861,6 +1861,13 @@ or a backdoor.
   gates through locked uv operations. A stale lock fails without being rewritten after the commit.
   Every file hook is explicitly restricted to `pre-commit`; pre-push executes
   only the single complete aggregate regardless of upstream manifest defaults.
+- The contributor test runner starts BATS without a controlling terminal,
+  using `setsid` or Perl's POSIX implementation, so terminal job-control stops
+  cannot freeze parallel workers and their timeout watchdogs. It forwards
+  INT, TERM, and HUP and waits for BATS. Real PTY probes cover both session
+  paths on Linux, and a bounded controller checks signal forwarding on both
+  supported host families. Without either session tool the runner warns and
+  terminal runs retain the stop risk (`sandbox_isolation.bats`).
 - The shared test sandbox clears inherited package-manager control variables
   and every `GIT_*`, `UV_*`, and `PYTHON*` variable, so a contributor's Git
   configuration, hooks, and identity, and the uv and Python settings that a
@@ -2616,4 +2623,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-10-26.
+Last reviewed: 2026-10-28.

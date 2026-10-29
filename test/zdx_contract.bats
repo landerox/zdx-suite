@@ -174,7 +174,7 @@ teardown() {
     'uv run --locked pip-audit --disable-pip --requirement' "$justfile"
   grep -Fqx '    typeset -a bats_options=(--print-output-on-failure)' "$justfile"
   grep -Fqx '    (( $# > 0 )) || set -- test/' "$justfile"
-  grep -Fqx '    bats "${bats_options[@]}" "$@"' "$justfile"
+  grep -Fqx '    "${session_runner[@]}" bats "${bats_options[@]}" "$@" </dev/null &' "$justfile"
   grep -Fqx \
     'default_install_hook_types: [pre-commit, commit-msg, pre-push]' \
     "$pre_commit"
@@ -224,12 +224,12 @@ teardown() {
   just_bin=$(command -v just)
   mkdir -p "$project/test" "$tools" "$with_gnu" "$with_other"
   cp "$TEST_SUITE_ROOT/Justfile" "$project/"
-  # The recipe needs only zsh and getconf; the real GNU parallel stays off
-  # PATH so each case controls which `parallel` the recipe finds.
+  # Keep session tools off PATH to cover the announced fallback too. The
+  # real GNU parallel stays off PATH so every case controls its discovery.
   for tool in zsh getconf; do
     ln -s "$(command -v "$tool")" "$tools/$tool"
   done
-  printf '#!/bin/sh\nprintf "[%%s]" "$@"\nprintf "\\n"\n' > "$tools/bats"
+  printf '#!/bin/sh\nprintf "[%%s]" "$@"\nprintf "\\n"\nexit "${MOCK_BATS_STATUS:-0}"\n' > "$tools/bats"
   printf '#!/bin/sh\nprintf "GNU parallel 20231122\\n"\n' > "$with_gnu/parallel"
   printf '#!/bin/sh\nprintf "usage: parallel [OPTIONS] command -- arguments\\n" >&2\nexit 1\n' \
     > "$with_other/parallel"
@@ -238,13 +238,14 @@ teardown() {
   run env PATH="$with_gnu:$tools" BATS_JOBS=3 \
     "$just_bin" --justfile "$project/Justfile" --working-directory "$project" test
   [ "$status" -eq 0 ]
-  [ "$output" = "[--print-output-on-failure][--jobs][3][test/]" ]
+  [[ "$output" == *"Neither setsid nor Perl is installed; BATS keeps the controlling terminal and parallel jobs may stop."* ]]
+  [ "${lines[${#lines[@]}-1]}" = "[--print-output-on-failure][--jobs][3][test/]" ]
 
   run env PATH="$with_gnu:$tools" BATS_JOBS=1 \
     "$just_bin" --justfile "$project/Justfile" --working-directory "$project" \
     test test/a.bats 'test/b c.bats'
   [ "$status" -eq 0 ]
-  [ "$output" = "[--print-output-on-failure][test/a.bats][test/b c.bats]" ]
+  [ "${lines[${#lines[@]}-1]}" = "[--print-output-on-failure][test/a.bats][test/b c.bats]" ]
 
   run env PATH="$with_other:$tools" BATS_JOBS=4 \
     "$just_bin" --justfile "$project/Justfile" --working-directory "$project" test
@@ -257,6 +258,11 @@ teardown() {
   [ "$status" -eq 2 ]
   [[ "$output" == *"BATS_JOBS must be a positive integer, not 'two'."* ]]
   [[ "$output" != *"[--print-output-on-failure]"* ]]
+
+  run env PATH="$tools" BATS_JOBS=1 MOCK_BATS_STATUS=23 \
+    "$just_bin" --justfile "$project/Justfile" --working-directory "$project" test
+  [ "$status" -eq 23 ]
+  [[ "$output" == *"[--print-output-on-failure][test/]"* ]]
 }
 
 @test "zdx contract: the local gate rejects a stale lock without rewriting it" {
