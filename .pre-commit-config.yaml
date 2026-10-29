@@ -98,6 +98,13 @@ repos:
       - id: shellcheck
         files: \.(sh|bash)$
         stages: [pre-commit]
+      - id: shellcheck
+        alias: bats-assertions
+        name: BATS assertion checks
+        entry: bash -c 'shellcheck -s bats --severity=error "$@" && shellcheck -s bats --include=SC2314,SC2315 "$@"' --
+        files: \.bats$
+        types: [file]
+        stages: [pre-commit]
 
   - repo: local
     hooks:

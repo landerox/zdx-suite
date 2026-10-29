@@ -9,19 +9,28 @@ teardown() {
 }
 
 @test "py: sourcing twice is silent and performs no capability probes" {
-  run zsh -f -c "
+  local backend
+  for backend in fzf uv pipx curl python3; do
+    cat > "$TEST_MOCK_BIN/$backend" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "${0##*/} $*" >> "$HOME/probes"
+exit 97
+MOCK
+    chmod +x "$TEST_MOCK_BIN/$backend"
+  done
+  run zsh -f -c '
     emulate -R zsh
-    export HOME='$HOME'
-    export PATH='$PATH'
-    fzf() { print -r -- fzf >>'$HOME/probes'; }
-    uv() { print -r -- uv >>'$HOME/probes'; }
-    pipx() { print -r -- pipx >>'$HOME/probes'; }
-    curl() { print -r -- curl >>'$HOME/probes'; }
-    python3() { print -r -- python3 >>'$HOME/probes'; }
-    source '$TEST_SUITE_ROOT/functions/py-menu.zsh' || exit 1
-    source '$TEST_SUITE_ROOT/functions/py-menu.zsh' || exit 1
-    [[ ! -e '$HOME/probes' ]]
-  "
+    # Executable mocks record calls; DEBUG also sees lookup-only probes.
+    TRAPDEBUG() {
+      case "$ZSH_DEBUG_CMD" in
+        whence\ *|command\ -v\ *) print -r -- "$ZSH_DEBUG_CMD" >> "$HOME/probes" ;;
+      esac
+    }
+    source "$1/functions/py-menu.zsh" || exit 1
+    source "$1/functions/py-menu.zsh" || exit 1
+    unfunction TRAPDEBUG
+    [[ ! -e "$HOME/probes" ]]
+  ' _ "$TEST_SUITE_ROOT"
 
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -41,7 +50,7 @@ teardown() {
     export PATH='$PATH'
     source '$broken_root/py-menu.zsh'
     rc=\$?
-    [[ -z \"\${_PY_MENU_SOURCED:-}\" ]]
+    [[ -z \"\${_PY_MENU_SOURCED:-}\" ]] || exit 31
     [[ \$rc -ne 0 ]]
   "
 
@@ -179,8 +188,8 @@ teardown() {
     }
     _py_fzf_capture < <(print -r -- ignored)
     local picker_rc=$?
-    [[ "$REPLY" == $'\''first|venv-list|one\nsecond|tool-list|two'\'' ]]
-    [[ -z "$(command find "$private_tmp" -mindepth 1 -print -quit)" ]]
+    [[ "$REPLY" == $'\''first|venv-list|one\nsecond|tool-list|two'\'' ]] || exit 32
+    [[ -z "$(command find "$private_tmp" -mindepth 1 -print -quit)" ]] || exit 33
     return $picker_rc
   '
 

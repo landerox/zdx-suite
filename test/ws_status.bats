@@ -150,7 +150,7 @@ make_outside_repository() {
 }
 
 @test "ws status: JSON is one document with the documented shape" {
-  run run_zsh 'ws-status --json 2>/dev/null >"$HOME/status.json"; print -r -- "rc=$?"'
+  run -0 run_zsh 'ws-status --json 2>/dev/null >"$HOME/status.json"; print -r -- "rc=$?"'
   [ "$output" = "rc=0" ]
   # Exactly one compact document: one line ending in a newline.
   [ "$(wc -l < "$HOME/status.json")" -eq 1 ]
@@ -206,7 +206,7 @@ make_outside_repository() {
   [[ "$output" == *"⚠ Fetching 6 repositories over the network with git fetch --prune (at most 2 at a time, 60s each)."* ]]
   [[ "$output" == *"✔ Fetched 6 repositories."* ]]
   [ "$(grep -c '^fetch|' "$MOCK_GIT_LOG")" -eq 6 ]
-  ! grep -q '^fetch|detached|\|^fetch|stashed|\|^fetch|scratch|' "$MOCK_GIT_LOG" || false
+  ! grep -Eq '^fetch[|](detached|stashed|scratch)[|]' "$MOCK_GIT_LOG" || false
   ! grep -v '|fetch --prune --quiet|' <(grep '^fetch|' "$MOCK_GIT_LOG") || false
   ! grep -v '|prompt=0|' <(grep '^fetch|' "$MOCK_GIT_LOG") || false
   local running

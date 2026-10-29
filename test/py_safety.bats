@@ -2,6 +2,17 @@
 
 setup() {
   load test_helper
+  # External backends are resolved with command/whence -p; shell functions
+  # cannot observe them. Every unexpected invocation records and fails.
+  local backend
+  for backend in uv pip; do
+    cat > "$TEST_MOCK_BIN/$backend" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/${0##*/}-called"
+exit 97
+MOCK
+    chmod +x "$TEST_MOCK_BIN/$backend"
+  done
 }
 
 teardown() {
@@ -14,10 +25,6 @@ teardown() {
     command mkdir -p "$project/.venv"
     print -r -- "version = 3.12.1" >"$project/.venv/pyvenv.cfg"
     cd "$project" || return 1
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     venv-create --uv --yes
   '
 
@@ -32,10 +39,6 @@ teardown() {
     local project="$HOME/project"
     command mkdir -p "$project"
     cd "$project" || return 1
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     venv-create --uv --python 3.12 --dry-run
   '
 
@@ -49,10 +52,6 @@ teardown() {
     local project="$HOME/project"
     command mkdir -p "$project"
     cd "$project" || return 1
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     venv-create --uv
   ' < /dev/null
 
@@ -100,10 +99,6 @@ teardown() {
     command mkdir -p "$project/.venv"
     print -r -- "version = 3.12.1" >"$project/.venv/pyvenv.cfg"
     cd "$project" || return 1
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     venv-rebuild --path "$project/.venv" --yes
   '
 
@@ -134,7 +129,7 @@ teardown() {
     }
     venv-activate --path "$project/.venv"
     local activate_rc=$?
-    [[ -z "${SAFE_ACTIVATED:-}" && -z "${UNSAFE_ACTIVATED:-}" ]]
+    [[ -z "${SAFE_ACTIVATED:-}" && -z "${UNSAFE_ACTIVATED:-}" ]] || exit 99
     return $activate_rc
   '
 
@@ -144,10 +139,6 @@ teardown() {
 
 @test "py safety: package operations reject option-like names before probes" {
   run run_zsh '
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     package-install --malicious
   '
 
@@ -160,10 +151,6 @@ teardown() {
     local project="$HOME/project"
     command mkdir -p "$project"
     cd "$project" || return 1
-    pip() {
-      print -r -- called >"$HOME/pip-called"
-      return 0
-    }
     package-install ruff --yes
   '
 
@@ -174,10 +161,6 @@ teardown() {
 
 @test "py safety: remote tool install supports a side-effect-free dry-run" {
   run run_zsh '
-    uv() {
-      print -r -- "$*" >"$HOME/uv-called"
-      return 0
-    }
     tool-install ruff --backend uv --dry-run
   '
 
@@ -188,10 +171,6 @@ teardown() {
 
 @test "py safety: invalid Python versions fail before uv is invoked" {
   run run_zsh '
-    uv() {
-      print -r -- called >"$HOME/uv-called"
-      return 0
-    }
     venv-python-install "../3.12" --yes
   '
 
@@ -223,7 +202,7 @@ EOF
   [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ]
 
   printf '#!/bin/sh\nexit 22\n' > "$TEST_MOCK_BIN/curl"
-  run run_zsh 'umask 022; package-search demo; rc=$?; print -r -- "umask:$(umask) rc:$rc"'
+  run -0 run_zsh 'umask 022; package-search demo; rc=$?; print -r -- "umask:$(umask) rc:$rc"'
   [[ "$output" == *"PyPI metadata request failed (status 22)."* ]]
   [[ "$output" == *"umask:022 rc:22"* ]]
   [[ "$output" != *"refusing cleanup"* ]]

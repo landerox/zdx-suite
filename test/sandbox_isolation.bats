@@ -699,3 +699,37 @@ helper-status=1" ]
   make_sized_file "$TEST_TEMP_DIR/created" 1048577
   [ "$(file_size "$TEST_TEMP_DIR/created")" = 1048577 ]
 }
+
+@test "sandbox isolation: the Zsh assertion guard reports each supported literal form" {
+  run python3 -I "$TEST_SUITE_ROOT/test/zsh_assertions.py" \
+    "$TEST_SUITE_ROOT/test/fixtures/zsh-assertions.txt"
+
+  [ "$status" -eq 1 ]
+  [ "${#lines[@]}" -eq 18 ]
+  [[ "${lines[0]}" == *':4: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[1]}" == *':8: unchecked non-final Zsh assertion: [[ "A" == B ]]' ]]
+  [[ "${lines[2]}" == *':11: unchecked non-final Zsh assertion: [ A = B ]' ]]
+  [[ "${lines[3]}" == *':12: unchecked non-final Zsh assertion: test A = B' ]]
+  [[ "${lines[4]}" == *':17: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[5]}" == *':22: unchecked non-final Zsh assertion: (( count > 0 ))' ]]
+  [[ "${lines[6]}" == *':25: unchecked non-final Zsh assertion: grep -qE pattern file' ]]
+  [[ "${lines[7]}" == *':26: unchecked non-final Zsh assertion: ! helper-command' ]]
+  [[ "${lines[8]}" == *':27: unchecked non-final Zsh assertion: [[ A == B && C == D ]]' ]]
+  [[ "${lines[9]}" == *':43: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[10]}" == *':44: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[11]}" == *':45: unchecked non-final Zsh assertion: grep -q "left||right" file' ]]
+  [[ "${lines[12]}" == *':46: unchecked non-final Zsh assertion: test A = "left&&right"' ]]
+  [[ "${lines[13]}" == *':56: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[14]}" == *':60: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[15]}" == *':62: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[16]}" == *':68: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+  [[ "${lines[17]}" == *':74: unchecked non-final Zsh assertion: [[ A == B ]]' ]]
+}
+
+@test "sandbox isolation: literal Zsh programs handle every non-final assertion" {
+  run python3 -I "$TEST_SUITE_ROOT/test/zsh_assertions.py" \
+    "$TEST_SUITE_ROOT"/test/*.bats "$TEST_SUITE_ROOT"/test/*.bash
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

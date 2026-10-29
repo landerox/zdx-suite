@@ -239,7 +239,7 @@ generate_tool_probe() {
   grep -B1 -Fx '    "Run Probe Checks" "dev-run-probe" \' \
     "$SCAFFOLD_REPO/functions/dev-menu.zsh" | grep -Fxq '  _dev_menu_entry \'
   # The sorted Developer fixture stays sorted.
-  run awk -F '\t' '!/^#/ && NF { print $1 }' \
+  run -0 awk -F '\t' '!/^#/ && NF { print $1 }' \
     "$SCAFFOLD_REPO/test/fixtures/dev-public-commands.tsv"
   [ "$output" = "$(printf '%s\n' "${lines[@]}" | LC_ALL=C sort)" ]
   [[ "$output" == *"dev-run-probe"* ]]

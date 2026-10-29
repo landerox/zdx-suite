@@ -55,11 +55,11 @@ trust_start() {
   local overrides="$TRUST_HOME/.config/zdx/overrides.zsh"
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=overrides' > "$overrides"
   chmod 600 "$overrides"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=overrides"* ]]
 
   chmod 606 "$overrides"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"zdx: refusing to load user overrides $overrides"* ]]
   [[ "$output" == *"probe=unset"* ]]
 }
@@ -69,13 +69,13 @@ trust_start() {
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=config' > "$config"
   chmod 644 "$config"
   ln "$config" "$TEST_TEMP_DIR/second-link"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=unset"* ]]
   [[ "$output" == *"refused=$config"* ]]
 
   rm "$TEST_TEMP_DIR/second-link"
   chmod 775 "$TRUST_HOME/.config/zdx"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=unset"* ]]
   [[ "$output" == *"refused=$config"* ]]
 }
@@ -87,7 +87,7 @@ trust_start() {
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=linked' > "$TRUST_HOME/dotfiles/zdx/config.zsh"
   chmod 644 "$TRUST_HOME/dotfiles/zdx/config.zsh"
   ln -s ../../dotfiles/zdx/config.zsh "$config"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=linked"* ]]
 
   # A second hop through a directory that other users can write.
@@ -96,7 +96,7 @@ trust_start() {
   ln -s "$TRUST_HOME/dotfiles/zdx/config.zsh" "$TEST_TEMP_DIR/shared/hop"
   rm "$config"
   ln -s "$TEST_TEMP_DIR/shared/hop" "$config"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=unset"* ]]
   [[ "$output" == *"refused=$config"* ]]
 
@@ -104,7 +104,7 @@ trust_start() {
   rm "$config"
   chmod 775 "$TRUST_HOME/dotfiles/zdx"
   ln -s ../../dotfiles/zdx/config.zsh "$config"
-  run trust_start
+  run -0 trust_start
   [[ "$output" == *"probe=unset"* ]]
 }
 
@@ -147,7 +147,7 @@ trust_start() {
   chmod 755 "$plugins/demo"
   printf '%s\n' 'demo-menu() { :; }' > "$plugins/demo/demo-menu.zsh"
   chmod 644 "$plugins/demo/demo-menu.zsh"
-  run env HOME="$TRUST_HOME" zsh -f -c '
+  run -0 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
@@ -155,7 +155,7 @@ trust_start() {
   [[ "$output" == *"plugins=demo"* ]]
 
   chmod 664 "$plugins/demo/demo-menu.zsh"
-  run env HOME="$TRUST_HOME" zsh -f -c '
+  run -0 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
@@ -165,7 +165,7 @@ trust_start() {
 
   chmod 644 "$plugins/demo/demo-menu.zsh"
   chmod 775 "$plugins/demo"
-  run env HOME="$TRUST_HOME" zsh -f -c '
+  run -0 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh"
     print -r -- "plugins=${(j:,:)ZDX_LOADED_PLUGINS}"
@@ -178,7 +178,7 @@ trust_start() {
   chmod +x "$TEST_MOCK_BIN/fzf"
   printf '%s\n' 'typeset -g ZDX_TRUST_PROBE=config' > "$TRUST_HOME/.config/zdx/config.zsh"
   chmod 666 "$TRUST_HOME/.config/zdx/config.zsh"
-  run env HOME="$TRUST_HOME" zsh -f -c '
+  run -0 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null
     source "$1/functions/zdx-doctor.zsh"

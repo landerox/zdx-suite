@@ -24,14 +24,14 @@ teardown() {
     export ZDX_TELEMETRY=1
     _timed 'sys:test_cmd' true
 
-    [ -f \"\$HOME/.config/zdx/telemetry.json\" ]
+    [ -f \"\$HOME/.config/zdx/telemetry.json\" ] || exit 31
 
     # Read the file and verify content
     content=\$(cat \"\$HOME/.config/zdx/telemetry.json\")
-    [[ \"\$content\" == *'\"suite\": \"sys\"'* ]]
-    [[ \"\$content\" == *'\"command\": \"test_cmd\"'* ]]
-    [[ \"\$content\" == *'\"exit_code\": 0'* ]]
-    [[ \"\$content\" == *'\"duration_ms\":'* ]]
+    [[ \"\$content\" == *'\"suite\": \"sys\"'* ]] || exit 32
+    [[ \"\$content\" == *'\"command\": \"test_cmd\"'* ]] || exit 33
+    [[ \"\$content\" == *'\"exit_code\": 0'* ]] || exit 34
+    [[ \"\$content\" == *'\"duration_ms\":'* ]] || exit 35
     [[ \"\$content\" == *'\"timestamp\":'* ]]
   "
   [ "$status" -eq 0 ]
@@ -43,7 +43,7 @@ teardown() {
     _timed 'vpn-status' true
 
     content=\$(cat \"\$HOME/.config/zdx/telemetry.json\")
-    [[ \"\$content\" == *'\"suite\": \"vpn\"'* ]]
+    [[ \"\$content\" == *'\"suite\": \"vpn\"'* ]] || exit 36
     [[ \"\$content\" == *'\"command\": \"vpn-status\"'* ]]
   "
   [ "$status" -eq 0 ]
@@ -137,7 +137,7 @@ teardown() {
   run run_zsh "
     export ZDX_TELEMETRY=1
     _timed 'sys:test_cmd' true
-    [ -s \"\$HOME/.config/zdx/telemetry.json\" ]
+    [ -s \"\$HOME/.config/zdx/telemetry.json\" ] || exit 52
 
     sys-telemetry --clear --yes
     [ ! -s \"\$HOME/.config/zdx/telemetry.json\" ]

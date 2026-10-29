@@ -705,7 +705,7 @@ write_grammar_fixture() {
   [[ "$output" == *$'\n  ○ Inspect Dotenv File (unavailable: .env)|env-dotenv|'* ]]
 
   write_dotenv .env 'A=1'
-  run run_zsh 'cd "$DOTENV_PROJECT" && _env_menu_rows'
+  run -0 run_zsh 'cd "$DOTENV_PROJECT" && _env_menu_rows'
   [[ "$output" == *$'\n  Inspect Dotenv File|env-dotenv|'* ]]
 
   export MOCK_FZF_MODE="match" MOCK_FZF_MATCH="|env-dotenv|"

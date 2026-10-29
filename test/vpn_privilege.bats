@@ -239,7 +239,7 @@ EOF
   [ -f "$VPN_PROFILE_DIR/wg0.conf.pre-restore" ]
   grep -q '10.0.0.2' "$VPN_PROFILE_DIR/wg0.conf.pre-restore"
   # The undo copy must not become a listed profile.
-  run run_zsh '
+  run -0 run_zsh '
     export VPN_CONFIG_DIR="$VPN_PROFILE_DIR"
     _vpn_get_configs
   '

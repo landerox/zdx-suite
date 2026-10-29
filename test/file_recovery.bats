@@ -474,9 +474,9 @@ EOF
   run "$gnu_tar" -tzf "$WORK/backup.tar.gz"
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | LC_ALL=C sort)" = "$(printf '%s\n' ./important.txt ./tree/ ./tree/nested.txt)" ]
-  run "$gnu_tar" -xzOf "$WORK/backup.tar.gz" ./important.txt
+  run -0 "$gnu_tar" -xzOf "$WORK/backup.tar.gz" ./important.txt
   [ "$output" = important ]
-  run "$gnu_tar" -xzOf "$WORK/backup.tar.gz" ./tree/nested.txt
+  run -0 "$gnu_tar" -xzOf "$WORK/backup.tar.gz" ./tree/nested.txt
   [ "$output" = nested ]
 }
 

@@ -50,6 +50,7 @@ test/
 ├── plugins_test_helper.bash local bare Git origins for the plugin-manager tests
 ├── fixtures/              frozen public-command inventories and gh fixtures
 ├── sandbox_isolation.bats sandbox isolation, caller environment, startup-file scan, and portable helpers
+├── zsh_assertions.py      literal-Zsh assertion scanner with inert controls in fixtures/zsh-assertions.txt
 ├── lazy_loading.bats      core lazy/eager loading parity and conditional compatibility names
 ├── output.bats            core command-output services
 ├── platform_paths.bats    temporary roots and operation bases behind aliases
@@ -619,6 +620,22 @@ into the condition (`[[ "$output" != *x* ]]`). `shellcheck -s bats` reports
 the bare form as SC2314 or SC2315; a negated command inside a loop body is
 equally inert and is not always reported.
 
+An assertion chain such as `[ A ] && [ B ]` also ignores a failing first
+check when followed by another command. Split it into standalone assertions.
+Inside `run_zsh` or a direct `zsh -f -c` program, every non-final assertion
+must explicitly propagate failure, such as `[[ condition ]] || exit 31`.
+Use distinct failure statuses when a program deliberately returns another
+failure status. Do not add `err_exit` to the shared launcher: product code
+must retain its documented status-capture behavior.
+
+The sandbox tests run `test/zsh_assertions.py` over literal `run_zsh` and
+direct `zsh -c` programs. Its control fixture covers shell quoting,
+backslash continuations, nested shell command strings, and negated checks.
+The guard rejects bare non-final top-level assertions; explicitly handled
+statuses, final commands and arithmetic state updates are permitted. It
+does not inspect dynamic programs, heredoc-fed Zsh, or function and
+control-flow bodies: those assertions still require review.
+
 A test that is Linux-only by design calls `skip_on_darwin` with its reason.
 Never skip a test because the product currently fails on macOS; that failure
 is the evidence the platform work needs. The current Linux-only tests are:
@@ -653,6 +670,12 @@ directory with a mount directly below it (`/System/Volumes` on macOS,
 ## Mocking rules
 
 Mocks model an external boundary, not the implementation under test.
+
+An executable invoked through `command` or resolved by `whence -p` bypasses
+shell-function mocks. Put a recording executable in `$TEST_MOCK_BIN` and
+assert its log. Source-time tests that prohibit capability lookups must
+also observe lookup-only probes; recording executables alone do not detect
+`command -v` or `whence -p`.
 
 - Record every received argument in an isolated file when command construction
   matters.
@@ -973,6 +996,12 @@ teardown() {
 Test names follow `<surface>: <behavior>`. Assert status before inspecting
 output. A test expected to fail prints enough captured state to diagnose the
 boundary without exposing secrets.
+
+`run -0 COMMAND` and `run -N COMMAND` (BATS 1.5+) assert the expected status before
+output checks. Shared assertion helpers may check `$status` for their
+callers. A zero-match `grep -c` returns 1 even though it prints `0`; assert
+that status deliberately. A cleanup test first proves its temporary resource
+was created, then checks the expected command status and final removal.
 
 ## Avoid command-string injection in the harness
 

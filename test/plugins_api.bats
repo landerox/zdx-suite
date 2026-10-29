@@ -95,7 +95,7 @@ MOCK
   [[ "$output" == *"_mytool-menu: function"* ]]
 
   printf '%s\n' '#compdef mytool-menu git-push' > "$API_PLUGINS/mytool/_mytool-menu"
-  run env HOME="$API_HOME" zsh -f -c '
+  run -0 env HOME="$API_HOME" zsh -f -c '
     emulate -R zsh
     autoload -Uz compinit && compinit -u -d "$HOME/.zcompdump" || exit 90
     source "$1/zdx-suite.plugin.zsh" || exit 91

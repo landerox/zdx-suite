@@ -75,7 +75,7 @@ lazy_shell() {
 }
 
 @test "lazy plugins: a plugin changed after discovery is refused on first use" {
-  run lazy_shell '
+  run -0 lazy_shell '
     chmod 666 "$HOME/.config/zdx/plugins/demo/demo-menu.zsh"
     demo-menu
     print -r -- "rc=$? loaded=${(j:,:)ZDX_LOADED_PLUGINS}"
@@ -87,21 +87,21 @@ lazy_shell() {
 
 @test "lazy plugins: invalid or unsafe manifests register only the menu" {
   printf '%s\n' 'demo-status' 'other-tool' > "$LAZY_PLUGINS/demo/commands"
-  run lazy_shell 'whence -w demo-menu; whence -w demo-status || print -r -- "no status stub"'
+  run -0 lazy_shell 'whence -w demo-menu; whence -w demo-status || print -r -- "no status stub"'
   [[ "$output" == *"invalid entry other-tool"* ]]
   [[ "$output" == *"demo-menu: function"* ]]
   [[ "$output" == *"no status stub"* ]]
 
   printf '%s\n' 'demo-status' > "$LAZY_PLUGINS/demo/commands"
   chmod 666 "$LAZY_PLUGINS/demo/commands"
-  run lazy_shell 'whence -w demo-status || print -r -- "no status stub"'
+  run -0 lazy_shell 'whence -w demo-status || print -r -- "no status stub"'
   [[ "$output" == *"ignoring the unsafe command manifest of plugin 'demo'"* ]]
   [[ "$output" == *"no status stub"* ]]
 }
 
 @test "lazy plugins: a declared command the plugin never defines fails clearly" {
   printf '%s\n' 'demo-status' 'demo-missing' > "$LAZY_PLUGINS/demo/commands"
-  run lazy_shell '
+  run -0 lazy_shell '
     demo-missing
     print -r -- "rc=$?"
     whence -w demo-missing || print -r -- "stub removed"

@@ -19,7 +19,7 @@ teardown() {
     [[ -n "${_WS_MENU_SOURCED:-}" && -n "${_WS_COMMON_SOURCED:-}" \
       && -n "${_WS_JUMP_SOURCED:-}" && -n "${_WS_STATUS_SOURCED:-}" \
       && -n "${_WS_CLONE_SOURCED:-}" \
-      && "${functions[ws-menu]}" == "$first_definition" ]]
+      && "${functions[ws-menu]}" == "$first_definition" ]] || exit 2
     (( ! ${+functions[_ws_menu_source_module]} )) || exit 3
     (( ! ${+_ws_menu_loader_dir} )) || exit 4
   ' _ "$TEST_SUITE_ROOT"
@@ -82,7 +82,7 @@ EOF
     [ "$status" -eq 0 ]
     grep -q '^Usage' "$TEST_TEMP_DIR/help.stderr"
   done
-  run zsh -f -c '
+  run -0 zsh -f -c '
     emulate -R zsh
     source "$1/functions/ws-menu.zsh" || exit
     ws-menu --help 2>&1

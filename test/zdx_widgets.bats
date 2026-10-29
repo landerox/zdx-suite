@@ -223,11 +223,11 @@ SETUP
   [ "$status" -eq 0 ]
   [ ! -e "$repo/pwned" ]
   grep -Fxq 'zle reset-prompt' "$WIDGET_ZLE_LOG"
-  run grep -c 'zle -M' "$WIDGET_ZLE_LOG"
+  run -1 grep -c 'zle -M' "$WIDGET_ZLE_LOG"
   [ "$output" -eq 0 ]
 
   # Locals come first, the current branch is marked, origin/HEAD is skipped.
-  run awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
+  run -0 awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
   [[ "$output" == *"local  * main"* ]]
   [[ "$output" == *"remote   origin/main"* ]]
   [[ "$output" != *"origin/HEAD"* && "$output" != *$'\n'"remote   origin"$'\n'* ]]
@@ -261,7 +261,7 @@ SETUP
       grep -Fq 'zle -M zdx: fzf failed (status 2)' "$WIDGET_ZLE_LOG"
     else
       [[ "$output" == *"rc=0"* ]]
-      run grep -c 'zle -M' "$WIDGET_ZLE_LOG"
+      run -1 grep -c 'zle -M' "$WIDGET_ZLE_LOG"
       [ "$output" -eq 0 ]
     fi
   done
@@ -284,7 +284,7 @@ SETUP
 
 @test "widgets: a missing tool or repository shows one message without opening fzf" {
   mkdir -p "$TEST_TEMP_DIR/plain"
-  run widget_zsh '
+  run -0 widget_zsh '
     LBUFFER="git switch "
     _zdx_widget_insert branch
     print -r -- "rc=$? LBUFFER=[$LBUFFER]"
@@ -296,7 +296,7 @@ SETUP
   local only_git
   only_git=$(limited_path git timeout gtimeout)
   : > "$WIDGET_ZLE_LOG"
-  run widget_zsh '
+  run -0 widget_zsh '
     path=("$2")
     _zdx_widget_insert branch
     print -r -- "rc=$?"
@@ -355,7 +355,7 @@ EOF
     : > "$WIDGET_ZLE_LOG"
     : > "$WIDGET_FZF_ARGS"
     export WIDGET_GH_MODE="$mode"
-    run widget_zsh '
+    run -0 widget_zsh '
       LBUFFER="gh pr checkout "
       _zdx_widget_insert pr
       print -r -- "rc=$? LBUFFER=[$LBUFFER]"
@@ -395,7 +395,7 @@ EOF
   grep -Fxq -- '--expect=ctrl-o' "$WIDGET_FZF_ARGS"
   grep -Fxq -- '--header=Enter insert PID | Ctrl-O insert port | Esc cancel' \
     "$WIDGET_FZF_ARGS"
-  run awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
+  run -0 awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
   [ "${lines[0]}" = ":22  (process not visible)  0.0.0.0:22" ]
   [ "${lines[1]}" = ":5432  postgres  pid 4242  127.0.0.1:5432" ]
   [ "${lines[2]}" = ":8080  node  pid 777  *:8080" ]
@@ -413,7 +413,7 @@ EOF
 
   export WIDGET_FZF_MATCH=':22' WIDGET_FZF_KEY=
   : > "$WIDGET_ZLE_LOG"
-  run widget_zsh '
+  run -0 widget_zsh '
     OSTYPE=linux-gnu
     LBUFFER="kill "
     _zdx_widget_insert port
@@ -443,7 +443,7 @@ EOF
   ' "$TEST_TEMP_DIR/plain"
   [ "$status" -eq 0 ]
   [[ "$output" == *"LBUFFER=[redis-cli -p 6379]"* ]]
-  run awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
+  run -0 awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
   [ "${lines[0]}" = ":80  nginx  pid 501  *:80" ]
   [ "${lines[1]}" = ":6379  redis-server  pid 88  127.0.0.1:6379" ]
   [ "${#lines[@]}" -eq 2 ]
@@ -469,7 +469,7 @@ EOF
   ' "$project/sub/deeper" "$workon" "$project"
   [ "$status" -eq 0 ]
   [ ! -e "$project/sub/deeper/pwned" ]
-  run awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
+  run -0 awk -F '\t' '{ print $2 }' "$WIDGET_FZF_INPUT"
   [ "${#lines[@]}" -eq 3 ]
   [[ "${lines[0]}" == "project $project/sub/venv  (active)" ]]
   [[ "${lines[1]}" == "project $project/.venv" ]]

@@ -486,22 +486,22 @@ EOF
   printf '%s\n' v22.1.0 > "$HOME/.nvm/alias/default"
 
   printf '%s\n' 22.0 > "$project/.nvmrc"
-  run run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
+  run -0 run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
   [[ "$output" == *"Keeping v22.0.0: pinned by ~/workspaces/github/me/app/.nvmrc."* ]]
   [[ "$output" != *"Node.js runtimes|"* ]]
 
   rm "$project/.nvmrc"
   printf '%s\n' '{' '  "engines": { "node": ">=22.0.0" }' '}' > "$project/package.json"
-  run run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
+  run -0 run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
   [[ "$output" == *"pinned by ~/workspaces/github/me/app/package.json."* ]]
 
   # A major-only pin is satisfied by the default.
   rm "$project/package.json"
   printf '%s\n' 22 > "$project/.node-version"
-  run run_cleanup_zsh '_sys_clean_plan quick'
+  run -0 run_cleanup_zsh '_sys_clean_plan quick'
   [ "$output" = "Node.js runtimes|$HOME/.nvm/versions/node|v22.0.0" ]
 
-  run run_cleanup_zsh '
+  run -0 run_cleanup_zsh '
     path=("$HOME/.nvm/versions/node/v22.0.0/bin" $path)
     ZDX_VERBOSE=1 _sys_clean_plan quick
   '
