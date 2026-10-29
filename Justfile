@@ -69,7 +69,55 @@ test *args:
         fi
     fi
     (( $# > 0 )) || set -- test/
-    bats "${bats_options[@]}" "$@"
+    # A parallel worker's read -d can otherwise stop its entire process
+    # group with SIGTTOU, including BATS' timeout, on a controlling terminal.
+    typeset -a session_runner
+    if command -v setsid >/dev/null 2>&1; then
+        session_runner=(setsid)
+    elif command -v perl >/dev/null 2>&1; then
+        session_runner=(perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!\n"; exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!\n"')
+    else
+        print -u2 "Neither setsid nor Perl is installed; BATS keeps the controlling terminal and parallel jobs may stop."
+        exec bats "${bats_options[@]}" "$@" </dev/null
+    fi
+    # A background job of this non-interactive shell is not a process-group
+    # leader, so setsid does not fork and $! remains the session leader PID.
+    typeset -i bats_pid=0 bats_rc=0
+    typeset bats_signal=""
+    _zdx_forward_bats_signal() {
+        bats_signal="$1"
+        (( bats_pid > 0 )) || return 0
+        kill -0 "$bats_pid" 2>/dev/null || return 0
+        if kill -s "$bats_signal" -- -$bats_pid 2>/dev/null; then
+            bats_signal=""
+        else
+            # Before setsid, only the exact child PID exists. Keep the signal
+            # pending too: a pre-exec launcher can inherit an ignored INT.
+            kill -s "$bats_signal" -- "$bats_pid" 2>/dev/null || true
+        fi
+    }
+    trap '_zdx_forward_bats_signal INT' INT
+    trap '_zdx_forward_bats_signal TERM' TERM
+    trap '_zdx_forward_bats_signal HUP' HUP
+    zmodload -F zsh/zselect b:zselect || exit 1
+    "${session_runner[@]}" bats "${bats_options[@]}" "$@" </dev/null &
+    bats_pid=$!
+    # Do not enter wait while session creation can still hide a pending
+    # signal. The traps retain signals from before PID assignment as well.
+    while ! kill -0 -- -$bats_pid 2>/dev/null; do
+        kill -0 "$bats_pid" 2>/dev/null || break
+        zselect -t 1
+    done
+    [[ -z "$bats_signal" ]] || _zdx_forward_bats_signal "$bats_signal"
+    while true; do
+        wait "$bats_pid"
+        bats_rc=$?
+        if ! kill -0 "$bats_pid" 2>/dev/null; then
+            bats_pid=0
+            break
+        fi
+    done
+    exit "$bats_rc"
 
 # Run the complete local and CI quality gate.
 check: lock-check lint primitives-check pre-commit-run audit test

@@ -6,7 +6,281 @@ setup() {
 }
 
 teardown() {
+  _zdx_test_stop_session_probe
   cleanup_sandbox
+}
+
+# A timed-out PTY run can leave GNU parallel's stopped process groups behind.
+# Match only our private probe path, and never signal the outer test's group.
+_zdx_test_stop_session_probe() {
+  [[ -n "${ZDX_TEST_SESSION_PROBE:-}" ]] || return 0
+  local _pid group args own_group
+  own_group=$(ps -p "$BASHPID" -o pgid=)
+  own_group=${own_group//[[:space:]]/}
+  while read -r _pid group args; do
+    [[ "$args" == *"$ZDX_TEST_SESSION_PROBE"* ]] || continue
+    [[ "$group" != "$own_group" && "$group" =~ ^[0-9]+$ ]] || continue
+    kill -KILL -- "-$group" 2>/dev/null || true
+  done < <(ps -eo pid=,pgid=,args=)
+}
+
+_zdx_test_parallel_session_probe() {
+  has_util_linux_script || skip "requires util-linux script for a controlling terminal"
+  command -v just >/dev/null || skip "requires just"
+  command -v timeout >/dev/null || skip "requires timeout for the PTY bound"
+  [[ "$(parallel --version 2>/dev/null)" == "GNU parallel"* ]] || skip "requires GNU parallel"
+  # BATS puts its internal libexec directory on PATH. In a clean environment
+  # that internal `bats` lacks the public launcher's exported helper function.
+  local entry
+  local -a nested_path=()
+  IFS=: read -r -a nested_path <<< "$PATH"
+  ZDX_TEST_NESTED_PATH=
+  for entry in "${nested_path[@]}"; do
+    [[ "$entry" != "$BATS_LIBEXEC" ]] || continue
+    ZDX_TEST_NESTED_PATH+="${ZDX_TEST_NESTED_PATH:+:}$entry"
+  done
+  export ZDX_TEST_NESTED_PATH
+  export ZDX_TEST_SESSION_PROBE="$TEST_TEMP_DIR/zdx-session-probe.bats"
+  sed 's/^@probe_test@/@test/' > "$ZDX_TEST_SESSION_PROBE" <<'BATS'
+#!/usr/bin/env bats
+@probe_test@ "parallel NUL reader finishes" {
+  printf 'entry\0' > "$BATS_TEST_TMPDIR/entries"
+  run zsh -f -c 'emulate -R zsh
+    while IFS= read -r -d "" entry; do
+      print -r -- "$entry"
+    done < "$1"
+  ' _ "$BATS_TEST_TMPDIR/entries"
+  [ "$status" -eq 0 ]
+  [ "$output" = entry ]
+}
+BATS
+  # No outer BATS_* variable reaches the nested suite. Keep the mock-bin
+  # first on PATH, so this never acquires a real external service.
+  cat > "$TEST_TEMP_DIR/session-runner" <<'SH'
+#!/bin/sh
+exec env -i HOME="$HOME" PATH="$ZDX_TEST_NESTED_PATH" TERM="$TERM" LANG="$LANG" TMPDIR="$TMPDIR" \
+  SHELL=/bin/sh BATS_JOBS=2 just --justfile "$ZDX_TEST_SESSION_JUSTFILE" \
+  test --tap "$ZDX_TEST_SESSION_PROBE"
+SH
+  chmod -- 755 "$TEST_TEMP_DIR/session-runner"
+  export ZDX_TEST_SESSION_JUSTFILE="$1"
+  run timeout -k 2 20 script -qec "$TEST_TEMP_DIR/session-runner" /dev/null
+  printf 'PTY status=%s\n%s\n' "$status" "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok 1 parallel NUL reader finishes"* ]]
+}
+
+@test "sandbox isolation: just test finishes parallel NUL readers on a controlling terminal" {
+  _zdx_test_parallel_session_probe "$TEST_SUITE_ROOT/Justfile"
+}
+
+@test "sandbox isolation: just test's Perl session fallback finishes parallel NUL readers" {
+  command -v perl >/dev/null || skip "requires Perl for the session fallback"
+  # Exercise macOS's fallback on a Linux host without changing installed tools.
+  perl -pe 's/if command -v setsid /if false /' "$TEST_SUITE_ROOT/Justfile" \
+    > "$TEST_TEMP_DIR/Justfile"
+  _zdx_test_parallel_session_probe "$TEST_TEMP_DIR/Justfile"
+}
+
+_zdx_test_prepare_bats_signal_probe() {
+  cat > "$TEST_MOCK_BIN/bats" <<'ZSH'
+#!/usr/bin/env zsh
+emulate -R zsh
+trap 'print -r -- INT > "$ZDX_TEST_SIGNAL_DIR/received"; exit 130' INT
+trap 'print -r -- TERM > "$ZDX_TEST_SIGNAL_DIR/received"; exit 143' TERM
+trap 'print -r -- HUP > "$ZDX_TEST_SIGNAL_DIR/received"; exit 129' HUP
+print -r -- "$PPID" > "$ZDX_TEST_SIGNAL_DIR/recipe.pid"
+print -r -- "$$" > "$ZDX_TEST_SIGNAL_DIR/bats.pid"
+while true; do sleep 0.05; done
+ZSH
+  chmod -- 755 "$TEST_MOCK_BIN/bats"
+  # Start just without an async shell's ignored SIGINT, then signal the
+  # recipe after BATS has installed its trap. Bound readiness and shutdown,
+  # and reap the controller's child even when the old recipe fails.
+  cat > "$TEST_TEMP_DIR/forward.pl" <<'PERL'
+use strict;
+use warnings;
+use POSIX qw(WNOHANG);
+my ($justfile, $dir, $signal, $early) = @ARGV;
+my $startup = $early && $early ne 'worker';
+my $child = fork();
+die "fork: $!" unless defined $child;
+if (!$child) {
+  $SIG{INT} = 'DEFAULT';
+  exec 'env', '-i', "HOME=$ENV{HOME}", "PATH=$ENV{PATH}",
+    "TERM=$ENV{TERM}", "LANG=$ENV{LANG}", "TMPDIR=$ENV{TMPDIR}",
+    "ZDX_TEST_SIGNAL_DIR=$dir", "ZDX_TEST_REAL_SETSID=" . ($ENV{ZDX_TEST_REAL_SETSID} // ''),
+    "ZDX_TEST_REAL_BATS=" . ($ENV{ZDX_TEST_REAL_BATS} // ''),
+    "ZDX_TEST_WORKER_PROBE=" . ($ENV{ZDX_TEST_WORKER_PROBE} // ''), 'BATS_JOBS=1',
+    'just', '--justfile', $justfile, 'test';
+  die "exec: $!";
+}
+sub read_pid {
+  my ($name) = @_;
+  open my $fh, '<', "$dir/$name.pid" or return;
+  my $pid = <$fh>;
+  return unless defined $pid && $pid =~ /\A\s*([1-9][0-9]*)\s*\z/;
+  return $1;
+}
+my ($bats, $recipe, $reaped, $rc, $worker);
+my $ok = eval {
+  local $SIG{ALRM} = sub { die "signal controller timed out\n"; };
+  alarm 15;
+  until (($bats = read_pid($startup ? 'launcher' : 'bats')) && ($recipe = read_pid('recipe'))
+    && (!$startup || $early ne 'pid' || -f "$dir/pid-gap")
+    && (!$early || $early ne 'worker' || ($worker = read_pid('worker')))) {
+    select undef, undef, undef, 0.05;
+  }
+  kill $signal, $recipe or die "signal recipe: $!\n";
+  if ($startup) {
+    # The scratch recipe acknowledges its trap before either startup barrier
+    # is released, so this is an observed startup gap rather than a sleep race.
+    until (-f "$dir/recipe.signal") { select undef, undef, undef, 0.01; }
+    open my $release, '>', "$dir/release" or die "release launcher: $!";
+    close $release;
+  }
+  until (($reaped = waitpid($child, WNOHANG)) == $child) {
+    select undef, undef, undef, 0.05;
+  }
+  $rc = $?;
+  die "recipe returned success\n" unless $rc;
+  unless ($early) {
+    open my $received, '<', "$dir/received" or die "BATS did not receive $signal\n";
+    my $observed = <$received>;
+    die "BATS received the wrong signal\n" unless $observed eq "$signal\n";
+  }
+  die "BATS still runs after recipe exit\n" if kill 0, $bats;
+  die "parallel BATS worker survived interruption\n" if $worker && kill(0, $worker);
+  alarm 0;
+  1;
+};
+my $error = $@;
+alarm 0;
+if ($worker && kill(0, $worker)) {
+  my $group = read_pid('worker-group');
+  kill 'KILL', -$group if $group && $group != POSIX::getpgrp();
+  kill 'KILL', $worker;
+}
+kill 'KILL', $bats if $bats && kill(0, $bats);
+unless ($reaped && $reaped == $child) {
+  kill 'KILL', $child;
+  waitpid $child, 0;
+}
+die $error unless $ok;
+print "recipe=nonzero signal=$signal bats=stopped\n";
+PERL
+}
+
+@test "sandbox isolation: just test forwards INT, TERM, and HUP to BATS and waits for exit" {
+  command -v just >/dev/null || skip "requires just"
+  command -v perl >/dev/null || skip "requires Perl for the bounded signal controller"
+  _zdx_test_prepare_bats_signal_probe
+  local signal
+  for signal in INT TERM HUP; do
+    export ZDX_TEST_SIGNAL_DIR="$TEST_TEMP_DIR/signal-$signal"
+    mkdir "$ZDX_TEST_SIGNAL_DIR"
+    run perl "$TEST_TEMP_DIR/forward.pl" "$TEST_SUITE_ROOT/Justfile" "$ZDX_TEST_SIGNAL_DIR" "$signal"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"recipe=nonzero signal=$signal bats=stopped"* ]]
+  done
+}
+
+_zdx_test_early_bats_signal_probe() {
+  command -v just >/dev/null || skip "requires just"
+  command -v perl >/dev/null || skip "requires Perl for the bounded signal controller"
+  command -v setsid >/dev/null || skip "requires setsid for the delayed session launcher"
+  export ZDX_TEST_REAL_SETSID
+  ZDX_TEST_REAL_SETSID=$(command -v setsid)
+  _zdx_test_prepare_bats_signal_probe
+  cat > "$TEST_MOCK_BIN/setsid" <<'ZSH'
+#!/usr/bin/env zsh
+emulate -R zsh
+# A startup launcher can inherit an ignored INT. Retain the signal at the
+# recipe until a group exists even if its first PID delivery is ignored.
+trap ':' INT TERM HUP
+print -r -- "$PPID" > "$ZDX_TEST_SIGNAL_DIR/recipe.pid"
+print -r -- "$$" > "$ZDX_TEST_SIGNAL_DIR/launcher.pid"
+while [[ ! -f "$ZDX_TEST_SIGNAL_DIR/release" ]]; do sleep 0.01; done
+exec "$ZDX_TEST_REAL_SETSID" "$@"
+ZSH
+  chmod -- 755 "$TEST_MOCK_BIN/setsid"
+  local gap="$1" signal
+    # Acknowledge entry into the real trap without changing its behavior.
+    # The pid case holds assignment after launch to expose that separate gap.
+    ZDX_TEST_GAP="$gap" perl -pe '
+      s/'\'' (INT|TERM|HUP)$/; print -r -- trapped > "\$ZDX_TEST_SIGNAL_DIR\/recipe.signal"'\'' $1/;
+      if ($ENV{ZDX_TEST_GAP} eq "pid" && /^    bats_pid=\$!$/) {
+        print "    print -r -- held > \"\$ZDX_TEST_SIGNAL_DIR/pid-gap\"\n";
+        print "    while [[ ! -f \"\$ZDX_TEST_SIGNAL_DIR/release\" ]]; do sleep 0.01; done\n";
+      }
+    ' "$TEST_SUITE_ROOT/Justfile" > "$TEST_TEMP_DIR/Justfile-$gap"
+    for signal in INT TERM HUP; do
+      export ZDX_TEST_SIGNAL_DIR="$TEST_TEMP_DIR/early-$gap-$signal"
+      mkdir "$ZDX_TEST_SIGNAL_DIR"
+      run perl "$TEST_TEMP_DIR/forward.pl" "$TEST_TEMP_DIR/Justfile-$gap" "$ZDX_TEST_SIGNAL_DIR" "$signal" "$gap"
+      [ "$status" -eq 0 ]
+      [[ "$output" == *"recipe=nonzero signal=$signal bats=stopped"* ]]
+    done
+}
+
+@test "sandbox isolation: just test retains signals before session creation" {
+  _zdx_test_early_bats_signal_probe group
+}
+
+@test "sandbox isolation: just test retains signals before PID assignment" {
+  _zdx_test_early_bats_signal_probe pid
+}
+
+@test "sandbox isolation: just test preserves a failing BATS status through both session runners" {
+  command -v just >/dev/null || skip "requires just"
+  command -v perl >/dev/null || skip "requires Perl to select its fallback"
+  printf '#!%s\nprintf "[%%s]" "$@"\nprintf "\\n"\nexit 23\n' "$BASH" \
+    > "$TEST_MOCK_BIN/bats"
+  chmod -- 755 "$TEST_MOCK_BIN/bats"
+  perl -pe 's/if command -v setsid /if false /' "$TEST_SUITE_ROOT/Justfile" \
+    > "$TEST_TEMP_DIR/Justfile-perl"
+  local justfile
+  for justfile in "$TEST_SUITE_ROOT/Justfile" "$TEST_TEMP_DIR/Justfile-perl"; do
+    run env BATS_JOBS=1 just --justfile "$justfile" test --tap 'test/path with spaces.bats'
+    [ "$status" -eq 23 ]
+    [[ "$output" == *'[--print-output-on-failure][--tap][test/path with spaces.bats]'* ]]
+  done
+}
+
+@test "sandbox isolation: interrupting just test stops a real GNU parallel BATS worker" {
+  command -v just >/dev/null || skip "requires just"
+  command -v perl >/dev/null || skip "requires Perl for the bounded signal controller"
+  [[ "$(parallel --version 2>/dev/null)" == "GNU parallel"* ]] || skip "requires GNU parallel"
+  export ZDX_TEST_REAL_BATS="$BATS_ROOT/bin/bats"
+  [[ -x "$ZDX_TEST_REAL_BATS" ]] || skip "requires the public BATS launcher"
+  _zdx_test_prepare_bats_signal_probe
+  export ZDX_TEST_WORKER_PROBE="$TEST_TEMP_DIR/worker.bats"
+  sed 's/^@probe_test@/@test/' > "$ZDX_TEST_WORKER_PROBE" <<'BATS'
+#!/usr/bin/env bats
+@probe_test@ "worker waits for interruption" {
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  ps -p "$BASHPID" -o pgid= > "$ZDX_TEST_SIGNAL_DIR/worker-group.pid"
+  printf '%s\n' "$BASHPID" > "$ZDX_TEST_SIGNAL_DIR/worker.pid"
+  while true; do sleep 0.05; done
+}
+BATS
+  cat > "$TEST_MOCK_BIN/bats" <<'ZSH'
+#!/usr/bin/env zsh
+emulate -R zsh
+print -r -- "$PPID" > "$ZDX_TEST_SIGNAL_DIR/recipe.pid"
+print -r -- "$$" > "$ZDX_TEST_SIGNAL_DIR/bats.pid"
+exec "$ZDX_TEST_REAL_BATS" --jobs 2 --tap "$ZDX_TEST_WORKER_PROBE"
+ZSH
+  chmod -- 755 "$TEST_MOCK_BIN/bats"
+  local signal
+  for signal in INT TERM; do
+    export ZDX_TEST_SIGNAL_DIR="$TEST_TEMP_DIR/worker-$signal"
+    mkdir "$ZDX_TEST_SIGNAL_DIR"
+    run perl "$TEST_TEMP_DIR/forward.pl" "$TEST_SUITE_ROOT/Justfile" "$ZDX_TEST_SIGNAL_DIR" "$signal" worker
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"recipe=nonzero signal=$signal bats=stopped"* ]]
+  done
 }
 
 @test "sandbox isolation: inherited Git hook variables never reach fixture repositories" {

@@ -633,6 +633,8 @@ is the evidence the platform work needs. The current Linux-only tests are:
 The two interactive PTY cases in `sys_maintenance.bats` and the terminal
 Ctrl-C case in `ws_clone.bats` skip unless `has_util_linux_script` succeeds,
 which also covers BSD `script` on macOS.
+The two parallel-terminal probes in `sandbox_isolation.bats` additionally
+require GNU parallel, Just, and `timeout`; one forces the Perl session path.
 The planted-pip case in the same file runs a real interpreter from a sandbox
 virtual environment without pip and skips when the host has no `python3` or
 no `venv` module.
@@ -1001,6 +1003,15 @@ GNU parallel the recipe prints a notice and runs serially; moreutils ships an
 unrelated `parallel` command, which the recipe detects and does not use. A
 plain `bats test/` always runs serially.
 
+The recipe starts BATS in a new session with `setsid`, or Perl's POSIX
+`setsid` when the utility is absent, and redirects stdin from `/dev/null`.
+This removes the controlling terminal: Zsh NUL-delimited reads in parallel
+workers cannot stop their process group and timeout watchdog with SIGTTOU.
+Output remains attached to the caller, and the recipe forwards INT, TERM,
+and HUP to BATS' process group and waits for BATS to exit. Without either
+session tool, it warns and runs BATS directly; parallel terminal runs can
+still stop on those hosts. A plain `bats` invocation does not use this runner.
+
 The suite is safe to run in parallel because no test shares state with
 another: each one gets its own sandbox `HOME`, `TMPDIR`, and mock directory
 from `test_helper.bash`, no test uses `setup_file` or opens a real network
@@ -1033,7 +1044,9 @@ signal number, as for SIGUSR1 on macOS, a Zsh `wait` then keeps waiting.
 
 BATS loads `test/setup_suite.bash` whenever it runs a file from `test/`. It
 checks the Bash floor once and exports `BATS_TEST_TIMEOUT=300` unless the
-caller already set a value, so a hung test fails instead of blocking the run.
+caller already set a value, to bound each test when its watchdog can run.
+The session runner prevents terminal job-control stops; the older-BATS
+limitation below still applies.
 The slowest test takes about 20 seconds under `--jobs 6` on Linux; export a
 different value for a slower host. BATS arms this timer before `setup`, which
 is why the default cannot live in `test_helper.bash`. BATS 1.13 and newer

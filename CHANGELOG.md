@@ -31,6 +31,8 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Run BATS in a separate session so parallel Zsh NUL readers cannot stop the
+  suite on a terminal; forward INT, TERM, and HUP and wait for BATS to exit.
 - System: `clean-system` plans and dry runs list every superseded Codex,
   Cursor Agent, Claude CLI, AWS CLI bundle, and nvm runtime version they
   remove, instead of the first three and a count.
