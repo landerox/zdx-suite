@@ -20,6 +20,7 @@ run_sys_state_zsh() {
     export PATH='$PATH'
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
     export TEST_MOCK_BIN='$TEST_MOCK_BIN'
+    builtin cd -- \"\$HOME\" || exit 89
 
     source '$TEST_SUITE_ROOT/functions/sys-common.zsh' || exit 90
     source '$TEST_SUITE_ROOT/functions/sys/sys-capabilities.zsh' || exit 91
@@ -41,6 +42,7 @@ run_core_state_zsh() {
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
     export ZDX_LAZY_LOAD=1
     unset TEST_TEMP_DIR BATS_TEST_DIRNAME ZDX_EAGER_LOAD
+    builtin cd -- \"\$HOME\" || exit 89
 
     source '$TEST_SUITE_ROOT/functions.zsh' || exit 90
 
@@ -50,7 +52,7 @@ run_core_state_zsh() {
 
 @test "sys state telemetry: writer creates owner-only directory and file" {
   run run_core_state_zsh '
-    _log_telemetry "sys:permissions" 0.001 0
+    _log_telemetry "sys:sys-info" 0.001 0
   '
 
   [ "$status" -eq 0 ]
@@ -64,7 +66,7 @@ run_core_state_zsh() {
 @test "sys state telemetry: huge duration is omitted without arithmetic errors" {
   run run_core_state_zsh '
     _log_telemetry \
-      "sys:duration-out-of-range" \
+      "sys:sys-info" \
       "999999999999999999999999999999999999" 0
   '
 
@@ -86,14 +88,14 @@ run_core_state_zsh() {
   chmod 600 "$HOME/.config/zdx/telemetry.json"
 
   run run_core_state_zsh '
-    _log_telemetry "sys:after-partial" 0.001 0
+    _log_telemetry "sys:sys-info" 0.001 0
   '
 
   [ "$status" -eq 0 ]
   local log_file="$HOME/.config/zdx/telemetry.json"
   [ "$(wc -l < "$log_file")" -eq 2 ]
   grep -q '"command":"complete"' "$log_file"
-  grep -q '"command": "after-partial"' "$log_file"
+  grep -q '"command": "sys-info"' "$log_file"
   [ "$(grep -c '"command":"partial"' "$log_file" || true)" -eq 0 ]
   [ "$(grep -c '}{' "$log_file" || true)" -eq 0 ]
   [ "$(tail -c 1 "$log_file" | wc -l)" -eq 1 ]
@@ -103,7 +105,7 @@ run_core_state_zsh() {
 @test "sys state telemetry: writer enforces bounded record retention" {
   run run_core_state_zsh '
     ZDX_TELEMETRY_MAX_RECORDS=3
-    for command_name in one two three four five; do
+    for command_name in sys-info sys-health sys-ports sys-processes sys-services; do
       _log_telemetry "sys:${command_name}" 0.001 0 || exit
     done
   '
@@ -111,28 +113,28 @@ run_core_state_zsh() {
   [ "$status" -eq 0 ]
   local log_file="$HOME/.config/zdx/telemetry.json"
   [ "$(wc -l < "$log_file")" -eq 3 ]
-  [ "$(grep -c '"command": "one"' "$log_file" || true)" -eq 0 ]
-  [ "$(grep -c '"command": "two"' "$log_file" || true)" -eq 0 ]
-  grep -q '"command": "three"' "$log_file"
-  grep -q '"command": "four"' "$log_file"
-  grep -q '"command": "five"' "$log_file"
+  [ "$(grep -c '"command": "sys-info"' "$log_file" || true)" -eq 0 ]
+  [ "$(grep -c '"command": "sys-health"' "$log_file" || true)" -eq 0 ]
+  grep -q '"command": "sys-ports"' "$log_file"
+  grep -q '"command": "sys-processes"' "$log_file"
+  grep -q '"command": "sys-services"' "$log_file"
 }
 
 @test "sys state telemetry: writer keeps the published file within byte limit" {
   run run_core_state_zsh '
     ZDX_TELEMETRY_MAX_BYTES=160
-    _log_telemetry "sys:one" 0.001 0 || exit
-    _log_telemetry "sys:two" 0.001 0 || exit
-    _log_telemetry "sys:three" 0.001 0 || exit
+    _log_telemetry "sys:sys-info" 0.001 0 || exit
+    _log_telemetry "sys:sys-health" 0.001 0 || exit
+    _log_telemetry "sys:sys-ports" 0.001 0 || exit
   '
 
   [ "$status" -eq 0 ]
   local log_file="$HOME/.config/zdx/telemetry.json"
   [ "$(wc -c < "$log_file")" -le 160 ]
   [ "$(wc -l < "$log_file")" -eq 1 ]
-  grep -q '"command": "three"' "$log_file"
-  [ "$(grep -c '"command": "one"' "$log_file" || true)" -eq 0 ]
-  [ "$(grep -c '"command": "two"' "$log_file" || true)" -eq 0 ]
+  grep -q '"command": "sys-ports"' "$log_file"
+  [ "$(grep -c '"command": "sys-info"' "$log_file" || true)" -eq 0 ]
+  [ "$(grep -c '"command": "sys-health"' "$log_file" || true)" -eq 0 ]
   [ ! -e "$HOME/.config/zdx/.telemetry.lock" ]
   [ -z "$(find "$HOME/.config/zdx" -name '.telemetry.*' -print -quit)" ]
 }
@@ -143,7 +145,7 @@ run_core_state_zsh() {
   ln -s "$HOME/telemetry-target" "$HOME/.config/zdx/telemetry.json"
 
   run run_core_state_zsh '
-    _log_telemetry "sys:must-not-write" 0.001 0
+    _log_telemetry "sys:sys-info" 0.001 0
   '
 
   [ "$status" -eq 1 ]
@@ -166,7 +168,7 @@ run_core_state_zsh() {
   before_digest=$(sha256_file "$real_config/zdx/telemetry.json")
 
   run run_core_state_zsh '
-    _log_telemetry "sys:must-not-follow-parent" 0.001 0
+    _log_telemetry "sys:sys-info" 0.001 0
   '
   [ "$status" -eq 1 ]
 
@@ -196,7 +198,7 @@ run_core_state_zsh() {
 
   run run_core_state_zsh '
     ZDX_TELEMETRY_MAX_BYTES=8
-    _log_telemetry "sys:must-not-append" 0.001 0
+    _log_telemetry "sys:sys-info" 0.001 0
   '
 
   [ "$status" -eq 1 ]

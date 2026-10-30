@@ -206,7 +206,14 @@ included in a backup, or exposed through an error log.
   the opt-in guard name mismatching identity fields with email addresses and
   signing formats only; signing keys, key IDs, and SSH key paths never reach
   their output.
-- Telemetry records command labels and timing, not command output.
+- Timing footers and newly written telemetry use command identifiers from
+  the core registry with their owning suite. Unregistered and mismatched
+  labels become a fixed unknown identifier before display or persistence,
+  including direct logger calls. The registered `zdx-status` command permits
+  the explicit compatibility spelling `zdx:status`; plugin labels absent from
+  the registry receive no separate exemption. Arguments and command output
+  never enter a new record. Existing history is not rewritten; System readers
+  retain their documented schema and size checks.
 - `sys-wsl` withholds any `/etc/wsl.conf` or `.wslconfig` value that contains
   a common credential indicator, such as `password=` in a `[boot]` mount
   command, from its report and its JSON document, and names only the key.
@@ -1663,11 +1670,25 @@ unintended targets.
 - Readers validate the five-field telemetry schema, skip malformed records,
   cap a single duration at one year, and tolerate a partial final record
   without evaluating it.
-- The opt-in core writer validates the same five fields, rejects unsafe or
-  oversized state, enforces owner-only directory and file modes, uses a lock
-  and atomic replacement, and retains a bounded number of records and bytes.
-  A partial final input line is discarded before the next complete record is
-  published, so records are never concatenated across a crash boundary.
+- The opt-in core writer validates the same five fields and canonical label,
+  checks the canonical directory's ancestors before creating state or
+  narrowing an already safe directory's mode, and refuses unsafe ancestors
+  without repairing their permissions. Existing logs, including dangling
+  symbolic links, must pass regular-file, ownership, private-mode, single-link,
+  identity, and size checks. Private same-directory staging receives its mode
+  before publication; the published destination is never chmodded. The writer
+  revalidates identities before atomic replacement and removes only unchanged
+  invocation-owned staging and lock objects. Retention bounds both records
+  and bytes. A partial final input line is discarded before the next complete
+  record is published, so records are never concatenated across a crash
+  boundary.
+- The core writer keeps the mkdir lock protocol shared with the System
+  clearer. Failed persistence produces one generic warning per shell and
+  preserves the timed command's status. Later writes can still succeed; a
+  retained lock is never removed on an age or PID guess. After confirming
+  that no writer or clearer is active, the user can remove an empty retained
+  `.telemetry.lock` directory and retry. A killed shell can still leave that
+  lock behind.
 - Telemetry clearing supports dry-run, fails closed non-interactively,
   revalidates device and inode under the writer lock, and atomically installs
   an owner-only empty file.
@@ -1817,6 +1838,8 @@ not promise to preserve arbitrary ACLs or extended attributes.
 A hostile process with the same EUID still shares the authority to race final
 path operations, even though open descriptors, identity checks, no-clobber
 publication, expected-object updates, and atomic rename make that window narrow.
+Telemetry's final pathname operations share this same-EUID limit; the mkdir
+lock coordinates cooperating writers and clearers.
 A `.venv` directory identity does not freeze every descendant file against a
 hostile same-user process. In user namespaces, an overflow UID can represent
 multiple unmapped host owners as the same namespace-visible owner of `/`; the

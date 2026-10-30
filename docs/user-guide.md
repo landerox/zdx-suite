@@ -800,7 +800,14 @@ backend, and service backend.
 - **Telemetry (`sys-telemetry --dashboard` / `--browse`)**: Inspect validated,
   bounded local telemetry without passing raw JSON to the terminal preview.
   Malformed records, implausible durations, and an incomplete final line are
-  skipped.
+  skipped. Timing footers and new records use registered commands and their
+  owning suite; an unrecognized or mismatched label appears as
+  `<suite>:unknown`, or `unknown:unknown` if its suite is also unrecognized.
+  Failed opt-in recording prints one generic warning per shell and preserves
+  the command's status. If a warning persists because an interrupted shell
+  left `~/.config/zdx/.telemetry.lock`, confirm that no telemetry writer or
+  clearer is active before manually removing that empty directory and
+  retrying. ZDX does not guess when another writer's lock is stale.
   `sys-telemetry --clear --dry-run` previews the exact clear operation;
   `--yes` is required for non-interactive clearing.
 

@@ -498,8 +498,22 @@ entry points must use the same checks.
 Telemetry remains opt-in. Telemetry records MUST contain only the suite,
 canonical command identifier, duration, exit status, and timestamp. They MUST
 NOT contain arguments, paths, environment values, command output, repository
-URLs, or credentials. Writers must use owner-only files and a bounded retention
-strategy.
+URLs, or credentials. Command identifiers MUST match `_ZDX_LAZY_FILES` and the
+suite that owns their registered loader, rather than a command-name prefix.
+An unregistered or mismatched identifier becomes `<suite>:unknown` for a
+recognized suite, or `unknown:unknown` otherwise. The compatibility label
+`zdx:status` is accepted through the registered `zdx-status` command. Plugin
+names absent from this registry receive the same unknown treatment. Human
+timing footers MUST use the normalized label even when telemetry is disabled;
+direct `_log_telemetry` calls MUST normalize it too.
+
+Writers MUST use owner-only files and bounded retention, reject unsafe
+ancestors and linked or non-private existing logs, and set staged file modes
+before atomic replacement. The writer and System clearer share the
+`.telemetry.lock` directory protocol. Failed persistence MUST produce one
+generic warning per shell without exposing the rejected label or changing
+the timed command's status. It MUST NOT disable subsequent writes or remove
+a lock on an age or PID assumption.
 
 ## Loading and shell-session safety
 
