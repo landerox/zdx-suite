@@ -40,6 +40,9 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Observe interrupted BATS workers for a bounded exit interval after their
+  leader stops, instead of treating asynchronous shutdown as an immediate
+  failure. A worker that survives the interval still fails the test.
 - Failed opt-in telemetry recording reports one generic warning per shell
   while preserving the command's status and allowing later writes. Writer
   and System clear operations retain their shared lock protocol; recovery of

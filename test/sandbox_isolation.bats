@@ -150,6 +150,14 @@ my $ok = eval {
     die "BATS received the wrong signal\n" unless $observed eq "$signal\n";
   }
   die "BATS still runs after recipe exit\n" if kill 0, $bats;
+  # Signal delivery and orphan reaping can finish after the BATS leader.
+  # Keep the existing controller alarm as the overall bound.
+  if ($worker) {
+    for (1..100) {
+      last unless kill(0, $worker);
+      select undef, undef, undef, 0.02;
+    }
+  }
   die "parallel BATS worker survived interruption\n" if $worker && kill(0, $worker);
   alarm 0;
   1;
