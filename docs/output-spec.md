@@ -305,7 +305,10 @@ Use `_zdx_count_noun <count> <singular> [plural]`. Text such as `(s)` or
 the outermost timer and no aggregate step is active. Nested timers, such as a
 command delegated to another suite or a step wrapped for telemetry, print
 nothing but still write their opt-in telemetry record. The record schema is
-defined in `development.md` and does not change.
+defined in `development.md` and does not change. The footer uses the same
+registered-command and owning-suite normalization as telemetry, even when
+recording is disabled: an unregistered or mismatched label becomes
+`<suite>:unknown` for a recognized suite, or `unknown:unknown` otherwise.
 
 ## Verbosity
 

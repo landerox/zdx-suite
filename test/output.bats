@@ -67,17 +67,18 @@ teardown() {
   export OUTPUT_LOCALE_DIR="$locale_dir"
 
   run run_zsh '
+    builtin cd -- "$HOME" || exit 80
     export LOCPATH="$OUTPUT_LOCALE_DIR" LC_ALL=de_DE.UTF-8 NO_COLOR=1
     printf -v probe "%.1f" 1.5
     [[ "$probe" == "1,5" ]] || exit 42
     _zdx_format_duration 1.5 || return 1
     print -r -- "duration=$REPLY"
-    _timed "sys:comma-check" true
+    _timed "sys:sys-info" true
   '
   [ "$status" -ne 42 ] || skip "the built locale does not use a decimal comma"
   [ "$status" -eq 0 ]
   [[ "$output" == *"duration=1.5s"* ]]
-  [[ "$output" =~ sys:comma-check\ completed\ in\ [0-9]+[.][0-9]s ]]
+  [[ "$output" =~ sys:sys-info\ completed\ in\ [0-9]+[.][0-9]s ]]
 }
 
 @test "output: counted nouns and the outcome vocabulary are exact" {
@@ -392,22 +393,23 @@ teardown() {
 
 @test "output: only the outermost timer outside a step prints a footer" {
   run run_zsh '
+    builtin cd -- "$HOME" || exit 80
     export NO_COLOR=1 ZDX_TELEMETRY=1
-    inner() { _timed "sys:inner-command" true; }
-    _timed "dev:outer-command" inner
-    _zdx_step_exec _timed "dev:step-command" true
+    inner() { _timed "sys:sys-info" true; }
+    _timed "dev:dev-check-health" inner
+    _zdx_step_exec _timed "dev:dev-check-types" true
     partial() { _zdx_timed_mark_partial || return 90; return 1; }
-    _timed "sys:outer-partial" _timed "sys:inner-partial" partial
+    _timed "sys:update-system" _timed "sys:sys-health" partial
     print -r -- "partial:$?"
     _zdx_timed_mark_partial && return 91
     command grep -c "\"command\"" "$HOME/.config/zdx/telemetry.json"
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dev:outer-command completed in "* ]]
-  [[ "$output" != *"sys:inner-command"* ]]
-  [[ "$output" != *"dev:step-command"* ]]
-  [[ "$output" == *"sys:outer-partial failed after "*"(status 1)"* ]]
-  [[ "$output" != *"sys:inner-partial"* ]]
+  [[ "$output" == *"dev:dev-check-health completed in "* ]]
+  [[ "$output" != *"sys:sys-info"* ]]
+  [[ "$output" != *"dev:dev-check-types"* ]]
+  [[ "$output" == *"sys:update-system failed after "*"(status 1)"* ]]
+  [[ "$output" != *"sys:sys-health"* ]]
   [[ "$output" == *"partial:1"* ]]
   [ "${lines[${#lines[@]}-1]}" = "5" ]
 }

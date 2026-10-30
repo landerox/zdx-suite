@@ -1303,13 +1303,24 @@ Snap's own progress output goes to stderr.
 ### Telemetry state
 
 The opt-in core writer accepts only the five documented fields: suite,
-canonical command, duration, exit status, and timestamp. It rejects unsafe
-identifiers, malformed or unbounded durations, symbolic links, non-owned files,
-and oversized existing logs. It never appends a new record to an unterminated
-partial final line; only preceding complete records can be retained.
-The containing directory and file use owner-only modes, writes use a lock and
-same-directory temporary file, and replacement is atomic. Retention defaults
-to the newest 1,000 records and the existing-log read limit defaults to 5 MiB.
+canonical command, duration, exit status, and timestamp. Command labels use
+the registered command and owning suite, with fixed unknown identifiers for
+unregistered or mismatched labels; `zdx:status` remains an explicit
+compatibility spelling. It rejects malformed or unbounded durations, unsafe
+ancestors, symbolic links including dangling ones, non-owned or non-private
+files, hard-linked logs, and oversized existing logs. It never appends a new
+record to an unterminated partial final line; only preceding complete records
+can be retained. The containing directory and file use owner-only modes;
+private same-directory staging receives its mode before atomic replacement,
+and identities are revalidated before publication and cleanup. Retention
+defaults to the newest 1,000 records and the existing-log read limit defaults
+to 5 MiB.
+
+The core writer and System clearer share the `.telemetry.lock` directory
+protocol. Failed writes produce one generic warning per shell without
+changing the timed command's status or disabling later writes. A killed shell
+can leave a lock behind; recovery is manual after confirming no writer or
+clearer is active. No lock is removed based on its age or a PID guess.
 
 `sys-telemetry --clear [--dry-run] [--yes]` shows the exact file and size,
 fails closed non-interactively, locks the telemetry directory, revalidates the

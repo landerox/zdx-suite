@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Timing footers and new telemetry records use registered identifiers and their
+  owning suite, replacing unknown or mismatched labels with fixed unknown
+  values. Telemetry persistence refuses unsafe ancestors and linked or
+  non-private logs, and publishes private staging without chmodding the
+  destination after replacement.
 - Core capture and master pickers refuse temporary roots below writable
   non-sticky ancestors and use the UID reported for `/`. Core and standalone
   System watchdog claims refuse changed, linked, or unsafe markers and keep
@@ -35,6 +40,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Failed opt-in telemetry recording reports one generic warning per shell
+  while preserving the command's status and allowing later writes. Writer
+  and System clear operations retain their shared lock protocol; recovery of
+  a lock left by a killed shell remains manual after checking no writer or
+  clearer is active.
 - Enforce assertions in BATS safety and contract tests, record Python backend
   calls through PATH mocks, and reject unchecked non-final literal Zsh
   assertions with a portable scanner and ShellCheck gates.

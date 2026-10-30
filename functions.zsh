@@ -2418,184 +2418,334 @@ _zdx_load_plugins
 zmodload zsh/datetime 2>/dev/null
 
 
-_zdx_telemetry_dir_safe() {
-  local target_dir="$1"
-  local home_abs="${HOME:A}"
-  local relative_dir="${target_dir#$HOME/}"
-  local current_dir="$HOME"
-  local component
+# REPLY: one safe suite:command identifier. Only registered built-in commands
+# and their owning loader may name records or timing footers.
+_zdx_telemetry_label() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  local input="${1-}" suite="" command_name="" owner="" loader=""
+  REPLY="unknown:unknown"
+  if [[ "$input" == *:* ]]; then
+    suite="${input%%:*}"
+    command_name="${input#*:}"
+    case "$suite" in
+      zdx|git|sys|dev|vpn|env|file|py|ws) REPLY="${suite}:unknown" ;;
+      *) return 0 ;;
+    esac
+  else
+    command_name="$input"
+  fi
+  # The status spelling predates the registered zdx-status entrypoint.
+  if [[ "$suite" == zdx && "$command_name" == status ]]; then
+    command_name=zdx-status
+  fi
+  [[ "$command_name" =~ '^[a-z][a-z0-9-]{0,95}$' ]] || return 0
+  loader="${_ZDX_LAZY_FILES[$command_name]-}"
+  case "$loader" in
+    git-menu.zsh) owner=git ;;
+    sys-menu.zsh) owner=sys ;;
+    dev-menu.zsh) owner=dev ;;
+    vpn-menu.zsh) owner=vpn ;;
+    env-menu.zsh) owner=env ;;
+    file-menu.zsh) owner=file ;;
+    py-menu.zsh) owner=py ;;
+    ws-menu.zsh) owner=ws ;;
+    zdx-menu.zsh|zdx-status.zsh|zdx-doctor.zsh|zdx-plugins.zsh) owner=zdx ;;
+    *) return 0 ;;
+  esac
+  [[ -z "$suite" || "$suite" == "$owner" ]] || return 0
+  if [[ "$input" == zdx:status ]]; then
+    REPLY=zdx:status
+  else
+    REPLY="${owner}:${command_name}"
+  fi
+}
 
-  [[ "$target_dir" == "$HOME"/* && -n "$relative_dir" ]] || return 1
+# REPLY: the canonical destination below HOME. Existing ancestors must be
+# safe before creation or chmod; .config and its children cannot be links.
+_zdx_telemetry_dir_safe() {
+  emulate -L zsh
+  unsetopt force_float
+  local target_dir="${1-}" home_abs="${HOME:A}" relative_dir=""
+  local current_dir="$home_abs" component=""
+  local -A directory_state=()
+  REPLY=""
+  [[ "$HOME" == /* && "$HOME" == "${HOME:a}" && "$home_abs" != / \
+    && "$target_dir" == "${target_dir:a}" ]] || return 1
+  _zdx_path_links_trusted "$HOME" \
+    && _zdx_ancestors_trusted "$home_abs" || return 1
+  [[ -d "$home_abs" && ! -L "$home_abs" ]] \
+    && zstat -LH directory_state -- "$home_abs" 2>/dev/null \
+    && (( directory_state[uid] == EUID \
+      && (directory_state[mode] & 8#22) == 0 )) || return 1
+  if [[ "$target_dir" == "$HOME"/* ]]; then
+    relative_dir="${target_dir#"$HOME"/}"
+  elif [[ "$target_dir" == "$home_abs"/* ]]; then
+    relative_dir="${target_dir#"$home_abs"/}"
+  else
+    return 1
+  fi
+  [[ -n "$relative_dir" ]] || return 1
   for component in "${(@s:/:)relative_dir}"; do
-    [[ -n "$component" && "$component" != "." && "$component" != ".." ]] \
+    [[ -n "$component" && "$component" != . && "$component" != .. ]] \
       || return 1
     current_dir+="/$component"
     [[ ! -L "$current_dir" ]] || return 1
     if [[ -e "$current_dir" ]]; then
-      [[ -d "$current_dir" && -O "$current_dir" ]] || return 1
+      directory_state=()
+      [[ -d "$current_dir" ]] \
+        && zstat -LH directory_state -- "$current_dir" 2>/dev/null \
+        && (( directory_state[uid] == EUID \
+          && (directory_state[mode] & 8#22) == 0 )) || return 1
     fi
   done
-  [[ "${target_dir:A}" == "$home_abs"/* ]]
+  [[ "${target_dir:A}" == "$home_abs"/* ]] || return 1
+  REPLY="${target_dir:A}"
 }
 
-_log_telemetry() {
-  setopt LOCAL_OPTIONS PIPE_FAIL
-  local label="$1"
-  local elapsed="$2"
-  local exit_code="$3"
+# REPLY: device:inode:mode:uid[:nlink]; reply: size, mtime, ctime. Directory
+# link counts change during owned mkdir operations and are not identities.
+_zdx_telemetry_snapshot() {
+  emulate -L zsh
+  unsetopt force_float
+  local target="${1-}" kind="${2-}"
+  local -A state=()
+  REPLY=""
+  reply=()
+  [[ ! -L "$target" ]] \
+    && zstat -LH state -- "$target" 2>/dev/null \
+    && (( state[uid] == EUID )) || return 1
+  case "$kind" in
+    directory|private-directory)
+      (( (state[mode] & 8#170000) == 8#040000 \
+        && (state[mode] & 8#22) == 0 )) || return 1
+      if [[ "$kind" == private-directory ]]; then
+        (( (state[mode] & 8#777) == 8#700 )) || return 1
+      fi
+      ;;
+    file|stage)
+      (( (state[mode] & 8#170000) == 8#100000 \
+        && state[nlink] == 1 && (state[mode] & 8#077) == 0 )) \
+        && [[ -r "$target" ]] || return 1
+      if [[ "$kind" == stage ]]; then
+        (( (state[mode] & 8#777) == 8#600 )) || return 1
+      fi
+      ;;
+    *) return 1 ;;
+  esac
+  REPLY="${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}"
+  [[ "$kind" == file || "$kind" == stage ]] && REPLY+=":${state[nlink]}"
+  reply=("${state[size]}" "${state[mtime]}" "${state[ctime]}")
+}
 
-  local log_dir="$HOME/.config/zdx"
-  local log_file="$log_dir/telemetry.json"
-  local lock_dir="$log_dir/.telemetry.lock"
+# The coordinator owns only normalization and a current-shell warning latch.
+# Private persistence runs with owned options and never changes command status.
+_log_telemetry() {
+  local REPLY="" label=""
+  _zdx_telemetry_label "${1-}"
+  label="$REPLY"
+  if _zdx_telemetry_write "$label" "${2-}" "${3-}" 2>/dev/null; then
+    return 0
+  fi
+  if [[ "${_ZDX_TELEMETRY_WARNED:-0}" != 1 ]]; then
+    typeset -g _ZDX_TELEMETRY_WARNED=1
+    _zdx_ui_say warn "Telemetry could not be written; check its private state and lock."
+  fi
+  return 1
+}
+
+_zdx_telemetry_write() {
+  emulate -L zsh
+  unsetopt force_float
+  setopt pipe_fail
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=() reply=()
+  local label="${1-}" elapsed="${2-}" exit_code="${3-}"
+  local literal_dir="$HOME/.config/zdx" log_dir="" log_file="" lock_dir=""
   local max_records="${ZDX_TELEMETRY_MAX_RECORDS:-1000}"
   local max_bytes="${ZDX_TELEMETRY_MAX_BYTES:-5242880}"
+  local suite="" command_name=""
+  local REPLY="" timestamp="" elapsed_ms=""
+  _zdx_telemetry_label "$label"
+  label="$REPLY"
+  suite="${label%%:*}" command_name="${label#*:}"
 
-  [[ "$max_records" =~ '^[0-9]+$' \
-    && "$max_records" != 0[0-9]* \
+  [[ "$max_records" =~ '^[0-9]+$' && "$max_records" != 0[0-9]* \
     && ${#max_records} -le 7 ]] \
     && (( max_records > 0 && max_records <= 1000000 )) || return 1
-  [[ "$max_bytes" =~ '^[0-9]+$' \
-    && "$max_bytes" != 0[0-9]* \
+  [[ "$max_bytes" =~ '^[0-9]+$' && "$max_bytes" != 0[0-9]* \
     && ${#max_bytes} -le 9 ]] \
     && (( max_bytes > 0 && max_bytes <= 134217728 )) || return 1
-  [[ "$elapsed" =~ '^[0-9]{1,8}([.][0-9]{1,9})?$' ]] || return 1
-  [[ "$elapsed" != 0[0-9]* ]] || return 1
-
-  # ISO-8601 UTC timestamp
-  local timestamp
+  [[ "$elapsed" =~ '^[0-9]{1,8}([.][0-9]{1,9})?$' \
+    && "$elapsed" != 0[0-9]* ]] || return 1
+  [[ "$exit_code" =~ '^[0-9]+$' && "$exit_code" != 0[0-9]* \
+    && ${#exit_code} -le 3 ]] && (( exit_code <= 255 )) || return 1
+  LC_ALL=C builtin printf -v elapsed_ms '%.0f' "$(( elapsed * 1000 ))"
+  [[ "$elapsed_ms" =~ '^[0-9]+$' && ${#elapsed_ms} -le 11 ]] \
+    && (( elapsed_ms <= 31536000000 )) || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
   if zmodload zsh/datetime 2>/dev/null; then
-    timestamp=$(TZ=UTC strftime "%Y-%m-%dT%H:%M:%SZ" $EPOCHSECONDS)
+    timestamp=$(TZ=UTC builtin strftime '%Y-%m-%dT%H:%M:%SZ' "$EPOCHSECONDS") \
+      || return 1
   else
-    if command -v date >/dev/null 2>&1; then
-      timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
-    fi
-    timestamp="${timestamp:-$(date)}"
+    local date_program=""
+    date_program=$(whence -p -- date 2>/dev/null) || return 1
+    [[ "$date_program" == /* && -f "$date_program" && -x "$date_program" ]] \
+      || return 1
+    timestamp=$(_zdx_run_with_timeout 3 "$date_program" -u +'%Y-%m-%dT%H:%M:%SZ' \
+      </dev/null 2>/dev/null) || return 1
   fi
-
-
-  # Calculate duration in ms
-  local elapsed_ms
-  elapsed_ms=$(printf "%.0f" $(( elapsed * 1000 )))
-
-  # Infer suite from label (e.g., "sys:update-system")
-  local suite="unknown"
-  if [[ "$label" == *":"* ]]; then
-    suite="${label%%:*}"
-    label="${label#*:}"
-  else
-    # Fallback heuristics
-    if [[ "$label" == vpn-* || "$label" == _vpn_* ]]; then
-      suite="vpn"
-    elif [[ "$label" == git-* || "$label" == _git_* ]]; then
-      suite="git"
-    elif [[ "$label" == sys-* || "$label" == _sys_* ]]; then
-      suite="sys"
-    elif [[ "$label" == dev-* || "$label" == _dev_* ]]; then
-      suite="dev"
-    fi
-  fi
-
-  # Telemetry identifiers are deliberately narrow: arguments, paths, URLs,
-  # environment values, and command output never belong in this record.
-  [[ "$suite" =~ '^[[:alnum:]_-]{1,32}$' ]] || return 1
-  [[ "$label" =~ '^[[:alnum:]_.:@+-]{1,96}$' ]] || return 1
-  [[ "$elapsed_ms" =~ '^[0-9]+$' \
-    && ${#elapsed_ms} -le 11 \
-    && "$elapsed_ms" -le 31536000000 ]] || return 1
-  [[ "$exit_code" =~ '^[0-9]+$' \
-    && "$exit_code" != 0[0-9]* ]] \
-    && (( exit_code <= 255 )) || return 1
-  [[ "$timestamp" =~ '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$' ]] \
+  [[ "$timestamp" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' ]] \
     || return 1
 
-  local previous_umask
-  previous_umask=$(umask)
-  local telemetry_tmp=""
-  local telemetry_trim=""
-  local -i lock_acquired=0 write_rc=0
-
+  local previous_umask="$(builtin umask)"
+  local directory_id="" directory_location="" lock_id="" existing_id=""
+  local telemetry_tmp="" telemetry_trim="" temporary_id="" trim_id="" published_id=""
+  local existing_stamp="" current_stamp="" final_newline_count=""
+  local -i write_rc=0 existing_bytes=0 pending_bytes=0
   {
-    umask 077
-    _zdx_telemetry_dir_safe "$log_dir" || return 1
-    if [[ -e "$log_dir" ]]; then
-      [[ -d "$log_dir" && ! -L "$log_dir" && -O "$log_dir" ]] || return 1
-    else
-      command mkdir -p "$log_dir" 2>/dev/null || return 1
+    builtin umask 077
+    _zdx_telemetry_dir_safe "$literal_dir" || return 1
+    log_dir="$REPLY"
+    log_file="$log_dir/telemetry.json"
+    lock_dir="$log_dir/.telemetry.lock"
+    command mkdir -p -- "$log_dir" 2>/dev/null || return 1
+    _zdx_telemetry_dir_safe "$literal_dir" \
+      && [[ "$REPLY" == "$log_dir" ]] || return 1
+    _zdx_telemetry_snapshot "$log_dir" directory || return 1
+    directory_location="${REPLY%:*:*}"
+    command chmod -- 700 "$log_dir" 2>/dev/null || return 1
+    _zdx_telemetry_snapshot "$log_dir" private-directory \
+      && [[ "${REPLY%:*:*}" == "$directory_location" ]] || return 1
+    directory_id="$REPLY"
+
+    command mkdir -- "$lock_dir" 2>/dev/null || return 1
+    _zdx_telemetry_snapshot "$lock_dir" private-directory || return 1
+    lock_id="$REPLY"
+
+    if [[ -e "$log_file" || -L "$log_file" ]]; then
+      _zdx_telemetry_snapshot "$log_file" file || return 1
+      existing_id="$REPLY"
+      existing_stamp="$REPLY:${(j: :)reply}"
+      existing_bytes="${reply[1]}"
+      (( existing_bytes <= max_bytes )) || return 1
     fi
-    _zdx_telemetry_dir_safe "$log_dir" || return 1
-    command chmod 700 "$log_dir" 2>/dev/null || return 1
 
-    command mkdir "$lock_dir" 2>/dev/null || return 1
-    lock_acquired=1
+    telemetry_tmp=$(command mktemp "$log_dir/.telemetry.XXXXXX") || return 1
+    [[ "${telemetry_tmp:h}" == "$log_dir" \
+      && "${telemetry_tmp:t}" == .telemetry.?????? ]] || return 1
+    _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+      && (( reply[1] == 0 )) || return 1
+    temporary_id="$REPLY"
+    command chmod -- 600 "$telemetry_tmp" 2>/dev/null || return 1
+    _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+      && [[ "$REPLY" == "$temporary_id" ]] || return 1
 
-    if [[ -e "$log_file" ]]; then
-      [[ -f "$log_file" && ! -L "$log_file" && -O "$log_file" ]] || return 1
-      local existing_bytes
-      existing_bytes=$(command wc -c < "$log_file" 2>/dev/null) || return 1
-      existing_bytes="${existing_bytes//[[:space:]]/}"
-      [[ "$existing_bytes" =~ '^[0-9]+$' \
-        && ${#existing_bytes} -le 9 ]] \
-        && (( existing_bytes <= max_bytes )) || return 1
-    fi
-
-    telemetry_tmp=$(mktemp "$log_dir/.telemetry.XXXXXX") || return 1
-    command chmod 600 "$telemetry_tmp" 2>/dev/null || return 1
-
-    if [[ -s "$log_file" ]]; then
-      local final_newline_count
+    if (( existing_bytes > 0 && max_records > 1 )); then
+      _zdx_telemetry_snapshot "$log_file" file || return 1
+      current_stamp="$REPLY:${(j: :)reply}"
+      [[ "$current_stamp" == "$existing_stamp" ]] || return 1
       final_newline_count=$(
         command tail -c 1 "$log_file" 2>/dev/null | command wc -l
       ) || return 1
       final_newline_count="${final_newline_count//[[:space:]]/}"
-      if [[ "$final_newline_count" == "1" ]]; then
-        command tail -n $(( max_records - 1 )) "$log_file" \
+      _zdx_telemetry_snapshot "$log_file" file || return 1
+      current_stamp="$REPLY:${(j: :)reply}"
+      [[ "$current_stamp" == "$existing_stamp" ]] || return 1
+      _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+        && [[ "$REPLY" == "$temporary_id" ]] || return 1
+      if [[ "$final_newline_count" == 1 ]]; then
+        command tail -n "$(( max_records - 1 ))" "$log_file" \
           >| "$telemetry_tmp" 2>/dev/null || return 1
       else
-        # A crash may leave one partial JSON line. Never join a new record to
-        # that fragment; retain only preceding complete records.
         command sed '$d' "$log_file" 2>/dev/null \
-          | command tail -n $(( max_records - 1 )) \
+          | command tail -n "$(( max_records - 1 ))" \
             >| "$telemetry_tmp" 2>/dev/null || return 1
       fi
     fi
-    printf '{"suite": "%s", "command": "%s", "duration_ms": %d, "exit_code": %d, "timestamp": "%s"}\n' \
-      "$suite" "$label" "$elapsed_ms" "$exit_code" "$timestamp" \
+    _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+      && [[ "$REPLY" == "$temporary_id" ]] || return 1
+    builtin printf '{"suite": "%s", "command": "%s", "duration_ms": %d, "exit_code": %d, "timestamp": "%s"}\n' \
+      "$suite" "$command_name" "$elapsed_ms" "$exit_code" "$timestamp" \
       >> "$telemetry_tmp" || return 1
-
-    local pending_bytes
-    pending_bytes=$(command wc -c < "$telemetry_tmp" 2>/dev/null) || return 1
-    pending_bytes="${pending_bytes//[[:space:]]/}"
-    [[ "$pending_bytes" =~ '^[0-9]+$' ]] || return 1
+    _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+      && [[ "$REPLY" == "$temporary_id" ]] || return 1
+    pending_bytes="${reply[1]}"
     if (( pending_bytes > max_bytes )); then
-      telemetry_trim=$(mktemp "$log_dir/.telemetry-trim.XXXXXX") || return 1
-      command chmod 600 "$telemetry_trim" 2>/dev/null || return 1
+      telemetry_trim=$(command mktemp "$log_dir/.telemetry-trim.XXXXXX") || return 1
+      [[ "${telemetry_trim:h}" == "$log_dir" \
+        && "${telemetry_trim:t}" == .telemetry-trim.?????? ]] || return 1
+      _zdx_telemetry_snapshot "$telemetry_trim" stage \
+        && (( reply[1] == 0 )) || return 1
+      trim_id="$REPLY"
+      command chmod -- 600 "$telemetry_trim" 2>/dev/null || return 1
+      _zdx_telemetry_snapshot "$telemetry_trim" stage \
+        && [[ "$REPLY" == "$trim_id" ]] || return 1
+      _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+        && [[ "$REPLY" == "$temporary_id" ]] || return 1
       command tail -c "$(( max_bytes + 1 ))" "$telemetry_tmp" 2>/dev/null \
         | command sed '1d' >| "$telemetry_trim" || return 1
-      [[ -s "$telemetry_trim" ]] || return 1
-      pending_bytes=$(command wc -c < "$telemetry_trim" 2>/dev/null) \
-        || return 1
-      pending_bytes="${pending_bytes//[[:space:]]/}"
-      [[ "$pending_bytes" =~ '^[0-9]+$' ]] \
-        && (( pending_bytes <= max_bytes )) || return 1
-      command mv -f "$telemetry_trim" "$telemetry_tmp" 2>/dev/null \
-        || return 1
-      telemetry_trim=""
+      _zdx_telemetry_snapshot "$telemetry_trim" stage \
+        && [[ "$REPLY" == "$trim_id" ]] || return 1
+      pending_bytes="${reply[1]}"
+      (( pending_bytes > 0 && pending_bytes <= max_bytes )) || return 1
+      _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+        && [[ "$REPLY" == "$temporary_id" ]] || return 1
+      command rm -f -- "$telemetry_tmp" 2>/dev/null || return 1
+      telemetry_tmp="$telemetry_trim"
+      temporary_id="$trim_id"
+      telemetry_trim="" trim_id=""
     fi
 
-    command mv -f "$telemetry_tmp" "$log_file" 2>/dev/null || return 1
-    telemetry_tmp=""
-    command chmod 600 "$log_file" 2>/dev/null || return 1
+    # The System clearer uses this same mkdir lock. Revalidate state before
+    # replacing a name; final same-EUID path-operation races remain possible.
+    _zdx_telemetry_dir_safe "$literal_dir" \
+      && [[ "$REPLY" == "$log_dir" ]] || return 1
+    _zdx_telemetry_snapshot "$log_dir" private-directory \
+      && [[ "$REPLY" == "$directory_id" ]] || return 1
+    _zdx_telemetry_snapshot "$lock_dir" private-directory \
+      && [[ "$REPLY" == "$lock_id" ]] || return 1
+    if [[ -n "$existing_id" ]]; then
+      _zdx_telemetry_snapshot "$log_file" file || return 1
+      current_stamp="$REPLY:${(j: :)reply}"
+      [[ "$current_stamp" == "$existing_stamp" ]] || return 1
+    else
+      [[ ! -e "$log_file" && ! -L "$log_file" ]] || return 1
+    fi
+    _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+      && [[ "$REPLY" == "$temporary_id" ]] || return 1
+    published_id="$temporary_id"
+    command mv -f -- "$telemetry_tmp" "$log_file" 2>/dev/null || return 1
+    telemetry_tmp="" temporary_id=""
+    _zdx_telemetry_snapshot "$log_file" stage \
+      && [[ "$REPLY" == "$published_id" ]] || return 1
   } always {
     write_rc=$?
-    [[ -n "$telemetry_tmp" && -f "$telemetry_tmp" ]] \
-      && command rm -f "$telemetry_tmp" 2>/dev/null
-    [[ -n "$telemetry_trim" && -f "$telemetry_trim" ]] \
-      && command rm -f "$telemetry_trim" 2>/dev/null
-    (( lock_acquired )) && command rmdir "$lock_dir" 2>/dev/null
-    umask "$previous_umask"
+    if [[ -n "$directory_id" ]] \
+      && _zdx_telemetry_dir_safe "$literal_dir" \
+      && [[ "$REPLY" == "$log_dir" ]] \
+      && _zdx_telemetry_snapshot "$log_dir" private-directory \
+      && [[ "$REPLY" == "$directory_id" ]]; then
+      if [[ -n "$telemetry_tmp" && -n "$temporary_id" ]] \
+        && _zdx_telemetry_snapshot "$telemetry_tmp" stage \
+        && [[ "$REPLY" == "$temporary_id" ]]; then
+        command rm -f -- "$telemetry_tmp" 2>/dev/null || write_rc=1
+      fi
+      if [[ -n "$telemetry_trim" && -n "$trim_id" ]] \
+        && _zdx_telemetry_snapshot "$telemetry_trim" stage \
+        && [[ "$REPLY" == "$trim_id" ]]; then
+        command rm -f -- "$telemetry_trim" 2>/dev/null || write_rc=1
+      fi
+      if [[ -n "$lock_id" ]] \
+        && _zdx_telemetry_snapshot "$lock_dir" private-directory \
+        && [[ "$REPLY" == "$lock_id" ]]; then
+        command rmdir -- "$lock_dir" 2>/dev/null || write_rc=1
+      fi
+    fi
+    builtin umask "$previous_umask"
   }
-
-  return $write_rc
+  return "$write_rc"
 }
 
 _zdx_timed_mark_partial() {
@@ -2606,6 +2756,13 @@ _zdx_timed_mark_partial() {
 _timed() {
   local label="$1"
   shift
+  # A completed owned scope keeps REPLY and regex locals away from the
+  # arbitrary callback. The callback still sees the caller's option state.
+  () {
+    local REPLY=""
+    _zdx_telemetry_label "$label"
+    label="$REPLY"
+  }
   local _ZDX_TIMED_OUTCOME=""
   # Nested timers keep writing telemetry, but only the outermost timer outside
   # an aggregate step prints: step result lines already carry their durations.
@@ -2627,6 +2784,14 @@ _timed() {
   local elapsed
   elapsed=$(( end_time - start_time ))
   (( elapsed >= 0 )) || elapsed=0
+
+  # User code may assign a common dynamically scoped name such as label.
+  # Normalize again before any display or persistence, preserving its REPLY.
+  () {
+    local REPLY=""
+    _zdx_telemetry_label "$label"
+    label="$REPLY"
+  }
 
   if (( _ZDX_TIMED_DEPTH == 1 )) && ! _zdx_step_active; then
     local REPLY="" duration=""
@@ -2658,7 +2823,9 @@ _timed() {
     local telemetry_elapsed
     # The record grammar requires a dot; LC_NUMERIC could produce a comma.
     LC_ALL=C printf -v telemetry_elapsed '%.9f' "$elapsed"
-    _log_telemetry "$label" "$telemetry_elapsed" "$exit_code"
+    if ! _log_telemetry "$label" "$telemetry_elapsed" "$exit_code"; then
+      : # Persistence failure must not replace the wrapped status under ERR_EXIT.
+    fi
   fi
 
   return $exit_code
