@@ -98,6 +98,276 @@ SH
   [ -z "$(ls -A "$PLATFORM_TMP")" ]
 }
 
+@test "platform tools: watchdog claims preserve statuses and caller FORCE_FLOAT" {
+  run run_zsh '
+    cd "$HOME" || exit 89
+    source "$PLATFORM_NO_TIMEOUT" || exit 90
+    source "$ZSH_CUSTOM/functions/sys-common.zsh" || exit 91
+    export TMPDIR="$PLATFORM_TMP"
+    # Exercise claim descriptors independently of zselect time formatting.
+    zmodload() {
+      [[ "$1" == zsh/zselect ]] && return 1
+      builtin zmodload "$@"
+    }
+    _platform_float_command() {
+      [[ -o force_float ]] || return 92
+      print -r -- "$options[forcefloat]" > "$HOME/$prefix-$1-option"
+      case "$1" in
+        success) return 0 ;;
+        status7) return 7 ;;
+        timeout) command sleep 20 ;;
+      esac
+    }
+    local prefix mode rc
+    setopt force_float
+    for prefix in zdx sys; do
+      if [[ "$prefix" == sys ]]; then
+        unfunction _zdx_run_with_timeout || exit 93
+      fi
+      for mode in success status7 timeout; do
+        "_${prefix}_run_with_timeout" 1 _platform_float_command "$mode"
+        rc=$?
+        [[ -o force_float ]] || exit 94
+        [[ "$(<"$HOME/$prefix-$mode-option")" == on ]] || exit 95
+        print -r -- "$prefix:$mode=$rc"
+      done
+    done
+    local -a markers=("$TMPDIR"/zdx-timeout.*(N))
+    (( ${#markers} == 0 )) || exit 96
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:success=0\nzdx:status7=7\nzdx:timeout=124\nsys:success=0\nsys:status7=7\nsys:timeout=124' ]
+  [ -z "$(ls -A "$PLATFORM_TMP")" ]
+}
+
+@test "platform tools: timeout claims refuse links and replaced marker identities" {
+  run run_zsh '
+    zmodload -F zsh/stat b:zstat || exit 90
+    local prefix kind marker victim identity rc
+    local -A marker_state=()
+    for prefix in zdx sys; do
+      for kind in symlink hardlink replaced missing; do
+        marker="$PLATFORM_TMP/$prefix-$kind-marker"
+        victim="$PLATFORM_TMP/$prefix-$kind-victim"
+        ( umask 077; print -r -- sentinel > "$victim" ) || exit 89
+        ( umask 077; : > "$marker" ) || exit 91
+        marker_state=()
+        zstat -LH marker_state -- "$marker" || exit 92
+        identity="${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}"
+        command mv -- "$marker" "$marker.original" || exit 93
+        case "$kind" in
+          symlink) command ln -s -- "$victim" "$marker" || exit 94 ;;
+          hardlink) command ln -- "$victim" "$marker" || exit 95 ;;
+          replaced) ( umask 077; print -r -- sentinel > "$marker" ) || exit 96 ;;
+        esac
+        "_${prefix}_timeout_claim" "$marker" caller "$identity"
+        rc=$?
+        print -r -- "$prefix:$kind=$rc"
+        [[ "$(<"$victim")" == sentinel ]] || exit 97
+        if [[ "$kind" == replaced ]]; then
+          [[ "$(<"$marker")" == sentinel ]] || exit 98
+        elif [[ "$kind" == missing ]]; then
+          [[ ! -e "$marker" ]] || exit 99
+        fi
+      done
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:symlink=2\nzdx:hardlink=2\nzdx:replaced=2\nzdx:missing=2\nsys:symlink=2\nsys:hardlink=2\nsys:replaced=2\nsys:missing=2' ]
+}
+
+@test "platform tools: timeout claims keep their first valid token and reject malformed markers" {
+  run run_zsh '
+    zmodload -F zsh/stat b:zstat || exit 90
+    local prefix marker identity first_rc second_rc bad_rc
+    local -A marker_state=()
+    for prefix in zdx sys; do
+      marker="$PLATFORM_TMP/$prefix-claim"
+      ( umask 077; : > "$marker" ) || exit 91
+      marker_state=()
+      zstat -LH marker_state -- "$marker" || exit 92
+      identity="${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}"
+      "_${prefix}_timeout_claim" "$marker" caller "$identity"
+      first_rc=$?
+      "_${prefix}_timeout_claim" "$marker" watchdog "$identity"
+      second_rc=$?
+      print -r -- "$prefix:first=$first_rc second=$second_rc"
+      print -r -- invalid > "$marker"
+      "_${prefix}_timeout_claim" "$marker" caller "$identity"
+      bad_rc=$?
+      print -r -- "$prefix:malformed=$bad_rc"
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:first=0 second=1\nzdx:malformed=2\nsys:first=0 second=1\nsys:malformed=2' ]
+}
+
+@test "platform tools: a replaced watchdog marker cannot overwrite or remove another file" {
+  run run_zsh '
+    source "$PLATFORM_NO_TIMEOUT" || exit 90
+    export TMPDIR="$PLATFORM_TMP"
+    local prefix marker victim rc
+    for prefix in zdx sys; do
+      victim="$HOME/$prefix-victim"
+      print -r -- sentinel > "$victim"
+      export PLATFORM_MARKER_VICTIM="$victim"
+      export PLATFORM_MARKER_REPLACEMENT="$HOME/$prefix-replacement"
+      if [[ "$prefix" == sys ]]; then
+        unfunction _zdx_run_with_timeout || exit 99
+      fi
+      "_${prefix}_run_with_timeout" 1 zsh -f -c '\''
+        emulate -R zsh
+        zmodload zsh/zselect || exit 91
+        local -a markers=("$TMPDIR"/zdx-timeout.*(N))
+        (( ${#markers} == 1 )) || exit 92
+        command mv -- "$markers[1]" "$markers[1].original" || exit 93
+        command ln -s -- "$PLATFORM_MARKER_VICTIM" "$markers[1]" || exit 94
+        print -r -- "$markers[1]" > "$PLATFORM_MARKER_REPLACEMENT"
+        zselect -t 200
+        exit 0
+      '\''
+      rc=$?
+      marker=$(<"$PLATFORM_MARKER_REPLACEMENT") || exit 95
+      print -r -- "${prefix}:rc=$rc"
+      [[ "$(<"$victim")" == sentinel ]] || exit 96
+      [[ -L "$marker" ]] || exit 97
+      command rm -f -- "$marker" "$marker.original" || exit 98
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:rc=1\nsys:rc=1' ]
+}
+
+@test "platform tools: timeout claims close descriptors on success and refused opens" {
+  run run_zsh '
+    zmodload -F zsh/stat b:zstat || exit 90
+    zmodload -F zsh/system b:sysopen b:sysread || exit 91
+    local prefix marker victim identity held_fd held_byte
+    local -i attempt rc
+    local -A marker_state=()
+    for prefix in zdx sys; do
+      (
+        limit descriptors 48 || exit 92
+        marker="$PLATFORM_TMP/$prefix-fd-marker"
+        victim="$PLATFORM_TMP/$prefix-fd-victim"
+        ( umask 077; print -r -- X > "$victim" ) || exit 93
+        sysopen -r -o nofollow,cloexec -u held_fd -- "$victim" || exit 94
+        for attempt in {1..40}; do
+          ( umask 077; : > "$marker" ) || exit 95
+          marker_state=()
+          zstat -LH marker_state -- "$marker" || exit 96
+          identity="${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}"
+          "_${prefix}_timeout_claim" "$marker" caller "$identity" || exit 97
+          "_${prefix}_timeout_claim" "$marker" watchdog "$identity"
+          rc=$?
+          (( rc == 1 )) || exit 98
+          print -r -- invalid > "$marker"
+          "_${prefix}_timeout_claim" "$marker" caller "$identity"
+          rc=$?
+          (( rc == 2 )) || exit 99
+          command rm -f -- "$marker" || exit 100
+          ( umask 077; : > "$marker" ) || exit 101
+          marker_state=()
+          zstat -LH marker_state -- "$marker" || exit 102
+          identity="${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}"
+          # Replace the pathname after the write FD opens. The read open
+          # must refuse the new link and the already-open FD must close.
+          sysopen() {
+            builtin sysopen "$@" || return $?
+            if [[ "$1" == -w ]]; then
+              command mv -- "${argv[-1]}" "${argv[-1]}.original" || return 103
+              command ln -s -- "$victim" "${argv[-1]}" || return 104
+            fi
+          }
+          "_${prefix}_timeout_claim" "$marker" caller "$identity"
+          rc=$?
+          unfunction sysopen || exit 105
+          (( rc == 2 )) || exit 106
+          command rm -f -- "$marker" "$marker.original" || exit 107
+        done
+        sysread -i "$(( held_fd ))" -s 1 held_byte || exit 108
+        [[ "$held_byte" == X ]] || exit 109
+        exec {held_fd}<&-
+        [[ "$(<"$victim")" == X ]] || exit 110
+        print -r -- "${prefix}:descriptors=closed"
+      ) || exit $?
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:descriptors=closed\nsys:descriptors=closed' ]
+}
+
+@test "platform tools: unusable markers preserve command interruption statuses" {
+  run run_zsh '
+    source "$PLATFORM_NO_TIMEOUT" || exit 90
+    export TMPDIR="$PLATFORM_TMP"
+    local prefix code marker rc
+    for prefix in zdx sys; do
+      if [[ "$prefix" == sys ]]; then
+        unfunction _zdx_run_with_timeout || exit 91
+      fi
+      for code in 130 143; do
+        export PLATFORM_TAMPER_EXIT="$code"
+        export PLATFORM_MARKER_VICTIM="$HOME/$prefix-$code-victim"
+        export PLATFORM_MARKER_REPLACEMENT="$HOME/$prefix-$code-replacement"
+        print -r -- sentinel > "$PLATFORM_MARKER_VICTIM"
+        "_${prefix}_run_with_timeout" 5 zsh -f -c '\''
+          emulate -R zsh
+          local -a markers=("$TMPDIR"/zdx-timeout.*(N))
+          (( ${#markers} == 1 )) || exit 92
+          command mv -- "$markers[1]" "$markers[1].original" || exit 93
+          command ln -s -- "$PLATFORM_MARKER_VICTIM" "$markers[1]" || exit 94
+          print -r -- "$markers[1]" > "$PLATFORM_MARKER_REPLACEMENT"
+          exit "$PLATFORM_TAMPER_EXIT"
+        '\''
+        rc=$?
+        marker=$(<"$PLATFORM_MARKER_REPLACEMENT") || exit 95
+        [[ "$(<"$PLATFORM_MARKER_VICTIM")" == sentinel ]] || exit 96
+        [[ -L "$marker" ]] || exit 97
+        command rm -f -- "$marker" "$marker.original" || exit 98
+        print -r -- "${prefix}:$code=$rc"
+      done
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:130=130\nzdx:143=143\nsys:130=130\nsys:143=143' ]
+}
+
+@test "platform tools: missing secure claim capabilities refuse the command before launch" {
+  run run_zsh '
+    source "$PLATFORM_NO_TIMEOUT" || exit 90
+    export TMPDIR="$PLATFORM_TMP"
+    zmodload() {
+      if [[ "$*" == *zsh/system* && "$*" == *b:sysopen* ]]; then
+        return 1
+      fi
+      builtin zmodload "$@"
+    }
+    local prefix rc ran
+    for prefix in zdx sys; do
+      if [[ "$prefix" == sys ]]; then
+        unfunction _zdx_run_with_timeout || exit 91
+      fi
+      "_${prefix}_run_with_timeout" 5 touch "$HOME/$prefix-ran"
+      rc=$?
+      ran=no
+      [[ -e "$HOME/$prefix-ran" ]] && ran=yes
+      print -r -- "${prefix}:rc=$rc ran=$ran"
+    done
+    local -a markers=("$TMPDIR"/zdx-timeout.*(N))
+    (( ${#markers} == 0 )) || exit 92
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'zdx:rc=1 ran=no\nsys:rc=1 ran=no' ]
+}
+
 @test "platform tools: the watchdog stops descendants and keeps its marker private" {
   mkdir -m 700 "$TEST_TEMP_DIR/physical"
   ln -s "$TEST_TEMP_DIR/physical" "$TEST_TEMP_DIR/alias"

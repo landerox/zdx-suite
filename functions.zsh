@@ -879,15 +879,18 @@ _zdx_capture_parent_safe() {
   parent="$REPLY"
   REPLY=""
   [[ -d "$parent" && ! -L "$parent" ]] || return 1
-  local -A state=()
+  local -A state=() root_state=()
   zstat -L -H state -- "$parent" 2>/dev/null || return 1
+  zstat -LH root_state -- / 2>/dev/null || return 1
   if (( state[uid] == EUID && (state[mode] & 8#022) == 0 )); then
     :
-  elif (( state[uid] == 0 && (state[mode] & 8#1000) != 0 )); then
+  elif (( state[uid] == root_state[uid] \
+    && (state[mode] & 8#1000) != 0 && (state[mode] & 8#2) != 0 )); then
     :
   else
     return 1
   fi
+  _zdx_ancestors_trusted "$parent" || return 1
   REPLY="$parent"
 }
 
@@ -1438,8 +1441,9 @@ _zdx_run_captured_here() {
 # still runs, KILL one second later. Each pass reaches every process in its
 # snapshot, even when the command exits on the first signal, and a process
 # listing that stalls is abandoned after two seconds; the expiry marker lives
-# below a validated TMPDIR. The command inherits the caller's stdin, stdout,
-# and stderr; this service prints nothing on success.
+# below a validated TMPDIR. Without the secure marker builtins from zsh/system
+# the fallback returns 1 before starting the command. The command inherits
+# the caller's stdin, stdout, and stderr; this service prints nothing on success.
 
 # Private: REPLY is the `ps -Ao pid=,ppid=` listing, read within an absolute
 # two-second deadline. The wait goes in short slices and the remaining time is
@@ -1530,15 +1534,58 @@ _zdx_timeout_signal_tree() {
 # Private: the caller and the watchdog each append their own token to the
 # marker once, and the first token settles the deadline: the caller cancelled
 # it, or the watchdog fired it. Status 0 when <token> is first, 1 when the
-# other side's token is, and 2 when no token can be read.
+# other side's token is, and 2 when the recorded marker is unusable. The
+# expected identity is device:inode:mode:uid:nlink, captured before either
+# claimant starts. Neither opening follows a link or creates a missing file.
 _zdx_timeout_claim() {
   emulate -L zsh
-  local marker="${1-}" token="${2-}" first=""
-  { print -r -- "$token" >> "$marker" } 2>/dev/null
-  { IFS= read -r first < "$marker" } 2>/dev/null
-  [[ -n "$first" ]] || return 2
-  [[ "$first" == "$token" ]] || return 1
-  return 0
+  unsetopt force_float
+  local marker="${1-}" token="${2-}" identity="${3-}"
+  local first="" content="" payload="${token}"$'\n'
+  local -i write_fd=-1 read_fd=-1 claim_fd=-1 written=0
+  local -A marker_state=() fd_state=()
+  [[ "$marker" == /* && -n "$identity" \
+    && ( "$token" == caller || "$token" == watchdog ) ]] || return 2
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 2
+  zmodload -F zsh/system b:sysopen b:sysread b:syswrite 2>/dev/null || return 2
+  zstat -LH marker_state -- "$marker" 2>/dev/null || return 2
+  if (( (marker_state[mode] & 8#170000) != 8#100000 \
+      || (marker_state[mode] & 8#777) != 8#600 \
+      || marker_state[uid] != EUID || marker_state[nlink] != 1 \
+      || marker_state[size] > 16 )) \
+    || [[ "${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}" \
+      != "$identity" ]]; then
+    return 2
+  fi
+  {
+    sysopen -w -a -o nofollow,nonblock,cloexec -u write_fd \
+      -- "$marker" 2>/dev/null || return 2
+    sysopen -r -o nofollow,nonblock,cloexec -u read_fd \
+      -- "$marker" 2>/dev/null || return 2
+    for claim_fd in "$write_fd" "$read_fd"; do
+      fd_state=()
+      zstat -H fd_state -f "$(( claim_fd ))" 2>/dev/null || return 2
+      [[ "${fd_state[device]}:${fd_state[inode]}:${fd_state[mode]}:${fd_state[uid]}:${fd_state[nlink]}" \
+        == "$identity" ]] && (( fd_state[size] <= 16 )) || return 2
+    done
+    # One short append preserves the first-token arbitration between the
+    # caller and watchdog; a partial/error write cannot become a valid claim.
+    syswrite -c written -o "$(( write_fd ))" "$payload" 2>/dev/null || return 2
+    (( written == ${#payload} )) || return 2
+    sysread -i "$(( read_fd ))" -s 17 content 2>/dev/null || return 2
+    [[ "$content" == *$'\n'* ]] && (( ${#content} <= 16 )) || return 2
+    first="${content%%$'\n'*}"
+    [[ "$first" == caller || "$first" == watchdog ]] || return 2
+    marker_state=()
+    zstat -LH marker_state -- "$marker" 2>/dev/null || return 2
+    [[ "${marker_state[device]}:${marker_state[inode]}:${marker_state[mode]}:${marker_state[uid]}:${marker_state[nlink]}" \
+      == "$identity" ]] || return 2
+    [[ "$first" == "$token" ]] || return 1
+    return 0
+  } always {
+    (( write_fd >= 0 )) && { exec {write_fd}>&- } 2>/dev/null
+    (( read_fd >= 0 )) && { exec {read_fd}<&- } 2>/dev/null
+  }
 }
 
 # Private: status 0 while <pid> is a running or stopped job of this shell. Zsh
@@ -1583,17 +1630,26 @@ _zdx_timeout_watchdog() {
   setopt LOCAL_OPTIONS NO_MONITOR
   local -i seconds="${1-0}"
   shift
-  local REPLY="" parent="" timeout_marker=""
+  local REPLY="" parent="" timeout_marker="" timeout_marker_id=""
   _zdx_capture_parent_safe || {
     _zdx_ui_say error \
       "TMPDIR must be an owner-private or root-owned sticky directory for bounded commands."
     return 1
   }
   parent="$REPLY"
+  zmodload -F zsh/system b:sysopen b:sysread b:syswrite 2>/dev/null || return 1
   timeout_marker=$(umask 077; command mktemp \
     "$parent/zdx-timeout.XXXXXX" 2>/dev/null) || return 1
   [[ "${timeout_marker:h}" == "$parent" && -f "$timeout_marker" \
     && ! -L "$timeout_marker" ]] || return 1
+  local -A timeout_marker_state=()
+  zstat -LH timeout_marker_state -- "$timeout_marker" 2>/dev/null || return 1
+  (( (timeout_marker_state[mode] & 8#170000) == 8#100000 \
+    && (timeout_marker_state[mode] & 8#777) == 8#600 \
+    && timeout_marker_state[uid] == EUID \
+    && timeout_marker_state[nlink] == 1 && timeout_marker_state[size] == 0 )) \
+    || return 1
+  timeout_marker_id="${timeout_marker_state[device]}:${timeout_marker_state[inode]}:${timeout_marker_state[mode]}:${timeout_marker_state[uid]}:${timeout_marker_state[nlink]}"
   local -i command_pid=0 watchdog_pid=0 command_rc=0 timed_out=0 claim_rc=0
   local caller_pid=""
   zmodload -F zsh/system p:sysparams 2>/dev/null \
@@ -1619,7 +1675,7 @@ _zdx_timeout_watchdog() {
     fi
     trap 'if (( in_pass )); then stop_requested=1; else exit 0; fi' TERM
     in_pass=1
-    if _zdx_timeout_claim "$timeout_marker" watchdog; then
+    if _zdx_timeout_claim "$timeout_marker" watchdog "$timeout_marker_id"; then
       _zdx_timeout_signal_tree "$command_pid" TERM
       in_pass=0
       (( stop_requested )) && exit 0
@@ -1641,7 +1697,7 @@ _zdx_timeout_watchdog() {
     wait "$command_pid" 2>/dev/null
     command_rc=$?
   } always {
-    _zdx_timeout_claim "$timeout_marker" caller || claim_rc=$?
+    _zdx_timeout_claim "$timeout_marker" caller "$timeout_marker_id" || claim_rc=$?
     (( claim_rc == 1 )) && timed_out=1
     # Only a job this shell has not reaped is signaled.
     if _zdx_timeout_job_running "$watchdog_pid"; then
@@ -1658,9 +1714,18 @@ _zdx_timeout_watchdog() {
       _zdx_timeout_signal_tree "$command_pid" TERM
       wait "$command_pid" 2>/dev/null
     fi
-    command rm -f -- "$timeout_marker" 2>/dev/null
+    timeout_marker_state=()
+    if zstat -LH timeout_marker_state -- "$timeout_marker" 2>/dev/null \
+      && [[ "${timeout_marker_state[device]}:${timeout_marker_state[inode]}:${timeout_marker_state[mode]}:${timeout_marker_state[uid]}:${timeout_marker_state[nlink]}" \
+        == "$timeout_marker_id" ]]; then
+      command rm -f -- "$timeout_marker" 2>/dev/null
+    fi
   }
 
+  if (( claim_rc == 2 )); then
+    (( command_rc == 130 || command_rc == 143 )) && return $command_rc
+    return 1
+  fi
   (( timed_out )) && return 124
   return $command_rc
 }

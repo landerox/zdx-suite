@@ -233,6 +233,34 @@ if (( ! ${+functions[_zdx_resolve_trusted_dir]} )); then
   }
 fi
 
+# Standalone copy of the core canonical ancestor policy. Normal loading
+# keeps the core definition; platform_paths.bats compares both bodies.
+if (( ! ${+functions[_zdx_ancestors_trusted]} )); then
+_zdx_ancestors_trusted() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local child_path="${1-}" parent_path=""
+  [[ "$child_path" == /* && "$child_path" == "${child_path:A}" ]] || return 1
+  local -A root_state=() parent_state=()
+  zstat -LH root_state -- / 2>/dev/null || return 1
+  while [[ "$child_path" != / ]]; do
+    parent_path="${child_path:h}"
+    parent_state=()
+    [[ -d "$parent_path" && ! -L "$parent_path" ]] \
+      && zstat -LH parent_state -- "$parent_path" 2>/dev/null || return 1
+    if (( (parent_state[uid] != root_state[uid] \
+        && parent_state[uid] != EUID) \
+      || ((parent_state[mode] & 8#22) != 0 \
+        && ! (parent_state[uid] == root_state[uid] \
+          && (parent_state[mode] & 8#1000) != 0 \
+          && (parent_state[mode] & 8#2) != 0)) )); then
+      return 1
+    fi
+    child_path="$parent_path"
+  done
+}
+fi
+
 # REPLY is the canonical temporary root. TMPDIR may be reached through a
 # trusted alias, such as macOS /var/folders or /tmp; the ownership and sticky
 # checks apply to the canonical directory.
@@ -252,6 +280,7 @@ _zdx_temp_parent_safe() {
 
   _zdx_root_uid || return 1
   local -i root_uid=$REPLY
+  REPLY=""
   local -A parent_state=()
   zstat -LH parent_state -- "$temp_parent" 2>/dev/null || return 1
   if (( parent_state[uid] == EUID \
@@ -264,6 +293,7 @@ _zdx_temp_parent_safe() {
   else
     return 1
   fi
+  _zdx_ancestors_trusted "$temp_parent" || return 1
   REPLY="$temp_parent"
 }
 

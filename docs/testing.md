@@ -149,6 +149,16 @@ create a separate test file merely because a production file exists.
 
 ### Platform portability coverage
 
+`platform_paths.bats` also checks the core capture and master picker against
+private temporary roots below writable non-sticky ancestors, the UID reported
+for `/`, and exact parity of the master's standalone ancestor helper.
+`platform_tools.bats` checks identity-bound, nofollow watchdog claims in both
+core and standalone System, preserved replacement paths, unchanged victims,
+descriptor cleanup across repeated successful and refused claims, and
+preserved interruption statuses after marker corruption. The supported
+sleep-based fallback also checks claim descriptors under `FORCE_FLOAT`
+without changing the callback's or caller's option.
+
 These files reproduce macOS and WSL path and tool differences through mocks
 and fixtures, so they pass on any host; the macOS workflow also runs them on an
 Apple Silicon runner. They do not replace acceptance of host-only behavior.

@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Core capture and master pickers refuse temporary roots below writable
+  non-sticky ancestors and use the UID reported for `/`. Core and standalone
+  System watchdog claims refuse changed, linked, or unsafe markers and keep
+  replacement paths during cleanup instead of writing through them.
 - VPN: profile import refuses `wg-quick` lifecycle hooks in any section and
   letter case, and a second `[Interface]`, whatever options the calling shell
   sets. Before, an inherited `PIPE_FAIL` let a padded profile carry a `PreUp`

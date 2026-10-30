@@ -83,6 +83,33 @@ _platform_fake_owner() {
     set -A "$array_name" "${(@kv)observed}"
   }
 }
+
+# Model a filesystem namespace whose root owner is not uid 0. Keep each
+# actual system-owned ancestor in that namespace, plus one sticky fixture.
+_platform_fake_root_owner() {
+  zmodload -F zsh/stat b:zstat || return 90
+  local -A original_root=()
+  builtin zstat -LH original_root -- / || return 91
+  typeset -gi PLATFORM_REAL_ROOT_UID=${original_root[uid]}
+  typeset -gi PLATFORM_FAKE_ROOT_UID=$(( EUID + 4242 ))
+  (( PLATFORM_FAKE_ROOT_UID != PLATFORM_REAL_ROOT_UID )) \
+    || (( ++PLATFORM_FAKE_ROOT_UID ))
+  zstat() {
+    builtin zstat "$@" || return
+    local array_name="" argument="" previous=""
+    for argument in "$@"; do
+      [[ "$previous" == -*H ]] && array_name="$argument"
+      previous="$argument"
+    done
+    [[ -n "$array_name" ]] || return 0
+    local -A observed=("${(@kvP)array_name}")
+    if (( observed[uid] == PLATFORM_REAL_ROOT_UID )) \
+      || [[ "${@[-1]}" == "$PLATFORM_STICKY_ROOT" ]]; then
+      observed[uid]=$PLATFORM_FAKE_ROOT_UID
+      set -A "$array_name" "${(@kv)observed}"
+    fi
+  }
+}
 ZSH
 }
 
@@ -204,6 +231,147 @@ _platform_labels=(zdx-core zdx-menu env file py git sys dev ws vpn \
 
   [ "$status" -eq 0 ]
   [ "$output" = "$(_platform_expect refused "${_platform_labels[@]}")" ]
+}
+
+# Exercise the real core capture and master picker after the parent checks,
+# so acceptance cannot be hidden by a validator-only assertion.
+_platform_core_ancestor_case() {
+  local ancestor_mode="$1"
+  mkdir -m 700 "$TEST_TEMP_DIR/shared" "$TEST_TEMP_DIR/shared/private"
+  chmod -- "$ancestor_mode" "$TEST_TEMP_DIR/shared"
+  export PLATFORM_UNSAFE_ROOT="$TEST_TEMP_DIR/shared/private"
+  export MOCK_FZF_MODE=response MOCK_FZF_RESPONSE=picked
+  run run_zsh '
+    local validator=""
+    local -i check_rc=0
+    export TMPDIR="$PLATFORM_UNSAFE_ROOT"
+    for validator in _zdx_capture_parent_safe _zdx_temp_parent_safe; do
+      REPLY=stale
+      check_rc=0
+      if [[ "$validator" == _zdx_capture_parent_safe ]]; then
+        "$validator" 2>/dev/null || check_rc=$?
+      else
+        "$validator" "$TMPDIR" 2>/dev/null || check_rc=$?
+      fi
+      print -r -- "$validator=$check_rc:$REPLY"
+    done
+    check_rc=0
+    _zdx_run_captured "ancestor refusal" "" "" \
+      touch "$HOME/capture-ran" 2>/dev/null || check_rc=$?
+    print -r -- "capture=$check_rc"
+    REPLY=stale
+    check_rc=0
+    _zdx_fzf_capture </dev/null 2>/dev/null || check_rc=$?
+    print -r -- "picker=$check_rc:$REPLY"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'_zdx_capture_parent_safe=1:\n_zdx_temp_parent_safe=1:\ncapture=1\npicker=125:' ]
+  [ ! -e "$HOME/capture-ran" ]
+  _platform_empty_dir "$PLATFORM_UNSAFE_ROOT"
+}
+
+@test "platform paths: core and master refuse a group-writable canonical ancestor" {
+  _platform_core_ancestor_case 770
+}
+
+@test "platform paths: core and master refuse a non-sticky world-writable canonical ancestor" {
+  _platform_core_ancestor_case 777
+}
+
+@test "platform paths: standalone master refuses writable canonical ancestors" {
+  local ancestor_mode
+  mkdir -m 700 "$TEST_TEMP_DIR/shared" "$TEST_TEMP_DIR/shared/private"
+  export PLATFORM_UNSAFE_ROOT="$TEST_TEMP_DIR/shared/private"
+  for ancestor_mode in 770 777; do
+    chmod -- "$ancestor_mode" "$TEST_TEMP_DIR/shared"
+    run zsh -f -c '
+      emulate -R zsh
+      source "$1/functions/zdx-common.zsh" || exit 90
+      REPLY=stale
+      local -i check_rc=0
+      _zdx_temp_parent_safe "$PLATFORM_UNSAFE_ROOT" 2>/dev/null || check_rc=$?
+      print -r -- "master=$check_rc:$REPLY"
+    ' _ "$TEST_SUITE_ROOT"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = 'master=1:' ]
+  done
+  _platform_empty_dir "$PLATFORM_UNSAFE_ROOT"
+}
+
+@test "platform paths: core and master clear REPLY after refusing an unsafe temporary leaf" {
+  mkdir -m 770 "$TEST_TEMP_DIR/unsafe-leaf"
+  export PLATFORM_UNSAFE_ROOT="$TEST_TEMP_DIR/unsafe-leaf"
+  run run_zsh '
+    export TMPDIR="$PLATFORM_UNSAFE_ROOT"
+    local validator=""
+    local -i check_rc=0
+    for validator in _zdx_capture_parent_safe _zdx_temp_parent_safe; do
+      REPLY=stale
+      check_rc=0
+      if [[ "$validator" == _zdx_capture_parent_safe ]]; then
+        "$validator" 2>/dev/null || check_rc=$?
+      else
+        "$validator" "$TMPDIR" 2>/dev/null || check_rc=$?
+      fi
+      print -r -- "$validator=$check_rc:$REPLY"
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'_zdx_capture_parent_safe=1:\n_zdx_temp_parent_safe=1:' ]
+
+  run zsh -f -c '
+    emulate -R zsh
+    source "$1/functions/zdx-common.zsh" || exit 90
+    REPLY=stale
+    local -i check_rc=0
+    _zdx_temp_parent_safe "$PLATFORM_UNSAFE_ROOT" 2>/dev/null || check_rc=$?
+    print -r -- "master=$check_rc:$REPLY"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'master=1:' ]
+}
+
+@test "platform paths: core and master accept sticky roots owned by the filesystem root uid" {
+  mkdir -m 1777 "$TEST_TEMP_DIR/sticky-root"
+  export PLATFORM_STICKY_ROOT="$TEST_TEMP_DIR/sticky-root"
+  run run_zsh '
+    source "$PLATFORM_PROBE" || exit 90
+    _platform_fake_root_owner || exit 91
+    export TMPDIR="$PLATFORM_STICKY_ROOT"
+    _platform_probe zdx-core _zdx_capture_parent_safe
+    _platform_probe zdx-menu _zdx_temp_parent_safe "$TMPDIR"
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(_platform_expect "$PLATFORM_STICKY_ROOT" zdx-core zdx-menu)" ]
+
+  run zsh -f -c '
+    emulate -R zsh
+    source "$1/functions/zdx-common.zsh" || exit 90
+    source "$PLATFORM_PROBE" || exit 91
+    _platform_fake_root_owner || exit 92
+    _platform_probe zdx-menu _zdx_temp_parent_safe "$PLATFORM_STICKY_ROOT"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "zdx-menu=$PLATFORM_STICKY_ROOT" ]
+}
+
+@test "platform paths: standalone master ancestor policy matches the core" {
+  run zsh -f -c '
+    emulate -R zsh
+    source "$1/functions/zdx-common.zsh" || exit 90
+    print -r -- "${functions[_zdx_ancestors_trusted]-}"
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  local standalone_fallback="$output"
+
+  run run_zsh 'print -r -- "${functions[_zdx_ancestors_trusted]}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$standalone_fallback" ]
 }
 
 @test "platform paths: a group-writable canonical root stays refused behind an alias" {

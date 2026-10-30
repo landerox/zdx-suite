@@ -1649,9 +1649,12 @@ unintended targets.
   literal path is accepted only as a root-owned system alias, such as macOS
   `/var` and `/tmp`, or above the final component when the current user owns
   it inside a directory that group and other users cannot write; a `TMPDIR`
-  that is itself an owned link stays refused. Ownership, sticky-bit, and
-  ancestor checks apply to the canonical directory, and private files are
-  created only below it, so a later link swap cannot redirect them. A
+  that is itself an owned link stays refused. The core capture and master
+  picker apply ownership, sticky-bit, and ancestor checks to the canonical
+  directory, using the UID reported for `/` as the root owner. The master
+  keeps an identical standalone ancestor helper with parity coverage.
+  Suite-specific temporary validators retain their separate contracts;
+  remaining ancestor-check gaps are assigned to their suite audit work. A
   root-owned alias is trusted platform configuration; the residual risk is a
   system administrator or compromised root account.
 - System telemetry readers refuse symlinks, non-regular files, files not owned
@@ -2153,6 +2156,14 @@ memory or CPU during inspection.
 **Current controls.**
 
 - System diagnostic version, package, and startup probes use bounded execution.
+- Core and standalone System watchdog claims open the recorded private,
+  singly linked regular marker through nofollow append/read descriptors and
+  compare both descriptor identities with the recorded device, inode, mode,
+  owner, and link count. One bounded token append retains first-token
+  arbitration; changed paths are preserved at cleanup. Link, hard-link,
+  replacement, and descriptor-limit regressions cover this boundary. Without
+  the secure marker builtins from `zsh/system`, both watchdog fallbacks refuse
+  execution before creating a marker or starting the command.
 - GNU `timeout` and `gtimeout` use a TERM deadline and KILL grace period, with
   process-group termination for descendants under GNU semantics. BusyBox-style
   timeout is supported, with a Zsh-native watchdog when no timeout binary
@@ -2468,16 +2479,22 @@ killed by a general watchdog.
 The Zsh watchdog signals only the processes in one `ps -Ao pid=,ppid=`
 listing: processes that left the command's tree before it are not signaled,
 and when no complete listing arrives within two seconds of wall-clock time
-(zsh/system missing, or `ps` missing, failing, or stalled) only the command
+(`ps` missing, failing, or stalled, for example) only the command
 is; an abandoned `ps` keeps running until it ends or writes again. As with GNU
 `timeout -k`, KILL follows only while the command runs, so a TERM-ignoring
 descendant of a command that exits on TERM survives. The watchdog is not the
 command's parent, so a command that exits on its own while a fired watchdog
 lists its tree can receive that pass's signal up to two seconds after the
-caller reaped it. When the marker cannot be written, no claim exists and the
-bound is not enforced. Without zsh/parameter the caller signals without its
-reaped-process check, and without zsh/system the watchdog cannot see that its
-caller died and lingers its full minute. After an interrupt past the
+caller reaped it. When the marker cannot be trusted or written, no reliable
+claim exists and the bound is not enforced; after the command finishes the
+caller preserves an interruption status of `130` or `143`, otherwise reports
+an operational failure rather than claiming a verified timeout.
+A same-user command can still tamper with its marker. Canonical ancestor
+checks remove the other-user replacement precondition for the core's root.
+Without zsh/parameter the caller signals without its reaped-process check.
+If the optional caller-monitoring `sysparams` capability is unavailable even
+though secure marker builtins are present, the watchdog cannot see that its
+caller died and may linger until its deadline. After an interrupt past the
 deadline, the caller's own TERM pass and wait have no KILL escalation.
 
 ## Residual-risk priorities
@@ -2630,4 +2647,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-10-28.
+Last reviewed: 2026-10-29.
