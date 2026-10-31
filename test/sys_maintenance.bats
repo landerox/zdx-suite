@@ -1065,13 +1065,18 @@ EOF
 @test "sys maintenance: cooperative APT takeover sends only one validated SIGTERM" {
   export MOCK_KILL_ALLOW_TERM=1
   export MOCK_SUDO_ALLOW="__validate__,kill"
+  # These words and the space are path data, not extra privileged operations.
+  local kill_fixture_dir="$TEST_TEMP_DIR/rm-lock-systemctl-KILL fixture"
+  mkdir -m 700 "$kill_fixture_dir"
+  export APT_KILL_PROGRAM="$kill_fixture_dir/kill"
+  cp "$TEST_MOCK_BIN/kill" "$APT_KILL_PROGRAM"
   local fingerprint=$'unattended-upgrade\t4242\t0\t998877\tunattended-upgr\tapt-daily-upgrade.service\t/usr/bin/unattended-upgrade'
   export APT_AUTOMATIC_FINGERPRINT="$fingerprint"
 
   run run_maintenance_zsh '
     _sys_apt_minimal_steps_enabled() { return 0; }
     _sys_apt_kill_program() {
-      REPLY="$TEST_MOCK_BIN/kill"
+      REPLY="$APT_KILL_PROGRAM"
     }
     _sys_apt_unattended_fingerprint() {
       REPLY="$APT_AUTOMATIC_FINGERPRINT"
@@ -1085,15 +1090,15 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_SIGNAL_LOG")" = "kill -s TERM -- 4242" ]
-  if grep -Eq -- 'KILL|systemctl|rm|lock' \
-    "$MAINT_SIGNAL_LOG" "$MOCK_SUDO_LOG"; then
-    return 1
-  fi
   if (( EUID == 0 )); then
     [ ! -s "$MOCK_SUDO_LOG" ]
   else
-    [ "$(cat "$MOCK_SUDO_LOG")" = \
-      $'sudo -v\n'"sudo -n $TEST_MOCK_BIN/kill -s TERM -- 4242" ]
+    local expected_sudo_log
+    expected_sudo_log=$(
+      printf 'sudo -v\nsudo'
+      printf ' %q' -n "$APT_KILL_PROGRAM" -s TERM -- 4242
+    )
+    [ "$(cat "$MOCK_SUDO_LOG")" = "$expected_sudo_log" ]
   fi
   [ ! -s "$MAINT_MUTATION_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
@@ -1154,6 +1159,11 @@ EOF
 @test "sys maintenance: exact automatic APT owner gets one TERM without polling" {
   export MOCK_KILL_ALLOW_TERM=1
   export MOCK_SUDO_ALLOW="__validate__,kill"
+  # These words and the space are path data, not extra privileged operations.
+  local kill_fixture_dir="$TEST_TEMP_DIR/rm-lock-systemctl-KILL fixture"
+  mkdir -m 700 "$kill_fixture_dir"
+  export APT_KILL_PROGRAM="$kill_fixture_dir/kill"
+  cp "$TEST_MOCK_BIN/kill" "$APT_KILL_PROGRAM"
   local fingerprint=$'unattended-upgrade\t4242\t0\t998877\tunattended-upgr\tapt-daily-upgrade.service\t/usr/bin/unattended-upgrade'
   export APT_AUTOMATIC_FINGERPRINT="$fingerprint"
 
@@ -1164,7 +1174,7 @@ EOF
     }
     _sys_apt_minimal_steps_enabled() { return 0; }
     _sys_apt_kill_program() {
-      REPLY="$TEST_MOCK_BIN/kill"
+      REPLY="$APT_KILL_PROGRAM"
     }
     _sys_apt_unattended_fingerprint() {
       REPLY="$APT_AUTOMATIC_FINGERPRINT"
@@ -1199,9 +1209,15 @@ EOF
   [ "$(cat "$MAINT_MUTATION_LOG")" = "dpkg-clean" ]
   [[ "$output" == *"Cooperative takeover"* ]]
   [[ "$output" != *"waiting"* ]]
-  if grep -Eq -- 'KILL|systemctl|rm|lock' \
-    "$MAINT_SIGNAL_LOG" "$MOCK_SUDO_LOG"; then
-    return 1
+  if (( EUID == 0 )); then
+    [ ! -s "$MOCK_SUDO_LOG" ]
+  else
+    local expected_sudo_log
+    expected_sudo_log=$(
+      printf 'sudo -v\nsudo'
+      printf ' %q' -n "$APT_KILL_PROGRAM" -s TERM -- 4242
+    )
+    [ "$(cat "$MOCK_SUDO_LOG")" = "$expected_sudo_log" ]
   fi
 }
 
