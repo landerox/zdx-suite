@@ -40,6 +40,9 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- System maintenance tests compare complete privileged-call records, so words
+  in a temporary path cannot look like extra operations. The checks still
+  require exactly one validated TERM and reject additional calls.
 - Clarify the engineering contract for local Zsh options and regex state,
   caller-command and persistent plugin execution boundaries, and public
   confirmation statuses. Runtime adoption follows the corresponding
