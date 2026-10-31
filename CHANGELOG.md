@@ -40,6 +40,8 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Format long durations as days and hours, retaining the existing subday
+  display and rounding day-form hours directly from the original elapsed time.
 - Keep lazy command identities literal, compile owned modules without caller
   aliases, and isolate internal option, numeric, and regex state. Plugin
   activation retains its current-shell effects while registry and manager
