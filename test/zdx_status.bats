@@ -6,6 +6,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   STATUS_REAL_JQ=$(command -v jq || true)
   export STATUS_REAL_JQ
   export STATUS_ROOT="$TEST_SUITE_ROOT"
@@ -774,4 +775,91 @@ MOCK
   ' _ "$TEST_SUITE_ROOT"
   printf '%s\n' "${lines[0]}" | "$STATUS_REAL_JQ" -e '.kubernetes == null'
   [[ "$output" != *"Kubernetes"* ]]
+}
+
+@test "F3-04 regex: status-load preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-load' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-load preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-load' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-wireguard preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-wireguard' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-wireguard preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-wireguard' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-project preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-project' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-project preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-project' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-porcelain preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-porcelain' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-porcelain preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-porcelain' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-kubernetes preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-kubernetes' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-kubernetes preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-kubernetes' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-json preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-json' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: status-json preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'status-json' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 invariant: status JSON works without changing hostile caller options" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    builtin cd -- "$HOME" || exit 31
+    setopt ksh_arrays sh_word_split force_float pipe_fail
+    zdx-status --json > "$HOME/status.data" 2> "$HOME/status.ui"
+    local call_rc=$? kept="${options[ksharrays]}:${options[shwordsplit]}:${options[forcefloat]}:${options[pipefail]}"
+    unsetopt ksh_arrays sh_word_split force_float pipe_fail
+    [[ $call_rc == 0 && "$kept" == on:on:on:on ]] || exit 32
+    command jq -e ".schema == \"zdx.status.v1\"" "$HOME/status.data" >/dev/null
+  '
+  [ "$status" -eq 0 ]
 }

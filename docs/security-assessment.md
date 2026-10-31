@@ -1142,9 +1142,10 @@ never elevate downloaded or user-computed shell text.
   `NO_UNSET`, `SH_WORD_SPLIT`, or `emulate sh`, cannot redirect a target, skip
   a validation, or change a reported result. `vpn_interface.bats` checks each
   entry point after lazy and eager loading and compares safe paths, dry runs,
-  and a clean import across such callers. Residual risk: in a lazy shell, a
-  caller with `KSH_ARRAYS` or `emulate sh` still fails, closed, in the core's
-  lazy stub before VPN code runs.
+  and a clean import across such callers. Core lazy stubs retain literal
+  command identities, and owned-module parsing isolates caller aliases and
+  options. `core_option_boundaries.bats` also exercises a cold
+  `vpn-menu --help` under `KSH_ARRAYS` and `emulate sh`.
 - The WSL DNS hooks the VPN suite writes are executed by root on every tunnel
   transition, and their resolver address comes from an imported profile's
   `DNS =` line. The value is validated as a strict comma-separated list of at
@@ -1527,7 +1528,10 @@ executes arbitrary code in the user's shell.
   (new autoload stubs excepted) or replaces or removes any existing function
   is refused, its additions are removed, and the replaced definitions are
   restored, also after a failed source. Aliases, widgets, hooks, options, and
-  parameters are outside the guard.
+  parameters are outside the guard. Owned parsing and registry bookkeeping
+  isolate their options and all six regex-result parameters; entrypoint
+  sourcing and arbitrary caller execution remain outside ZDX wholesale
+  option-restoring scopes. The source-time plugin restrictions still apply.
 - Runtime loading performs a Zsh syntax check, and path validation repeats
   immediately before source. A lazy shell, the default, defers that chain to
   the first call of a plugin's stub: startup only validates the root, the
@@ -2195,7 +2199,7 @@ memory or CPU during inspection.
   still runs. The caller and the watchdog settle the deadline through one
   claim in the private marker; a signal pass that has begun reaches its whole
   listing even when the command exits on its first signal; the listing has an
-  absolute two-second deadline, and an abandoned listing's `ps` is never
+  absolute two-second realtime deadline, and an abandoned listing's `ps` is never
   signaled, the pass then signaling the command alone; a watchdog that does
   not fire signals nothing and is stopped with KILL, so a `TRAPTERM` function
   in the user's shell cannot hold it; every wait of the watchdog is bounded;
@@ -2204,7 +2208,10 @@ memory or CPU during inspection.
   root (`platform_tools.bats`, `primitive_drift.bats`). The core
   `_zdx_run_with_timeout` owns this order; its watchdog
   keeps its expiry marker below a validated temporary root and refuses an
-  unsafe `TMPDIR` before running the command.
+  unsafe `TMPDIR` before running the command. The native core and standalone
+  System watchdogs serialize integer `zselect` tick counts independently of
+  caller `FORCE_FLOAT`, while the command keeps its inherited option state
+  under the documented process policy.
 - System process, port, and service collectors use bounded local probes.
 - `git-recover --deep` bounds its `git fsck` search to 60 seconds; when the
   Git suite is sourced without the core, the bound needs `timeout` or
@@ -2512,6 +2519,9 @@ caller reaped it. When the marker cannot be trusted or written, no reliable
 claim exists and the bound is not enforced; after the command finishes the
 caller preserves an interruption status of `130` or `143`, otherwise reports
 an operational failure rather than claiming a verified timeout.
+The listing budget uses `EPOCHREALTIME`, so a backward realtime adjustment can
+extend actual elapsed waiting. Clock steps can also distort realtime duration
+observations; the fallback does not provide a monotonic listing deadline.
 A same-user command can still tamper with its marker. Canonical ancestor
 checks remove the other-user replacement precondition for the core's root.
 Without zsh/parameter the caller signals without its reaped-process check.

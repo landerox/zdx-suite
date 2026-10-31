@@ -6,6 +6,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   load plugins_test_helper
   plugins_git_recorder
 }
@@ -426,4 +427,28 @@ MOCK
   [ "$status" -eq 1 ]
   [[ "$output" == *"needs the ZDX core runtime"* ]]
   [ ! -e "$PLUGINS_ROOT/alpha" ]
+}
+
+@test "F3-04 regex: plugin-name preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'plugin-name' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: plugin-name preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'plugin-name' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: plugin-head preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'plugin-head' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: plugin-head preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'plugin-head' unset
+  [ "$status" -eq 0 ]
 }

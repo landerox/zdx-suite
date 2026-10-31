@@ -23,7 +23,11 @@ if [[ ! -f "$_zdx_menu_common_file" || -L "$_zdx_menu_common_file" \
 fi
 
 if [[ -z "${_ZDX_COMMON_SOURCED:-}" ]]; then
-  source "$_zdx_menu_common_file" || {
+  () {
+    emulate -L zsh
+    unsetopt aliases
+    builtin source "$1"
+  } "$_zdx_menu_common_file" || {
     typeset -i _zdx_menu_source_rc=$?
     print -u2 -r -- "zdx-menu.zsh: failed to load zdx-common.zsh"
     unset _zdx_menu_loader_dir _zdx_menu_common_file
@@ -43,6 +47,7 @@ if [[ -z "${_ZDX_COMMON_SOURCED:-}" ]] \
 fi
 
 _zdx_menu_usage() {
+  emulate -L zsh
   cat >&2 <<'EOF'
 Usage:
   zdx-menu                 Open the interactive master menu
@@ -55,6 +60,7 @@ EOF
 }
 
 _zdx_usage() {
+  emulate -L zsh
   cat >&2 <<'EOF'
 Usage:
   zdx                      Open the interactive master menu
@@ -85,6 +91,26 @@ Options:
 
 Loaded custom plugins are available as `zdx <plugin-name> [args]`.
 EOF
+}
+
+_zdx_show_version() {
+  emulate -L zsh
+  if [[ -z "${_ZDX_RELEASE_VERSION:-}" \
+    && -f "$_ZDX_MENU_SOURCE_DIR/zdx-version.zsh" ]]; then
+    () {
+      emulate -L zsh
+      unsetopt aliases
+      builtin source "$1"
+    } "$_ZDX_MENU_SOURCE_DIR/zdx-version.zsh"
+  fi
+  local checkout_text=""
+  local -a reply=()
+  if (( ${+functions[_zdx_release_checkout]} )) \
+    && _zdx_release_checkout "${${_ZDX_FUNCTIONS_DIR:-$_ZDX_MENU_SOURCE_DIR}:h}"; then
+    checkout_text=" (${reply[1]}${reply[2]:+, ${reply[2]}})"
+  fi
+  printf 'ZDX (Zsh Developer Experience) v%s%s\n' \
+    "${_ZDX_RELEASE_VERSION:-unknown}" "$checkout_text"
 }
 
 zdx-menu() {
@@ -127,18 +153,7 @@ zdx() {
         _zdx_error "zdx version does not accept additional arguments."
         return 2
       }
-      if [[ -z "${_ZDX_RELEASE_VERSION:-}" \
-        && -f "$_ZDX_MENU_SOURCE_DIR/zdx-version.zsh" ]]; then
-        source "$_ZDX_MENU_SOURCE_DIR/zdx-version.zsh"
-      fi
-      local checkout_text=""
-      local -a reply=()
-      if (( ${+functions[_zdx_release_checkout]} )) \
-        && _zdx_release_checkout "${${_ZDX_FUNCTIONS_DIR:-$_ZDX_MENU_SOURCE_DIR}:h}"; then
-        checkout_text=" (${reply[1]}${reply[2]:+, ${reply[2]}})"
-      fi
-      printf 'ZDX (Zsh Developer Experience) v%s%s\n' \
-        "${_ZDX_RELEASE_VERSION:-unknown}" "$checkout_text"
+      _zdx_show_version
       ;;
     -*)
       _zdx_error "Unknown zdx option: '$1'."

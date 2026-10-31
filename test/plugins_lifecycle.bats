@@ -5,6 +5,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   load plugins_test_helper
   plugins_git_recorder
 }
@@ -627,4 +628,294 @@ MOCK
 
   [[ "$output" == *"A zdx-plugins operation is already running in this shell."* ]]
   [[ "$output" == *"NESTED REFUSED"* ]]
+}
+
+@test "F3-04 invariant: plugin installation activates outside emulated transaction preparation" {
+  f304_mock_local_probes
+  plugin_origin_create alpha
+  plugin_origin_commit alpha "Option-changing plugin" \
+    $'setopt null_glob\ntypeset -g ALPHA_SOURCE_OPTION=on\nalpha-menu() { print -r -- alpha; }'
+  export F304_ORIGIN
+  F304_ORIGIN=$(plugin_origin_url alpha)
+  [[ "$F304_ORIGIN" == "$TEST_TEMP_DIR/origins/"*.git ]]
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    unsetopt null_glob
+    zdx-plugins --install "$F304_ORIGIN" --yes || exit 31
+    [[ -o null_glob && "$ALPHA_SOURCE_OPTION" == on ]] || exit 32
+    alpha-menu
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *alpha* ]]
+}
+
+
+@test "F3-04 invariant: plugin update activates outside emulated transaction preparation" {
+  f304_mock_local_probes
+  [[ "$(plugin_origin_url alpha)" == "$TEST_TEMP_DIR/origins/"*.git ]]
+  plugin_origin_create alpha
+  plugins_install alpha || false
+  plugin_origin_commit alpha "Option-changing update" \
+    $'setopt null_glob\ntypeset -g ALPHA_SOURCE_OPTION=on\nalpha-menu() { print -r -- alpha-updated; }'
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    unsetopt null_glob
+    zdx-plugins --update alpha --yes || exit 31
+    [[ -o null_glob && "$ALPHA_SOURCE_OPTION" == on ]] || exit 32
+    alpha-menu
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *alpha-updated* ]]
+}
+
+# Additional F3-04 acceptance cases for test/plugins_lifecycle.bats.
+# Its setup already loads test_helper and plugins_test_helper.
+# shellcheck disable=SC2016
+
+f304a_plugin_sandbox() {
+  [[ "$TEST_TEMP_DIR" == /* && "$HOME" == "$TEST_TEMP_DIR/home" \
+    && "$PLUGINS_ROOT" == "$HOME/.config/zdx/plugins" \
+    && "$PLUGINS_REAL_GIT" == /* && -x "$PLUGINS_REAL_GIT" ]] || return 98
+  cd "$HOME" || return 99
+}
+
+f304a_plugin_programs() {
+  cat > "$HOME/f304a-clean.zsh" <<'ZSH'
+emulate -R zsh
+_f304a_assert_runtime_clean() {
+  (( ! ${+_zdx_plugins_session} && ! ${+_zdx_plugins_tx} \
+    && ! ${+_ZDX_PLUGINS_LOCK_FD} )) || return 71
+  local -a stages=("$PLUGINS_ROOT"/.zdx-staging.*(DN))
+  (( ${#stages} == 0 )) || return 72
+  # A different process must be able to take the persistent lock immediately.
+  # Merely clearing the descriptor variable would not establish this.
+  command zsh -f -c '
+    emulate -R zsh
+    zmodload zsh/system || exit 73
+    local probe_fd=""
+    zsystem flock -t 0 -f probe_fd "$1" || exit 74
+    zsystem flock -u "$probe_fd"
+  ' _ "$PLUGINS_ROOT/.zdx-plugins.lock" || return 75
+}
+ZSH
+  cat > "$HOME/f304a-manager.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || exit 80
+source "$HOME/f304a-clean.zsh" || exit 81
+typeset -gi F304A_PICK_COUNT=0
+_zdx_plugins_fzf_capture() {
+  (( F304A_PICK_COUNT += 1 ))
+  if (( F304A_PICK_COUNT > 1 )); then
+    REPLY=""
+    return 130
+  fi
+  local row=""
+  while IFS= read -r row; do
+    if [[ "$row" == *'|install|'* ]]; then
+      REPLY="$row"
+      print -r -- install >> "$HOME/manager.selections"
+      return 0
+    fi
+  done
+  return 1
+}
+# Availability and trust are the only authorization boundaries mocked.
+# After source entered, skip the manager's return-to-menu key prompt.
+_zdx_plugins_terminal() { [[ ! -e "$HOME/alpha-entered" ]]; }
+_zdx_plugins_confirm() { return 0; }
+unsetopt ksh_arrays
+zdx-plugins < "$HOME/manager.input" > "$HOME/manager.stdout" 2> "$HOME/manager.stderr"
+local operation_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+[[ "$operation_rc" == 0 && "$kept" == "$F304A_EXPECT_KSH" ]] || exit 31
+[[ "$ALPHA_SOURCE_OPTION" == "$F304A_EXPECT_KSH" && "$F304A_PICK_COUNT" == 2 ]] || exit 32
+[[ "${ZDX_LOADED_PLUGINS[(Ie)alpha]}" != 0 && "${ZDX_DISCOVERED_PLUGINS[(Ie)alpha]}" != 0 ]] || exit 33
+alpha-menu "one two" --literal > "$HOME/alpha.data" || exit 34
+[[ "$(<"$HOME/alpha.data")" == "alpha-v2:<one two>${(#):-10}alpha-v2:<--literal>" \
+  && ! -s "$HOME/manager.stdout" ]] || exit 35
+_f304a_assert_runtime_clean || exit $?
+print -r -- manager-complete
+ZSH
+  cat > "$HOME/f304a-aggregate.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || exit 80
+source "$HOME/f304a-clean.zsh" || exit 81
+unsetopt ksh_arrays
+zdx-plugins --update --yes > "$HOME/aggregate.stdout" 2> "$HOME/aggregate.stderr"
+local operation_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+[[ "$operation_rc" == 0 && "$kept" == "$F304A_EXPECT_KSH" ]] || exit 31
+[[ "$ALPHA_SOURCE_OPTION" == "$F304A_EXPECT_KSH" && "$BETA_SOURCE_OPTION" == "$F304A_EXPECT_KSH" ]] || exit 32
+[[ "${ZDX_LOADED_PLUGINS[(Ie)alpha]}" != 0 && "${ZDX_LOADED_PLUGINS[(Ie)beta]}" != 0 ]] || exit 33
+alpha-menu "one two" > "$HOME/alpha.data" || exit 34
+beta-menu "three four" > "$HOME/beta.data" || exit 35
+[[ "$(<"$HOME/alpha.data")" == "alpha-v2:<one two>" \
+  && "$(<"$HOME/beta.data")" == "beta-v2:<three four>" \
+  && ! -s "$HOME/aggregate.stdout" ]] || exit 36
+local report="$(<"$HOME/aggregate.stderr")"
+[[ "$report" == *'[1/2] alpha — updated'* && "$report" == *'[2/2] beta — updated'* ]] || exit 37
+_f304a_assert_runtime_clean || exit $?
+print -r -- aggregate-complete
+ZSH
+  cat > "$HOME/f304a-rollback.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || exit 80
+source "$HOME/f304a-clean.zsh" || exit 81
+f304a-protected() { print -r -- original; }
+unsetopt ksh_arrays
+zdx-plugins --update alpha --yes > "$HOME/rollback.stdout" 2> "$HOME/rollback.stderr"
+local operation_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+[[ "$operation_rc" == 1 && "$kept" == "$F304A_EXPECT_KSH" ]] || exit 31
+[[ "$ALPHA_SOURCE_OPTION" == "$F304A_EXPECT_KSH" ]] || exit 32
+[[ "${ZDX_LOADED_PLUGINS[(Ie)alpha]}" != 0 ]] || exit 33
+alpha-menu > "$HOME/alpha.data" || exit 34
+f304a-protected > "$HOME/protected.data" || exit 35
+[[ "$(<"$HOME/alpha.data")" == "alpha v1" \
+  && "$(<"$HOME/protected.data")" == original && ! -s "$HOME/rollback.stdout" ]] || exit 36
+(( ! ${+functions[f304a-leaked]} )) || exit 37
+if [[ "$F304A_ROLLBACK_KIND" == source ]]; then
+  local report="$(<"$HOME/rollback.stderr")"
+  [[ "$report" == *"Sourcing 'alpha-menu.zsh' failed with status 3."* ]] || exit 38
+fi
+_f304a_assert_runtime_clean || exit $?
+print -r -- rollback-complete
+ZSH
+  local program
+  for program in "$HOME/f304a-clean.zsh" "$HOME/f304a-manager.zsh" \
+    "$HOME/f304a-aggregate.zsh" "$HOME/f304a-rollback.zsh"; do
+    zsh -n "$program" || return 96
+  done
+}
+
+# The name and mode arguments are fixed fixture values; every path is below
+# TEST_TEMP_DIR and every origin is a local bare repository.
+f304a_plugin_source() {
+  local name="$1" mode="$2"
+  case "$mode" in
+    on) printf '%s\n' 'setopt ksh_arrays' ;;
+    off) printf '%s\n' 'unsetopt ksh_arrays' ;;
+    inherit) ;;
+    *) return 97 ;;
+  esac
+  printf 'if [[ -o ksh_arrays ]]; then typeset -g %s_SOURCE_OPTION=on; else typeset -g %s_SOURCE_OPTION=off; fi\n' "${name^^}" "${name^^}"
+  printf 'print -r -- "$%s_SOURCE_OPTION" > "$HOME/%s-entered"\n' "${name^^}" "$name"
+  printf '%s-menu() { printf '\''%s-v2:<%%s>\\n'\'' "$@"; }\n' "$name" "$name"
+}
+
+f304a_plugin_diagnostic() {
+  local label="$1" child_status="$2"
+  if [[ "$child_status" -ne 0 ]]; then
+    printf '# %s shell status=%s; alpha-entered=%s; beta-entered=%s\n' \
+      "$label" "$child_status" \
+      "$(cat "$HOME/alpha-entered" 2>/dev/null || printf absent)" \
+      "$(cat "$HOME/beta-entered" 2>/dev/null || printf absent)"
+    printf '%s\n' "$output"
+    local report
+    for report in manager aggregate rollback; do
+      [[ ! -f "$HOME/$report.stderr" ]] || cat "$HOME/$report.stderr"
+    done
+  fi
+}
+
+f304a_manager_workflow() {
+  f304a_plugin_sandbox || return
+  f304a_plugin_programs || return
+  local mode="$1"
+  export F304A_EXPECT_KSH="$mode"
+  plugin_origin_create alpha
+  plugin_origin_commit alpha "Option mode $mode" "$(f304a_plugin_source alpha "$mode")"
+  local expected_head origin
+  expected_head=$(plugin_origin_head alpha)
+  origin=$(plugin_origin_url alpha)
+  [[ "$origin" == "$TEST_TEMP_DIR/origins/alpha.git" ]] || return 90
+  printf '%s\n\n' "$origin" > "$HOME/manager.input"
+  run run_zsh 'source "$HOME/f304a-manager.zsh"'
+  f304a_plugin_diagnostic manager "$status"
+  [ "$status" -eq 0 ]
+  [ "$output" = manager-complete ]
+  [ "$(plugin_installed_head alpha)" = "$expected_head" ]
+  [ "$(cat "$HOME/manager.selections")" = install ]
+  [ -z "$(plugins_staging_left)" ]
+  [ "$(file_mode "$PLUGINS_ROOT/.zdx-plugins.lock")" = 600 ]
+}
+
+f304a_aggregate_workflow() {
+  f304a_plugin_sandbox || return
+  f304a_plugin_programs || return
+  local mode="$1"
+  export F304A_EXPECT_KSH="$mode"
+  local name
+  for name in alpha beta; do
+    plugin_origin_create "$name"
+    plugins_install "$name" || return 90
+  done
+  plugin_origin_commit alpha "Option mode $mode" "$(f304a_plugin_source alpha "$mode")"
+  plugin_origin_commit beta "Observe inherited option" "$(f304a_plugin_source beta inherit)"
+  local alpha_head beta_head
+  alpha_head=$(plugin_origin_head alpha)
+  beta_head=$(plugin_origin_head beta)
+  run run_zsh 'source "$HOME/f304a-aggregate.zsh"'
+  f304a_plugin_diagnostic aggregate "$status"
+  [ "$status" -eq 0 ]
+  [ "$output" = aggregate-complete ]
+  [ "$(plugin_installed_head alpha)" = "$alpha_head" ]
+  [ "$(plugin_installed_head beta)" = "$beta_head" ]
+  [ -z "$(plugins_staging_left)" ]
+  [ "$(file_mode "$PLUGINS_ROOT/.zdx-plugins.lock")" = 600 ]
+}
+
+f304a_rollback_workflow() {
+  f304a_plugin_sandbox || return
+  f304a_plugin_programs || return
+  local mode="$1"
+  export F304A_EXPECT_KSH="$mode"
+  plugin_origin_create alpha
+  plugins_install alpha || return 90
+  local old_head before content kind
+  old_head=$(plugin_installed_head alpha)
+  # First isolate source failure3 with an otherwise allowed namespace.
+  # Then independently exercise changed/added foreign function restoration.
+  for kind in source namespace; do
+    export F304A_ROLLBACK_KIND="$kind"
+    content="$(f304a_plugin_source alpha "$mode")"
+    if [[ "$kind" == namespace ]]; then
+      content+=$'\n''f304a-protected() { print -r -- replaced; }'$'\n''f304a-leaked() { print -r -- leaked; }'
+    fi
+    content+=$'\n''return 3'
+    plugin_origin_commit alpha "Fail $kind with option mode $mode" "$content"
+    before=$(plugin_tree_fingerprint "$PLUGINS_ROOT/alpha")
+    run run_zsh 'source "$HOME/f304a-rollback.zsh"'
+    f304a_plugin_diagnostic "rollback-$kind" "$status"
+    [ "$status" -eq 0 ]
+    [ "$output" = rollback-complete ]
+    [ "$(plugin_installed_head alpha)" = "$old_head" ]
+    [ "$(plugin_tree_fingerprint "$PLUGINS_ROOT/alpha")" = "$before" ]
+    [ -z "$(plugins_staging_left)" ]
+    [ "$(file_mode "$PLUGINS_ROOT/.zdx-plugins.lock")" = 600 ]
+  done
+}
+
+@test "F3-04 workflow control: actual manager installation without an option change" {
+  f304a_manager_workflow off
+}
+
+@test "F3-04 acceptance: actual manager installation preserves changed KSH_ARRAYS" {
+  f304a_manager_workflow on
+}
+
+@test "F3-04 workflow control: actual two-plugin aggregate without an option change" {
+  f304a_aggregate_workflow off
+}
+
+@test "F3-04 acceptance: actual two-plugin aggregate preserves changed KSH_ARRAYS" {
+  f304a_aggregate_workflow on
+}
+
+@test "F3-04 workflow control: failed activation restores the namespace without an option change" {
+  f304a_rollback_workflow off
+}
+
+@test "F3-04 acceptance: failed activation keeps changed KSH_ARRAYS while restoring the namespace" {
+  f304a_rollback_workflow on
 }

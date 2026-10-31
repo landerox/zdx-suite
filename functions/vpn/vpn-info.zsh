@@ -625,7 +625,7 @@ vpn-report() {
     _vpn_error "Could not initialize the report content."
     return 1
   }
-  _vpn_rpt_kv "Generated" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  _vpn_rpt_kv "Generated" "$(command 'date' '+%Y-%m-%d %H:%M:%S %Z')"
   _vpn_rpt_kv "Host" "$host_full"
   _vpn_rpt_kv "User" "$user"
   _vpn_rpt_kv "Kernel" "$kernel"
@@ -894,7 +894,7 @@ vpn-report() {
 
   # --- Closing -------------------------------------------------------------
   _vpn_rpt_h2 "Closing"
-  _vpn_rpt_kv "Finished" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  _vpn_rpt_kv "Finished" "$(command 'date' '+%Y-%m-%d %H:%M:%S %Z')"
   _vpn_rpt_bullet "Host: **$host_full**"
   [[ "$platform" == wsl && -n "${WSL_DISTRO_NAME-}" ]] \
     && _vpn_rpt_bullet "WSL distro: **${WSL_DISTRO_NAME}**"
@@ -1077,7 +1077,7 @@ _vpn_get_ip_info() {
     [[ -n "$raw" ]] || continue
     # A missing field must stay an empty column: `empty` would shift every
     # later value into the wrong position.
-    parsed=$(print -r -- "$raw" | jq -r '
+    parsed=$(print -r -- "$raw" | command 'jq' -r '
       [
         .ip // "",
         .city // "",
@@ -1108,14 +1108,14 @@ _vpn_get_ip_info() {
   for url in "${trace_providers[@]}"; do
     raw=$(_vpn_curl_bounded "$url" 4 2 2>/dev/null) || continue
     [[ -n "$raw" ]] || continue
-    trace_ip=$(print -r -- "$raw" | awk -F= '$1 == "ip" { print $2; exit }')
+    trace_ip=$(print -r -- "$raw" | command 'awk' -F= '$1 == "ip" { print $2; exit }')
     trace_ip="${trace_ip//$'\r'/}"
     trace_ip="${trace_ip//[[:space:]]/}"
     _vpn_validate_ip_literal "$trace_ip" || continue
-    trace_loc=$(print -r -- "$raw" | awk -F= '$1 == "loc" { print $2; exit }')
+    trace_loc=$(print -r -- "$raw" | command 'awk' -F= '$1 == "loc" { print $2; exit }')
     trace_loc="${trace_loc//$'\r'/}"
     trace_loc="${trace_loc//[[:space:]]/}"
-    trace_colo=$(print -r -- "$raw" | awk -F= '$1 == "colo" { print $2; exit }')
+    trace_colo=$(print -r -- "$raw" | command 'awk' -F= '$1 == "colo" { print $2; exit }')
     trace_colo="${trace_colo//$'\r'/}"
     trace_colo="${trace_colo//[[:space:]]/}"
     org_note=""
@@ -1140,7 +1140,7 @@ _vpn_crosscheck_provider() {
 
   case "$provider_type" in
     json)
-      ip=$(print -r -- "$raw" | jq -r '.ip // empty' 2>/dev/null) \
+      ip=$(print -r -- "$raw" | command 'jq' -r '.ip // empty' 2>/dev/null) \
         || return 1
       ;;
     plain)

@@ -171,6 +171,12 @@ ZDX itself inside `_omz_source`, so a plain top-level `typeset`, `declare`, or
 `local` in a plugin disappears when sourcing ends. Declare persistent plugin
 state with `typeset -g`, `typeset -ga`, or `typeset -gA` and a namespaced name.
 
+ZDX isolates its own preparation, validation, and post-source bookkeeping.
+Entrypoint sourcing remains in the current shell outside ZDX option-restoring
+scopes, so definitions and intended session effects can persist. The
+source-time restrictions above still apply, and the namespace guard continues
+to restore functions only.
+
 ## Stream and return contract
 
 - Menu row builders and documented data functions emit only data on stdout.

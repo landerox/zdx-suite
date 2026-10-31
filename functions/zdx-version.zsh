@@ -25,6 +25,8 @@ typeset -g _ZDX_RELEASE_VERSION="0.1.0" # ZDX (Zsh Developer Experience)
 # Usage: _zdx_release_checkout ROOT
 _zdx_release_checkout() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local root="${1:-}" git_path="" toplevel="" commit="" changes=""
   reply=()
   [[ "$root" == /* && ( -d "$root/.git" || -f "$root/.git" ) ]] \

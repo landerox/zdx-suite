@@ -20,6 +20,7 @@ fi
 
 # One line below the prompt; the text is data, shown with controls escaped.
 _zdx_widget_message() {
+  emulate -L zsh
   zle -M "zdx: ${(V)1-}"
 }
 
@@ -43,6 +44,7 @@ _zdx_widget_git_usable() {
 # display text only. At most 2000 candidates keep a huge inventory from
 # stalling the editor; status 1 means the picker is full.
 _zdx_widget_add() {
+  emulate -L zsh
   (( ${#widget_values} < 2000 )) || return 1
   widget_values+=("${1-}")
   widget_alternates+=("${2-}")
@@ -101,6 +103,8 @@ _zdx_widget_branch_candidates() {
 # that authentication is required.
 _zdx_widget_pr_candidates() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   (( ${+commands[gh]} )) || {
     REPLY="gh is not installed; install GitHub CLI to list pull requests"
@@ -148,6 +152,7 @@ _zdx_widget_pr_candidates() {
 
 # Records one listener once per port and PID, keeping ports in numeric order.
 _zdx_widget_port_record() {
+  emulate -L zsh
   local port="${1-}" pid="${2-}" name="${3-}" address="${4-}"
   [[ "$port" == <1-65535> ]] || return 0
   [[ -z "$pid" || "$pid" == <1-> ]] || pid=""
@@ -162,6 +167,8 @@ _zdx_widget_port_record() {
 # not visible, so its row offers only the port.
 _zdx_widget_port_candidates() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   local backend="" output="" line="" address="" pid="" name="" record=""
   local -i probe_rc=0
@@ -283,6 +290,7 @@ _zdx_widget_venv_candidates() {
 # Private: adds one environment with HOME shown as ~ and the caller's
 # active_venv marked.
 _zdx_widget_venv_add() {
+  emulate -L zsh
   local origin="${1-}" candidate="${2-}" display="" note=""
   display="$candidate"
   [[ -n "${HOME:-}" && "$HOME" != / && "$candidate" == "$HOME"/* ]] \
@@ -295,6 +303,7 @@ _zdx_widget_venv_add() {
 # REPLY: the selected row index; reply[1]: the --expect key, empty for Enter.
 # Status 0 selected, 1 cancelled or no match, 2 failure with REPLY a message.
 _zdx_widget_pick() {
+  emulate -L zsh
   local prompt="${1-}" header="${2-}" expect_key="${3-}"
   local selection="" row="" index_text=""
   local -i fzf_rc=0 index=0

@@ -5,6 +5,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
 }
 
 teardown() {
@@ -262,4 +263,474 @@ MOCK
   run grep -rn --include='*.zsh' '_tk_' "$TEST_SUITE_ROOT/functions"
   [ "$status" -eq 1 ]
   [ "$(grep -c '^_tk_' "$TEST_SUITE_ROOT/functions.zsh")" -eq 4 ]
+}
+
+@test "F3-04 regex: picker:_zdx_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_zdx_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_zdx_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_zdx_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_git_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_git_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_git_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_git_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_sys_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_sys_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_sys_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_sys_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_dev_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_dev_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_dev_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_dev_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_env_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_env_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_env_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_env_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_file_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_file_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_file_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_file_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_py_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_py_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_py_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_py_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_ws_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_ws_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_ws_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_ws_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_zdx_menu_picker_capture preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_zdx_menu_picker_capture' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: picker:_zdx_menu_picker_capture preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'picker:_zdx_menu_picker_capture' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_zdx_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_zdx_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_zdx_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_zdx_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_git_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_git_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_git_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_git_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_sys_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_sys_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_sys_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_sys_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_dev_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_dev_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_dev_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_dev_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_env_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_env_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_env_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_env_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_file_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_file_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_file_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_file_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_py_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_py_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_py_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_py_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_ws_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_ws_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_ws_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_ws_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_vpn_confirm_prompt preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_vpn_confirm_prompt' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: confirm:_vpn_confirm_prompt preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'confirm:_vpn_confirm_prompt' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:picker-name preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:picker-name' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:picker-name preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:picker-name' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:confirm-name preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:confirm-name' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:confirm-name preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:confirm-name' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 invariant: owned picker callbacks use native helper options" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304_error() { print -ru2 -- "$*"; }
+    _f304_root() { REPLY="$TMPDIR"; }
+    _f304_picker() {
+      [[ ! -o ksh_arrays && ! -o sh_word_split ]] || return 78
+      print -r -- selected
+    }
+    setopt ksh_arrays sh_word_split
+    _zdx_picker_capture --tag probe --noun Probe --error _f304_error \
+      --picker _f304_picker --temp-root _f304_root || exit 31
+    [[ "$REPLY" == selected && -o ksh_arrays && -o sh_word_split ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: owned confirmation callbacks use native helper options" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304_error() { print -ru2 -- "$*"; }
+    _f304_available() {
+      [[ ! -o ksh_arrays && ! -o sh_word_split ]]
+    }
+    _f304_confirm() {
+      [[ ! -o ksh_arrays && ! -o sh_word_split ]] || return 78
+      REPLY=Yes
+    }
+    setopt ksh_arrays sh_word_split
+    _zdx_confirm_prompt --style picker --error _f304_error \
+      --available _f304_available --capture _f304_confirm -- "Proceed?" || exit 31
+    [[ -o ksh_arrays && -o sh_word_split ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 regression: generated picker read sizes work with FORCE_FLOAT" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304_error() { print -ru2 -- "$*"; }
+    _f304_root() { REPLY="$TMPDIR"; }
+    _f304_picker() {
+      [[ ! -o ksh_arrays && ! -o sh_word_split ]] || return 78
+      print -r -- selected
+    }
+    setopt ksh_arrays sh_word_split force_float
+    _zdx_picker_capture --tag probe --noun Probe --error _f304_error \
+      --picker _f304_picker --temp-root _f304_root || exit 31
+    [[ "$REPLY" == selected && -o ksh_arrays && -o sh_word_split && -o force_float ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: confirmation works with FORCE_FLOAT without changing caller options" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304_error() { print -ru2 -- "$*"; }
+    _f304_available() { [[ ! -o ksh_arrays && ! -o sh_word_split ]]; }
+    _f304_confirm() {
+      [[ ! -o ksh_arrays && ! -o sh_word_split ]] || return 78
+      REPLY=Yes
+    }
+    setopt ksh_arrays sh_word_split force_float
+    _zdx_confirm_prompt --style picker --error _f304_error \
+      --available _f304_available --capture _f304_confirm -- "Proceed?" || exit 31
+    [[ -o ksh_arrays && -o sh_word_split && -o force_float ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: standalone generated picker off FORCE_FLOAT seeded regex" {
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions/sys-common.zsh" || exit 90
+    (( ! ${+functions[_zdx_picker_capture]} )) || exit 91
+    _f304_owned_error() { print -u2 -r -- "$*"; }
+    _f304_owned_picker() { print -r -- standalone-selected; }
+    _f304_owned_root() { REPLY="$TMPDIR"; }
+    if [[ "$3" == seeded ]]; then
+      typeset -g MATCH=caller MBEGIN=7 MEND=12
+      typeset -ga match=(captured) mbegin=(2) mend=(8)
+    else
+      unset MATCH MBEGIN MEND match mbegin mend
+    fi
+    [[ "$2" == on ]] && setopt force_float
+    _sys_picker_capture --tag standalone --noun fixture --error _f304_owned_error \
+      --picker _f304_owned_picker --temp-root _f304_owned_root -- literal
+    local picker_rc=$? selection="$REPLY" kept="${options[forcefloat]}"
+    [[ "$picker_rc" == 0 && "$selection" == standalone-selected && "$kept" == "$2" ]] || exit 31
+    if [[ "$3" == seeded ]]; then
+      [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 ]] || exit 32
+      [[ "${match[1]}" == captured && "${mbegin[1]}" == 2 && "${mend[1]}" == 8 ]] || exit 33
+    else
+      (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+        && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 34
+    fi
+    local -a stray=("$HOME"/*.(N))
+    (( ${#stray} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" off seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: standalone generated picker off FORCE_FLOAT unset regex" {
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions/sys-common.zsh" || exit 90
+    (( ! ${+functions[_zdx_picker_capture]} )) || exit 91
+    _f304_owned_error() { print -u2 -r -- "$*"; }
+    _f304_owned_picker() { print -r -- standalone-selected; }
+    _f304_owned_root() { REPLY="$TMPDIR"; }
+    if [[ "$3" == seeded ]]; then
+      typeset -g MATCH=caller MBEGIN=7 MEND=12
+      typeset -ga match=(captured) mbegin=(2) mend=(8)
+    else
+      unset MATCH MBEGIN MEND match mbegin mend
+    fi
+    [[ "$2" == on ]] && setopt force_float
+    _sys_picker_capture --tag standalone --noun fixture --error _f304_owned_error \
+      --picker _f304_owned_picker --temp-root _f304_owned_root -- literal
+    local picker_rc=$? selection="$REPLY" kept="${options[forcefloat]}"
+    [[ "$picker_rc" == 0 && "$selection" == standalone-selected && "$kept" == "$2" ]] || exit 31
+    if [[ "$3" == seeded ]]; then
+      [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 ]] || exit 32
+      [[ "${match[1]}" == captured && "${mbegin[1]}" == 2 && "${mend[1]}" == 8 ]] || exit 33
+    else
+      (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+        && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 34
+    fi
+    local -a stray=("$HOME"/*.(N))
+    (( ${#stray} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" off unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: standalone generated picker on FORCE_FLOAT seeded regex" {
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions/sys-common.zsh" || exit 90
+    (( ! ${+functions[_zdx_picker_capture]} )) || exit 91
+    _f304_owned_error() { print -u2 -r -- "$*"; }
+    _f304_owned_picker() { print -r -- standalone-selected; }
+    _f304_owned_root() { REPLY="$TMPDIR"; }
+    if [[ "$3" == seeded ]]; then
+      typeset -g MATCH=caller MBEGIN=7 MEND=12
+      typeset -ga match=(captured) mbegin=(2) mend=(8)
+    else
+      unset MATCH MBEGIN MEND match mbegin mend
+    fi
+    [[ "$2" == on ]] && setopt force_float
+    _sys_picker_capture --tag standalone --noun fixture --error _f304_owned_error \
+      --picker _f304_owned_picker --temp-root _f304_owned_root -- literal
+    local picker_rc=$? selection="$REPLY" kept="${options[forcefloat]}"
+    [[ "$picker_rc" == 0 && "$selection" == standalone-selected && "$kept" == "$2" ]] || exit 31
+    if [[ "$3" == seeded ]]; then
+      [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 ]] || exit 32
+      [[ "${match[1]}" == captured && "${mbegin[1]}" == 2 && "${mend[1]}" == 8 ]] || exit 33
+    else
+      (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+        && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 34
+    fi
+    local -a stray=("$HOME"/*.(N))
+    (( ${#stray} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" on seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: standalone generated picker on FORCE_FLOAT unset regex" {
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions/sys-common.zsh" || exit 90
+    (( ! ${+functions[_zdx_picker_capture]} )) || exit 91
+    _f304_owned_error() { print -u2 -r -- "$*"; }
+    _f304_owned_picker() { print -r -- standalone-selected; }
+    _f304_owned_root() { REPLY="$TMPDIR"; }
+    if [[ "$3" == seeded ]]; then
+      typeset -g MATCH=caller MBEGIN=7 MEND=12
+      typeset -ga match=(captured) mbegin=(2) mend=(8)
+    else
+      unset MATCH MBEGIN MEND match mbegin mend
+    fi
+    [[ "$2" == on ]] && setopt force_float
+    _sys_picker_capture --tag standalone --noun fixture --error _f304_owned_error \
+      --picker _f304_owned_picker --temp-root _f304_owned_root -- literal
+    local picker_rc=$? selection="$REPLY" kept="${options[forcefloat]}"
+    [[ "$picker_rc" == 0 && "$selection" == standalone-selected && "$kept" == "$2" ]] || exit 31
+    if [[ "$3" == seeded ]]; then
+      [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 ]] || exit 32
+      [[ "${match[1]}" == captured && "${mbegin[1]}" == 2 && "${mend[1]}" == 8 ]] || exit 33
+    else
+      (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+        && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 34
+    fi
+    local -a stray=("$HOME"/*.(N))
+    (( ${#stray} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" on unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: standalone generated confirmation keeps numeric options and regex state" {
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions/sys-common.zsh" || exit 90
+    (( ! ${+functions[_zdx_confirm_prompt]} )) || exit 91
+    _f304_owned_error() { print -u2 -r -- "$*"; }
+    _f304_owned_available() { return 0; }
+    typeset -g MATCH=caller MBEGIN=7 MEND=12
+    typeset -ga match=(captured) mbegin=(2) mend=(8)
+    setopt force_float
+    _sys_confirm_prompt --style line --error _f304_owned_error \
+      --available _f304_owned_available -- "Standalone fixture?" <<< y
+    local prompt_rc=$? kept="${options[forcefloat]}"
+    [[ "$prompt_rc" == 0 && "$kept" == on ]] || exit 31
+    [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 ]] || exit 32
+    [[ "${match[1]}" == captured && "${mbegin[1]}" == 2 && "${mend[1]}" == 8 ]]
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
 }

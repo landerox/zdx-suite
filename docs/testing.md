@@ -140,11 +140,19 @@ create a separate test file merely because a production file exists.
 | --- | --- |
 | `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; key-value lines with one key width, an added colon, and a theme-safe bold key; report sections that follow the step depth and reuse a heading's blank line with `--first`; step summaries omitted inside a step unless verbose; exact step banners and result lines, including a first banner that reuses a heading's blank line; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; the outermost-only timing footer with per-level telemetry using registered command labels; and the core `_zdx_spinner` helper, which returns its command's output |
 
+Core option regressions check all six regex-result parameters from both seeded
+and initially unset state. `output.bats` and `primitive_sync.bats` distinguish
+owned picker/confirmation hooks from arbitrary command callbacks, whose
+intended option and match-state changes survive the execution coordinators.
+The shared fixtures are in `core_options_test_helper.bash`.
+
 ### Core loading and tooling coverage
 
 | File | Covered boundary |
 | --- | --- |
 | `lazy_loading.bats` | Stubs registered instead of eager loading in a standard shell; a stub that unsets itself, sources its file, and runs the real function; a cold stub for every public command; a direct command that loads its suite on first use; `ZDX_DIRECT_COMMANDS=0` registering only the entrypoints; no user-local compatibility names in a fresh clone, and a user-local `zdir` with its alias while `zclean` stays retired; `ZDX_EAGER_LOAD=1`; eager plugin state kept when the core is sourced from a function, as Oh My Zsh's `_omz_source` does; a preserved `ZSH_CUSTOM`; and nested completions registered after `compinit` |
+| `core_vpn_aliases.bats` | Alias-free and late-alias controls for JSON IP information, JSON cross-checks, and both report timestamps; executable command tokens also protect deferred command substitutions |
+| `core_option_boundaries.bats` | Actual cold VPN help under `KSH_ARRAYS` and `emulate sh`; identity-hook override execution outside owned preparation, preserving deliberate session and regex changes |
 | `scaffold.bats` | `just surfaces` rows for complete suites, invalid suites and options, a removed or orphaned surface with its file hint, and `--strict`; `just new-command` dry runs that write nothing, wired uniform surfaces with only the manual ones left, a generated command that runs through the suite runtime, list-style suites, and refusals of an existing command, invalid names, modules, metadata, or text, and an ambiguous or unrecognized target region |
 
 ### Platform portability coverage
@@ -158,6 +166,14 @@ descriptor cleanup across repeated successful and refused claims, and
 preserved interruption statuses after marker corruption. The supported
 sleep-based fallback also checks claim descriptors under `FORCE_FLOAT`
 without changing the callback's or caller's option.
+
+The native `zselect` branch in core and standalone System also checks integer
+timeout operands under `FORCE_FLOAT`, while the command and caller retain that
+option. Lazy loading, real plugin-manager installation and updates, eager
+startup, two-plugin aggregate updates, and failed-activation rollback cover
+option-changing plugins and their later bookkeeping. Doctor/status and widget
+regressions cover owned parsing; doctor confirmation uses a private terminal
+fixture to reach its actual regex branch.
 
 These files reproduce macOS and WSL path and tool differences through mocks
 and fixtures, so they pass on any host; the macOS workflow also runs them on an

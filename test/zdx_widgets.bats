@@ -664,3 +664,88 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"LBUFFER=[source $project/.venv]"* ]]
 }
+
+# The actual collectors parse mock gh/ss output. A successful populated result
+# proves that each regex branch ran before caller-state preservation is checked.
+f304_module_widget_state() {
+  export F304_WIDGET_KIND="$1" F304_WIDGET_STATE="$2"
+  case "$F304_WIDGET_KIND" in
+    pr)
+      [ -n "$WIDGET_REAL_JQ" ] || skip "jq is not installed"
+      cat > "$TEST_MOCK_BIN/gh" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == 'pr list --state open --limit 200 --json number,title,headRefName' ]] || exit 97
+printf 'pr fixture\n' >> "$WIDGET_PROBE_LOG"
+printf '%s\n' '[{"number":42,"title":"Fixture title","headRefName":"feature/fixture"}]'
+MOCK
+      chmod -- 755 "$TEST_MOCK_BIN/gh"
+      ;;
+    ss)
+      cat > "$TEST_MOCK_BIN/ss" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == '-l -t -n -p' ]] || exit 97
+printf 'ss fixture\n' >> "$WIDGET_PROBE_LOG"
+printf '%s\n' 'LISTEN 0 128 127.0.0.1:8080 0.0.0.0:* users:(("fixture",pid=777,fd=5))'
+MOCK
+      chmod -- 755 "$TEST_MOCK_BIN/ss"
+      ;;
+    *) return 98 ;;
+  esac
+  run widget_zsh '
+    source "$WIDGET_ROOT/functions/zdx-widgets.zsh" || exit 80
+    local -a widget_values=() widget_alternates=() widget_labels=()
+    if [[ "$F304_WIDGET_STATE" == seeded ]]; then
+      MATCH=caller MBEGIN=7 MEND=12
+      match=(captured other) mbegin=(2 5) mend=(8 11)
+    else
+      unset MATCH MBEGIN MEND match mbegin mend
+    fi
+    case "$F304_WIDGET_KIND" in
+      pr) _zdx_widget_pr_candidates ;;
+      ss) OSTYPE=linux-gnu _zdx_widget_port_candidates ;;
+      *) exit 81 ;;
+    esac > "$HOME/candidate.stdout" 2> "$HOME/candidate.stderr"
+    local candidate_rc=$?
+    [[ "$candidate_rc" == 0 && ! -s "$HOME/candidate.stdout" \
+      && ! -s "$HOME/candidate.stderr" && ${#widget_values} == 1 ]] || exit 82
+    case "$F304_WIDGET_KIND" in
+      pr)
+        [[ "${widget_values[1]}" == 42 && -z "${widget_alternates[1]}" \
+          && "${widget_labels[1]}" == "#42  feature/fixture  Fixture title" ]] || exit 83
+        ;;
+      ss)
+        [[ "${widget_values[1]}" == 777 && "${widget_alternates[1]}" == 8080 \
+          && "${widget_labels[1]}" == ":8080  fixture  pid 777  127.0.0.1:8080" ]] || exit 84
+        ;;
+    esac
+    if [[ "$F304_WIDGET_STATE" == seeded ]]; then
+      [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 \
+        && "${(j:,:)match}" == captured,other && "${(j:,:)mbegin}" == 2,5 \
+        && "${(j:,:)mend}" == 8,11 ]] || exit 85
+    else
+      (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+        && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 86
+    fi
+    print -r -- widget-state-kept
+  ' "$HOME"
+  [ "$status" -eq 0 ]
+  [ "$output" = widget-state-kept ]
+  [ "$(cat "$WIDGET_PROBE_LOG")" = "$F304_WIDGET_KIND fixture" ]
+  [ ! -s "$WIDGET_FZF_INPUT" ]
+}
+
+@test "F3-04 module regex: widget PR parsing preserves seeded caller state" {
+  f304_module_widget_state pr seeded
+}
+
+@test "F3-04 module regex: widget PR parsing preserves unset caller state" {
+  f304_module_widget_state pr unset
+}
+
+@test "F3-04 module regex: widget ss parsing preserves seeded caller state" {
+  f304_module_widget_state ss seeded
+}
+
+@test "F3-04 module regex: widget ss parsing preserves unset caller state" {
+  f304_module_widget_state ss unset
+}

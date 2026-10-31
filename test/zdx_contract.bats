@@ -3,6 +3,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
 }
 
 teardown() {
@@ -21,13 +22,12 @@ teardown() {
     "$TEST_SUITE_ROOT/functions/zdx-common.zsh" \
     "$TEST_SUITE_ROOT/functions/zdx-menu.zsh"
   [ "$status" -eq 1 ]
-  grep -Fq \
-    'source "$_zdx_menu_common_file"' \
-    "$TEST_SUITE_ROOT/functions/zdx-menu.zsh"
 
   run zsh -f -c '
     emulate -R zsh
     source "$1/functions/zdx-menu.zsh" || exit
+    (( ${+functions[_zdx_interactive]} \
+      && ${+functions[_zdx_dispatch_suite]} )) || exit 1
     first_definition="${functions[zdx]}"
     source "$1/functions/zdx-menu.zsh" || exit
     [[ -n "${_ZDX_MENU_SOURCED:-}" \
@@ -778,4 +778,40 @@ ZSH
   [ "${lines[1]}" -ge 1 ]
   grep -Fq -- "--dry-run[print the exact install plan; install nothing]" \
     "$TEST_SUITE_ROOT/completions/_zdx-menu"
+}
+
+@test "F3-04 regex: master-name preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'master-name' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: master-name preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'master-name' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: master-entry preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'master-entry' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: master-entry preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'master-entry' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: release-checkout preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'release-checkout' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: release-checkout preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'release-checkout' unset
+  [ "$status" -eq 0 ]
 }

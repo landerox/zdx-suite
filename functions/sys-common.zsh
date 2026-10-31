@@ -139,6 +139,9 @@ _sys_confirm_ask() {
 #          [--capture FUNCTION] [--available FUNCTION] -- PROMPT
 _sys_confirm_prompt() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local zcp_style="" zcp_error_function="" zcp_capture_function=""
   local zcp_available_function=""
   while (( $# > 0 )); do
@@ -248,6 +251,7 @@ _sys_timed() {
 # includes a shell without zsh/system.
 _sys_timeout_ps_listing() {
   emulate -L zsh
+  unsetopt force_float
   REPLY=""
   zmodload -F zsh/system b:sysread 2>/dev/null || return 1
   zmodload -F zsh/datetime p:EPOCHREALTIME 2>/dev/null || return 1
@@ -463,6 +467,12 @@ _sys_run_with_timeout() {
       && timeout_marker_state[nlink] == 1 && timeout_marker_state[size] == 0 )) \
       || return 1
     timeout_marker_id="${timeout_marker_state[device]}:${timeout_marker_state[inode]}:${timeout_marker_state[mode]}:${timeout_marker_state[uid]}:${timeout_marker_state[nlink]}"
+    local _sys_timeout_ticks=""
+    () {
+      emulate -L zsh
+      unsetopt force_float
+      _sys_timeout_ticks="$(( seconds * 100 ))"
+    }
     local -i command_pid watchdog_pid command_rc=0 timed_out=0 claim_rc=0
     local caller_pid=""
     zmodload -F zsh/system p:sysparams 2>/dev/null \
@@ -482,7 +492,7 @@ _sys_run_with_timeout() {
       local -i in_pass=0 stop_requested=0
       setopt TRAPS_ASYNC
       if zmodload zsh/zselect 2>/dev/null; then
-        zselect -t "$(( seconds * 100 ))" 2>/dev/null || :
+        zselect -t "$_sys_timeout_ticks" 2>/dev/null || :
       else
         command sleep "$seconds"
       fi
@@ -1789,6 +1799,9 @@ _sys_fzf_capture() {
 #          --temp-root FUNCTION -- [picker-argument...]
 _sys_picker_capture() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   local zpc_tag="" zpc_noun="" zpc_error_function="" zpc_picker_function=""
   local zpc_temp_root_function=""

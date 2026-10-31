@@ -22,14 +22,17 @@ typeset -g _ZDX_STATUS_SOURCE_DIR="${${(%):-%x}:A:h}"
 # REPLY: the release reported by zdx status, from zdx-version.zsh, the same
 # source as `zdx --version`.
 _zdx_status_release() {
+  emulate -L zsh
+  unsetopt aliases
   if [[ -z "${_ZDX_RELEASE_VERSION:-}" \
     && -f "$_ZDX_STATUS_SOURCE_DIR/zdx-version.zsh" ]]; then
-    source "$_ZDX_STATUS_SOURCE_DIR/zdx-version.zsh"
+    builtin source "$_ZDX_STATUS_SOURCE_DIR/zdx-version.zsh"
   fi
   REPLY="${_ZDX_RELEASE_VERSION:-unknown}"
 }
 
 _zdx_status_usage() {
+  emulate -L zsh
   cat >&2 <<'EOF'
 Usage:
   zdx status [--json]      Show a read-only repository, project, and host summary
@@ -45,6 +48,7 @@ EOF
 
 # Errors work before the core check, so they keep a plain fallback.
 _zdx_status_error() {
+  emulate -L zsh
   if (( ${+functions[_zdx_ui_say]} )); then
     _zdx_ui_say error "${1-}"
   else
@@ -53,6 +57,7 @@ _zdx_status_error() {
 }
 
 _zdx_status_core_ready() {
+  emulate -L zsh
   local service=""
   for service in _zdx_run_with_timeout _zdx_ui_say _zdx_ui_color_enabled \
     _zdx_ui_heading _zdx_ui_section _zdx_ui_label _zdx_ui_command_display \
@@ -77,6 +82,7 @@ _zdx_status_probe() {
 
 # A dim, two-space detail line inside a report section.
 _zdx_status_note() {
+  emulate -L zsh
   if _zdx_ui_color_enabled; then
     printf '  \033[0;90m%s\033[0m\n' "${(V)1-}" >&2
   else
@@ -152,6 +158,8 @@ _zdx_status_reboot_required() {
 # Linux reads /proc (or the fixture root in the argument); macOS asks sysctl.
 _zdx_status_load_average() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local proc_root="${1:-/proc}" line="" value=""
   local -a fields=()
   reply=()
@@ -184,6 +192,7 @@ _zdx_status_load_average() {
 # before the first percentage field.
 _zdx_status_home_filesystem() {
   emulate -L zsh
+  unsetopt force_float
   reply=()
   [[ -n "${HOME:-}" && -d "$HOME" ]] || return 0
   local REPLY=""
@@ -212,6 +221,8 @@ _zdx_status_home_filesystem() {
 # without sysfs or ip. The optional argument replaces /sys/class/net.
 _zdx_status_wireguard_interfaces() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local net_root="${1:-/sys/class/net}"
   local interface_dir="" interface_name="" line=""
   local -a found=()
@@ -332,6 +343,9 @@ _zdx_status_repository() {
 # in the following NUL-separated field, which is skipped.
 _zdx_status_parse_porcelain() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local record="" oid="" head="" upstream="" xy=""
   local -a records=("${(@0)1}")
   local -i skip_next=0 staged=0 unstaged=0 untracked=0 conflicted=0
@@ -385,6 +399,8 @@ _zdx_status_parse_porcelain() {
 # repository only the current directory is inspected.
 _zdx_status_project() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local stop="${1-}" directory="${PWD:A}" name=""
   local -a found=()
   while true; do
@@ -440,6 +456,8 @@ _zdx_status_project() {
 # first kubeconfig file is private to the user. Status 1 without kubectl.
 _zdx_status_kubernetes() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   (( ${+commands[kubectl]} )) || return 1
   zdx_status_facts[k8s_known]=true
   local REPLY="" context="" namespace=""
@@ -550,6 +568,7 @@ _zdx_status_collect() {
 # arithmetic keeps LC_NUMERIC from changing the decimal point.
 _zdx_status_format_bytes() {
   emulate -L zsh
+  unsetopt force_float
   local -i bytes="${1:-0}" unit_size=1 tenths=0 exponent=0
   local -a units=(B KiB MiB GiB TiB PiB)
   while (( exponent < 5 && bytes >= unit_size * 1024 )); do
@@ -565,6 +584,7 @@ _zdx_status_format_bytes() {
 
 # REPLY: a path for display, with HOME shown as ~.
 _zdx_status_display_path() {
+  emulate -L zsh
   _zdx_ui_command_display "${1-}"
 }
 
@@ -748,6 +768,7 @@ _zdx_status_render_zdx() {
 }
 
 _zdx_status_render_text() {
+  emulate -L zsh
   _zdx_ui_heading "ZDX Status"
   _zdx_status_render_repository
   _zdx_status_render_project
@@ -760,6 +781,8 @@ _zdx_status_render_text() {
 # keeps the document on one line and -M keeps jq from coloring a terminal.
 _zdx_status_render_json() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local generated_at="" document=""
   if zmodload zsh/datetime 2>/dev/null; then
     generated_at=$(TZ=UTC strftime '%Y-%m-%dT%H:%M:%SZ' "$EPOCHSECONDS")
@@ -898,6 +921,7 @@ _zdx_status_render_json() {
 
 # Private: collect once, then render the requested mode.
 _zdx_status_run() {
+  emulate -L zsh
   local mode="${1:-text}"
   local -A zdx_status_facts=()
   local -a zdx_status_files=() zdx_status_wireguard=()
@@ -914,6 +938,7 @@ _zdx_status_run() {
 # stdout. Status 0 on success, 1 without the core runtime or (for --json) jq,
 # and 2 for invalid arguments. See docs/user-guide.md.
 zdx-status() {
+  emulate -L zsh
   local mode=text
   case "${1-}" in
     "")

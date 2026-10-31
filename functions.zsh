@@ -11,6 +11,50 @@ if [[ -n "${_ZDX_FUNCTIONS_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# Private: source a release-owned module under its own options. Callers classify
+# owned files before using this helper; user configuration, overrides, local
+# extensions and plugin entrypoints must keep their current-shell source scope.
+_zdx_source_builtin() {
+  emulate -L zsh
+  unsetopt aliases
+  local MATCH="" MBEGIN=0 MEND=0 REPLY=""
+  local -a match=() mbegin=() mend=() reply=()
+  [[ "${1-}" == /* && -f "$1" && ! -L "$1" && -r "$1" ]] || return 1
+  builtin source "$1"
+}
+
+# Classifies only shipped modules; this does not change the eager discovery
+# set. Unknown and ignored local files still use the transparent source path.
+_zdx_builtin_file_owned() {
+  emulate -L zsh
+  [[ "${1:h}" == "$_ZDX_FUNCTIONS_DIR" && ! -L "$1" ]] || return 1
+  case "${1:t}" in
+    dev-common.zsh|dev-menu.zsh|env-common.zsh|env-menu.zsh|\
+    file-common.zsh|file-menu.zsh|git-common.zsh|git-menu.zsh|\
+    py-common.zsh|py-menu.zsh|sys-common.zsh|sys-menu.zsh|\
+    vpn-common.zsh|vpn-menu.zsh|ws-common.zsh|ws-menu.zsh|\
+    zdx-common.zsh|zdx-doctor.zsh|zdx-menu.zsh|zdx-plugins.zsh|\
+    zdx-status.zsh|zdx-version.zsh|zdx-widgets.zsh)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# All stubs retain their validated literal command identity. The body invokes
+# a transparent dispatcher, with each later argument kept as one argument.
+_zdx_register_lazy_stub() {
+  emulate -L zsh
+  local kind="${1-}" name="${2-}"
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  [[ "$name" =~ '^[a-z0-9_-]+$' ]] || return 1
+  case "$kind" in
+    core) functions[$name]="_zdx_lazy_dispatch ${(qq)name} \"\$@\"" ;;
+    plugin) functions[$name]="_zdx_plugin_lazy_dispatch ${(qq)name} \"\$@\"" ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- Trust Helpers -----------------------------------------------------------
 # User configuration, overrides, and plugins are sourced only after these
 # checks, so they come before the first user file.
@@ -157,6 +201,7 @@ _ZDX_REFUSED_USER_FILES=()
 # Private: announces and records a refused user file. Usage:
 # _zdx_refuse_user_file LABEL PATH
 _zdx_refuse_user_file() {
+  emulate -L zsh
   local label="$1" user_file="$2"
   _ZDX_REFUSED_USER_FILES+=("$user_file")
   print -u2 -r -- \
@@ -185,6 +230,7 @@ fi
 # --- Centralized FZF Theme Helpers -------------------------------------------
 
 _zdx_fzf_color_opts() {
+  emulate -L zsh
   if [[ -n "${NO_COLOR:-}" || -n "${ZDX_FZF_PLAIN:-}" \
     || "${TERM:-}" == dumb ]]; then
     print -r -- '--no-color'
@@ -233,6 +279,7 @@ _zdx_fzf_nth_template_option() {
 }
 
 _zdx_core_fzf() {
+  emulate -L zsh
   local -a default_opts
   default_opts=(
     "$(_zdx_fzf_color_opts)"
@@ -315,16 +362,19 @@ _tk_spinner() { _zdx_spinner "$@"; }
 # thin wrappers that keep a standalone fallback.
 
 _zdx_ui_color_enabled() {
+  emulate -L zsh
   [[ -t 2 && -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]]
 }
 
 # Only the exact value 1 enables verbose output.
 _zdx_ui_verbose() {
+  emulate -L zsh
   [[ "${ZDX_VERBOSE:-0}" == 1 ]]
 }
 
 # True inside an aggregate step, including subshells and captures of a step.
 _zdx_step_active() {
+  emulate -L zsh
   (( ${_ZDX_STEP_DEPTH:-0} > 0 ))
 }
 
@@ -333,6 +383,9 @@ _zdx_step_active() {
 # the input is not an unsigned decimal number of seconds.
 _zdx_format_duration() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local value="${1-}"
   local -i tenths=0 seconds=0 minutes=0
   REPLY=""
@@ -361,6 +414,8 @@ _zdx_format_duration() {
 # Usage: _zdx_count_noun <count> <singular> [plural]
 _zdx_count_noun() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local count="${1-}" singular="${2-}" plural="${3-}"
   REPLY=""
   [[ "$count" =~ '^(0|[1-9][0-9]{0,17})$' && -n "$singular" ]] || return 2
@@ -466,6 +521,7 @@ _zdx_ui_say() {
 # demoted sub-heading.
 _zdx_ui_heading() {
   emulate -L zsh
+  unsetopt force_float
   local title="${1-}"
   [[ -n "$title" ]] || return 2
   title="${(V)title}"
@@ -494,6 +550,7 @@ _zdx_ui_heading() {
 # Usage: _zdx_ui_section [--first] <title>
 _zdx_ui_section() {
   emulate -L zsh
+  unsetopt force_float
   local gap=$'\n'
   if [[ "${1-}" == --first ]]; then
     gap=""
@@ -517,6 +574,7 @@ _zdx_ui_section() {
 # themes. Usage: _zdx_ui_label <key> <value>
 _zdx_ui_label() {
   emulate -L zsh
+  unsetopt force_float
   local key="${1-}" value="${2-}"
   key="${key%:}"
   [[ -n "$key" ]] || return 2
@@ -534,6 +592,8 @@ _zdx_ui_label() {
 # Returns 0 when "<index> <total>" is a valid step counter.
 _zdx_ui_step_counter_valid() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   [[ "${1-}" =~ '^[1-9][0-9]{0,3}$' && "${2-}" =~ '^[1-9][0-9]{0,3}$' ]] \
     && (( ${1} <= ${2} ))
 }
@@ -543,6 +603,9 @@ _zdx_ui_step_counter_valid() {
 # heading, which already ends with one.
 _zdx_ui_step_banner() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local gap=$'\n'
   if [[ "${1-}" == --first ]]; then
     gap=""
@@ -582,6 +645,7 @@ _zdx_ui_step_banner() {
 # Prints: <glyph> [i/n] <label> — <word>[: <detail>][ (<duration>)]
 _zdx_ui_step_result() {
   emulate -L zsh
+  unsetopt force_float
   (( $# == 6 )) || return 2
   local index="$1" total="$2" label="$3" outcome="$4" detail="$5"
   local seconds="$6" REPLY word="" sgr="" duration=""
@@ -615,6 +679,9 @@ _zdx_ui_step_result() {
 # render as glyph plus word. Any invalid row prints nothing and returns 2.
 _zdx_ui_table() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local -i outcome_column=0
   if [[ "${1-}" == --outcome-column ]]; then
     [[ "${2-}" =~ '^[1-9][0-9]?$' ]] || return 2
@@ -741,6 +808,7 @@ _zdx_step_exec() {
 # and an unreported success becomes "done".
 _zdx_step_finish() {
   emulate -L zsh
+  unsetopt force_float
   local -i rc="$1" elapsed_ms=0
   local start="$2" end="$3" outcome="$4" detail="$5" class="" REPLY
   (( elapsed_ms = (end - start) * 1000 + 0.5 ))
@@ -850,6 +918,9 @@ _zdx_resolve_trusted_dir() {
 
 # Private: validate and normalize the capture arguments in the caller's scope.
 _zdx_capture_check_args() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local -i command_words="${1:-0}"
   if [[ -z "$_zdx_cap_display" || "$_zdx_cap_display" == *$'\n'* ]] \
     || (( command_words == 0 )); then
@@ -917,6 +988,9 @@ _zdx_capture_parent_safe() {
 #          --temp-root FUNCTION -- [picker-argument...]
 _zdx_picker_capture() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   local zpc_tag="" zpc_noun="" zpc_error_function="" zpc_picker_function=""
   local zpc_temp_root_function=""
@@ -1149,6 +1223,9 @@ _zdx_picker_capture() {
 #          [--capture FUNCTION] [--available FUNCTION] -- PROMPT
 _zdx_confirm_prompt() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local zcp_style="" zcp_error_function="" zcp_capture_function=""
   local zcp_available_function=""
   while (( $# > 0 )); do
@@ -1225,6 +1302,8 @@ _zdx_confirm_prompt() {
 
 # Private: create the private directory and log in the caller's scope.
 _zdx_capture_open() {
+  emulate -L zsh
+  unsetopt force_float
   local REPLY parent=""
   _zdx_capture_parent_safe || {
     _zdx_ui_say error \
@@ -1262,6 +1341,8 @@ _zdx_capture_open() {
 
 # Private: announce the command before it runs.
 _zdx_capture_announce() {
+  emulate -L zsh
+  unsetopt force_float
   local suffix="  (output shown on failure)"
   case "${1-}" in
     live)   suffix="" ;;
@@ -1273,6 +1354,8 @@ _zdx_capture_announce() {
 # Private: return the effective status from the pipeline statuses. An
 # interruption wins; a failed sink fails an otherwise successful command.
 _zdx_capture_finish() {
+  emulate -L zsh
+  unsetopt force_float
   local -i command_rc="${1:-1}" sink_rc="${2:-0}"
   if (( command_rc == 130 || command_rc == 143 )); then
     return $command_rc
@@ -1288,6 +1371,8 @@ _zdx_capture_finish() {
 # Private: true when a captured line may contain a credential.
 _zdx_capture_line_sensitive() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local normalized="${1:l}"
   [[ "$normalized" == *password* || "$normalized" == *passwd* \
     || "$normalized" == *passphrase* || "$normalized" == *token* \
@@ -1305,6 +1390,7 @@ _zdx_capture_line_sensitive() {
 # Private: replay the final lines of the captured log after a failure.
 _zdx_capture_replay() {
   emulate -L zsh
+  unsetopt force_float
   setopt EXTENDED_GLOB
   local -i rc="${1:-1}"
   (( _zdx_cap_lines > 0 )) || return 0
@@ -1347,6 +1433,8 @@ _zdx_capture_replay() {
 
 # Private: remove the exact private log and directory.
 _zdx_capture_close() {
+  emulate -L zsh
+  unsetopt force_float
   zmodload -F zsh/stat b:zstat 2>/dev/null
   local -A state=()
   local -i failed=0
@@ -1454,6 +1542,7 @@ _zdx_run_captured_here() {
 # includes a shell without zsh/system.
 _zdx_timeout_ps_listing() {
   emulate -L zsh
+  unsetopt force_float
   REPLY=""
   zmodload -F zsh/system b:sysread 2>/dev/null || return 1
   zmodload -F zsh/datetime p:EPOCHREALTIME 2>/dev/null || return 1
@@ -1650,6 +1739,12 @@ _zdx_timeout_watchdog() {
     && timeout_marker_state[nlink] == 1 && timeout_marker_state[size] == 0 )) \
     || return 1
   timeout_marker_id="${timeout_marker_state[device]}:${timeout_marker_state[inode]}:${timeout_marker_state[mode]}:${timeout_marker_state[uid]}:${timeout_marker_state[nlink]}"
+  local _zdx_timeout_ticks=""
+  () {
+    emulate -L zsh
+    unsetopt force_float
+    _zdx_timeout_ticks="$(( seconds * 100 ))"
+  }
   local -i command_pid=0 watchdog_pid=0 command_rc=0 timed_out=0 claim_rc=0
   local caller_pid=""
   zmodload -F zsh/system p:sysparams 2>/dev/null \
@@ -1669,7 +1764,7 @@ _zdx_timeout_watchdog() {
     local -i in_pass=0 stop_requested=0
     setopt TRAPS_ASYNC
     if zmodload zsh/zselect 2>/dev/null; then
-      zselect -t "$(( seconds * 100 ))" 2>/dev/null || :
+      zselect -t "$_zdx_timeout_ticks" 2>/dev/null || :
     else
       command sleep "$seconds"
     fi
@@ -1761,7 +1856,7 @@ typeset -g _ZDX_FUNCTIONS_DIR="$_zdx_core_dir/functions"
 # The release line that zdx --version and zdx status report.
 if [[ -f "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh" \
   && ! -L "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh" ]]; then
-  source "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh"
+  _zdx_source_builtin "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh"
 fi
 
 # Every public command and the loader that defines it: each suite's menu, then
@@ -1914,13 +2009,22 @@ if (( _zdx_eager_load )); then
   # Eager Loading: Source all top-level .zsh files immediately (fallback / test mode)
   if [[ -d "$_ZDX_FUNCTIONS_DIR" ]]; then
     typeset _zdx_function_file
-    for _zdx_function_file in "$_ZDX_FUNCTIONS_DIR"/*.zsh(N); do
+    typeset -a _zdx_function_files=()
+    () {
+      emulate -L zsh
+      _zdx_function_files=("$_ZDX_FUNCTIONS_DIR"/*.zsh(N))
+    }
+    for _zdx_function_file in "${_zdx_function_files[@]}"; do
       if [[ -f "$_zdx_function_file" && -r "$_zdx_function_file" ]]; then
-        source "$_zdx_function_file" || {
+        if _zdx_builtin_file_owned "$_zdx_function_file"; then
+          _zdx_source_builtin "$_zdx_function_file"
+        else
+          builtin source "$_zdx_function_file"
+        fi || {
           typeset -i _zdx_source_rc=$?
           print -u2 -r -- \
             "zdx: failed to load ${_zdx_function_file:t}"
-          unset _zdx_core_dir _zdx_eager_load _zdx_function_file
+          unset _zdx_core_dir _zdx_eager_load _zdx_function_file _zdx_function_files
           {
             return $_zdx_source_rc 2>/dev/null || exit $_zdx_source_rc
           } always {
@@ -1929,7 +2033,7 @@ if (( _zdx_eager_load )); then
         }
       fi
     done
-    unset _zdx_function_file
+    unset _zdx_function_file _zdx_function_files
   fi
 else
   # Lazy Loading: Register stubs for public commands to avoid shell startup penalties
@@ -1942,49 +2046,60 @@ else
     _ZDX_LAZY_FILES[zdir]=zdir.zsh
   fi
 
-  _zdx_lazy_dispatch() {
-    local function_name="$1"
-    shift
-    local file_name="${_ZDX_LAZY_FILES[$function_name]:-}"
-    local module_file="$_ZDX_FUNCTIONS_DIR/$file_name"
-    [[ -n "$file_name" && "$function_name" =~ '^[a-z0-9-]+$' \
+  # Only preparation owns regex state and one-based shell semantics.
+  _zdx_lazy_prepare() {
+    emulate -L zsh
+    local requested="${1-}"
+    local MATCH="" MBEGIN=0 MEND=0
+    local -a match=() mbegin=() mend=()
+    file_name="${_ZDX_LAZY_FILES[$requested]:-}"
+    module_file="$_ZDX_FUNCTIONS_DIR/$file_name"
+    [[ -n "$file_name" && "$requested" =~ '^[a-z0-9-]+$' \
       && "$file_name" =~ '^[a-z0-9-]+[.]zsh$' \
-      && -f "$module_file" && ! -L "$module_file" \
-      && -r "$module_file" ]] || {
+      && -f "$module_file" && ! -L "$module_file" && -r "$module_file" ]] || {
       print -u2 -r -- \
-        "zdx: failed to resolve lazy command ${(V)function_name}"
+        "zdx: failed to resolve lazy command ${(V)requested}"
       return 1
     }
+  }
 
+  _zdx_lazy_dispatch() {
+    # No emulated ancestor may surround a public override or local extension.
+    local function_name="$1" file_name="" module_file=""
+    shift
+    _zdx_lazy_prepare "$function_name" || return
     unset -f "$function_name"
-    source "$module_file"
-    local source_rc=$?
-    if (( source_rc != 0 )) \
-      || (( ! ${+functions[$function_name]} )); then
-      # Restore the stub so a transient or repaired load failure can be retried.
-      functions[$function_name]='_zdx_lazy_dispatch "${funcstack[1]}" "$@"'
+    if _zdx_builtin_file_owned "$module_file"; then
+      _zdx_source_builtin "$module_file"
+    else
+      builtin source "$module_file"
+    fi
+    local -i source_rc=$?
+    if (( source_rc != 0 )) || (( ! ${+functions[$function_name]} )); then
+      _zdx_register_lazy_stub core "$function_name"
       (( source_rc == 0 )) && source_rc=1
       print -u2 -r -- \
         "zdx: failed to load ${(V)function_name} from ${(V)file_name}"
       return $source_rc
     fi
-    # Loading a suite redefines its public functions; user overrides win.
-    (( ${#_ZDX_OVERRIDE_FUNCTIONS} )) && _zdx_overrides_reapply
+    _zdx_overrides_reapply
     "$function_name" "$@"
   }
 
-  typeset _zdx_lazy_name _zdx_lazy_file
-  for _zdx_lazy_name _zdx_lazy_file in "${(@kv)_ZDX_LAZY_FILES}"; do
-    # ZDX_DIRECT_COMMANDS=0 registers only the suite menus and the zdx
-    # commands at startup; direct commands then appear when their suite loads.
-    if [[ "${ZDX_DIRECT_COMMANDS:-1}" == 0 && "$_zdx_lazy_name" != zdx* \
-      && "$_zdx_lazy_file" == *-menu.zsh \
-      && "$_zdx_lazy_name" != "${_zdx_lazy_file%.zsh}" ]]; then
-      continue
-    fi
-    functions[$_zdx_lazy_name]='_zdx_lazy_dispatch "${funcstack[1]}" "$@"'
-  done
-  unset _zdx_lazy_name _zdx_lazy_file
+  () {
+    emulate -L zsh
+    local _zdx_lazy_name="" _zdx_lazy_file=""
+    for _zdx_lazy_name _zdx_lazy_file in "${(@kv)_ZDX_LAZY_FILES}"; do
+      # ZDX_DIRECT_COMMANDS=0 registers only the suite menus and the zdx
+      # commands at startup; direct commands then appear when their suite loads.
+      if [[ "${ZDX_DIRECT_COMMANDS:-1}" == 0 && "$_zdx_lazy_name" != zdx* \
+        && "$_zdx_lazy_file" == *-menu.zsh \
+        && "$_zdx_lazy_name" != "${_zdx_lazy_file%.zsh}" ]]; then
+        continue
+      fi
+      _zdx_register_lazy_stub core "$_zdx_lazy_name"
+    done
+  }
 
   # Eagerly register aliases that point to lazy-loaded functions
   if (( ${+_ZDX_LAZY_FILES[zdir]} )); then
@@ -2031,11 +2146,13 @@ _zdx_plugin_root_resolve() {
 
 # Private: true when a canonical plugin root still resolves to itself.
 _zdx_plugin_root_safe() {
+  emulate -L zsh
   local REPLY=""
   _zdx_plugin_root_resolve "${1-}" && [[ "$REPLY" == "${1-}" ]]
 }
 
 _zdx_plugin_entrypoint_safe() {
+  emulate -L zsh
   local plugins_dir="$1"
   local plugin_dir="$2"
   local menu_file="$3"
@@ -2091,6 +2208,7 @@ _zdx_plugin_guard_before=()
 # caller sources the entrypoint at its own level, so the plugin's top-level
 # options persist, and then calls _zdx_plugin_namespace_verify.
 _zdx_plugin_namespace_snapshot() {
+  emulate -L zsh
   _zdx_plugin_guard_before=("${(@kv)functions}")
 }
 
@@ -2207,7 +2325,15 @@ _zdx_plugin_activate() {
     return 1
   }
   _zdx_plugin_namespace_snapshot
-  source "$menu_file" || source_rc=$?
+  builtin source "$menu_file" || source_rc=$?
+  _zdx_plugin_activation_finish "$plugin_name" "$source_rc"
+}
+
+# Owns post-source bookkeeping even after a plugin changes array options.
+_zdx_plugin_activation_finish() {
+  emulate -L zsh
+  local plugin_name="$1"
+  local -i source_rc="$2"
   _zdx_plugin_namespace_verify "$plugin_name" || return 1
   if (( source_rc != 0 )); then
     print -u2 -r -- "zdx: failed to load plugin '${plugin_name}'"
@@ -2223,6 +2349,11 @@ _zdx_plugin_activate() {
     || ZDX_LOADED_PLUGINS+=("$plugin_name")
 }
 
+_zdx_plugin_is_loaded() {
+  emulate -L zsh
+  (( ${ZDX_LOADED_PLUGINS[(Ie)${1-}]} ))
+}
+
 # Private: reply is the commands that plugin NAME declares in its optional
 # manifest, <plugin>/commands: one <name>-<action> command per line, with
 # blank lines and `#` comments allowed. The manifest must be a regular file
@@ -2231,6 +2362,8 @@ _zdx_plugin_activate() {
 # manifest, and the menu stub remains. Usage: _zdx_plugin_manifest <dir> <name>
 _zdx_plugin_manifest() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   setopt extended_glob
   local plugin_dir="$1" plugin_name="$2" manifest="$1/commands" line=""
   local -A manifest_state=()
@@ -2264,6 +2397,7 @@ _zdx_plugin_manifest() {
 # Private: removes the lazy stubs of plugin NAME that are still stubs and
 # forgets all of its stub records. Usage: _zdx_plugin_forget_stubs <name>
 _zdx_plugin_forget_stubs() {
+  emulate -L zsh
   local plugin_name="$1" stub_name=""
   for stub_name in "${(@k)_ZDX_PLUGIN_STUBS}"; do
     [[ "${_ZDX_PLUGIN_STUBS[$stub_name]}" == "$plugin_name" ]] || continue
@@ -2289,7 +2423,7 @@ _zdx_plugin_lazy_dispatch() {
       "zdx: refusing unsafe plugin root ${(V)_ZDX_PLUGIN_ROOT}"
     return 1
   }
-  if (( ! ${ZDX_LOADED_PLUGINS[(Ie)$plugin_name]} )); then
+  if ! _zdx_plugin_is_loaded "$plugin_name"; then
     _zdx_plugin_activate "$_ZDX_PLUGIN_ROOT" "$plugin_name" || return 1
   fi
   _zdx_plugin_forget_stubs "$plugin_name"
@@ -2310,6 +2444,8 @@ _zdx_plugin_lazy_dispatch() {
 # reported and skipped.
 _zdx_register_plugin_completions() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   (( ${+functions[compdef]} )) && [[ -n "$_ZDX_PLUGIN_ROOT" ]] || return 0
   _zdx_plugin_root_safe "$_ZDX_PLUGIN_ROOT" || return 0
   local plugin_name="" completion_file="" declaration="" command_name=""
@@ -2356,56 +2492,77 @@ _zdx_register_plugin_completions() {
 # manifest's commands; the first call loads the plugin (see
 # _zdx_plugin_lazy_dispatch), so startup runs no `zsh -n` and sources no
 # plugin code.
-_zdx_load_plugins() {
-  local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
-  [[ -d "$plugins_dir" ]] || return 0
-  local REPLY=""
-  _zdx_plugin_root_resolve "$plugins_dir" || {
-    print -u2 -r -- \
-      "zdx: refusing unsafe plugin root ${(V)plugins_dir}"
-    return 0
+_zdx_load_plugins_prepare() {
+  emulate -L zsh
+  local configured="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
+  local plugin_dir="" name="" menu_file="" REPLY=""
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  [[ -d "$configured" ]] || return 1
+  _zdx_plugin_root_resolve "$configured" || {
+    print -u2 -r -- "zdx: refusing unsafe plugin root ${(V)configured}"
+    return 1
   }
-  # Scan, validate, and source only below the canonical root.
   plugins_dir="$REPLY"
   _ZDX_PLUGIN_ROOT="$plugins_dir"
-
-  local plugin_dir plugin_name menu_file command_name
-  local -a reply=() stub_names=()
   for plugin_dir in "$plugins_dir"/*(N/); do
-    plugin_name="${plugin_dir:t}"
-    [[ "$plugin_name" =~ ^[a-z0-9_-]+$ ]] || continue
-    menu_file="$plugin_dir/${plugin_name}-menu.zsh"
+    name="${plugin_dir:t}"
+    [[ "$name" =~ ^[a-z0-9_-]+$ ]] || continue
+    menu_file="$plugin_dir/${name}-menu.zsh"
     [[ -e "$menu_file" || -L "$menu_file" ]] || continue
-    if _zdx_plugin_name_reserved "$plugin_name"; then
-      print -u2 -r -- \
-        "zdx: refusing plugin '${plugin_name}': the name is reserved for ZDX"
+    if _zdx_plugin_name_reserved "$name"; then
+      print -u2 -r -- "zdx: refusing plugin '${name}': the name is reserved for ZDX"
       continue
     fi
+    _zdx_plugin_candidates+=("$name")
+  done
+  return 0
+}
+
+_zdx_plugin_record_discovery() {
+  emulate -L zsh
+  ZDX_DISCOVERED_PLUGINS+=("$1")
+}
+
+_zdx_plugin_register_lazy() {
+  emulate -L zsh
+  local plugins_dir="$1" plugin_name="$2" plugin_dir="$1/$2"
+  local menu_file="$1/$2/$2-menu.zsh" command_name=""
+  local -a reply=() stub_names=()
+  _zdx_plugin_entrypoint_safe "$plugins_dir" "$plugin_dir" "$menu_file" || {
+    print -u2 -r -- "zdx: refusing unsafe plugin entrypoint '${plugin_name}'"
+    print -u2 -r -- \
+      "zdx: the plugin directory and entrypoint must be yours, singly linked, and not writable by group or other users (for example: chmod -- go-w ${(V)${(q-)plugin_dir}} ${(V)${(q-)menu_file}})"
+    return 1
+  }
+  stub_names=("${plugin_name}-menu")
+  _zdx_plugin_manifest "$plugin_dir" "$plugin_name" && stub_names+=("${reply[@]}")
+  for command_name in "${stub_names[@]}"; do
+    if (( ${+functions[$command_name]} )); then
+      print -u2 -r -- \
+        "zdx: plugin '${plugin_name}' command ${(V)command_name} is already defined; it was not registered"
+      continue
+    fi
+    _zdx_register_lazy_stub plugin "$command_name" || return 1
+    _ZDX_PLUGIN_STUBS[$command_name]="$plugin_name"
+  done
+  _zdx_plugin_record_discovery "$plugin_name"
+}
+
+_zdx_load_plugins() {
+  # Collect under owned options, then activate outside every restoring scope.
+  local plugins_dir="" plugin_name=""
+  local -a _zdx_plugin_candidates=()
+  _zdx_load_plugins_prepare || return 0
+  for plugin_name in "${_zdx_plugin_candidates[@]}"; do
     if (( _ZDX_EAGER_PLUGINS )); then
       _zdx_plugin_activate "$plugins_dir" "$plugin_name" \
-        && ZDX_DISCOVERED_PLUGINS+=("$plugin_name")
-      continue
+        && _zdx_plugin_record_discovery "$plugin_name"
+    else
+      _zdx_plugin_register_lazy "$plugins_dir" "$plugin_name"
     fi
-    _zdx_plugin_entrypoint_safe "$plugins_dir" "$plugin_dir" "$menu_file" || {
-      print -u2 -r -- \
-        "zdx: refusing unsafe plugin entrypoint '${plugin_name}'"
-      print -u2 -r -- \
-        "zdx: the plugin directory and entrypoint must be yours, singly linked, and not writable by group or other users (for example: chmod -- go-w ${(V)${(q-)plugin_dir}} ${(V)${(q-)menu_file}})"
-      continue
-    }
-    stub_names=("${plugin_name}-menu")
-    _zdx_plugin_manifest "$plugin_dir" "$plugin_name" && stub_names+=("${reply[@]}")
-    for command_name in "${stub_names[@]}"; do
-      if (( ${+functions[$command_name]} )); then
-        print -u2 -r -- \
-          "zdx: plugin '${plugin_name}' command ${(V)command_name} is already defined; it was not registered"
-        continue
-      fi
-      functions[$command_name]='_zdx_plugin_lazy_dispatch "${funcstack[1]}" "$@"'
-      _ZDX_PLUGIN_STUBS[$command_name]="$plugin_name"
-    done
-    ZDX_DISCOVERED_PLUGINS+=("$plugin_name")
   done
+  return 0
 }
 _zdx_load_plugins
 
@@ -2845,6 +3002,7 @@ _zdx_overrides_before=()
 # Private: records every function that differs from the snapshot taken just
 # before overrides.zsh was sourced.
 _zdx_overrides_record() {
+  emulate -L zsh
   local function_name=""
   for function_name in "${(@k)functions}"; do
     (( ${+_zdx_overrides_before[$function_name]} )) \
@@ -2857,6 +3015,7 @@ _zdx_overrides_record() {
 
 # Private: applies the recorded override definitions again.
 _zdx_overrides_reapply() {
+  emulate -L zsh
   local function_name=""
   for function_name in "${(@k)_ZDX_OVERRIDE_FUNCTIONS}"; do
     functions[$function_name]="${_ZDX_OVERRIDE_FUNCTIONS[$function_name]}"
