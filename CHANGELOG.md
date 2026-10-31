@@ -40,6 +40,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Clarify the engineering contract for local Zsh options and regex state,
+  caller-command and persistent plugin execution boundaries, and public
+  confirmation statuses. Runtime adoption follows the corresponding
+  core and suite fixes.
 - Observe interrupted BATS workers for a bounded exit interval after their
   leader stops, instead of treating asynchronous shutdown as an immediate
   failure. A worker that survives the interval still fails the test.

@@ -172,10 +172,68 @@ Use these exit statuses unless an invoked tool's status must be preserved:
 Cancellation is not an error. A user pressing Esc or declining a confirmation
 returns `0` without performing the mutation.
 
+When confirmation requires a terminal, a command invoked without one MUST
+return `1` with an actionable diagnostic unless its documented `--yes` option
+was supplied. A user declining the same confirmation returns `0`. `--yes`
+skips only the prompt and never validation or planning. These are the public
+command's statuses; internal confirmation helpers retain their documented
+protocol, which the caller maps to the public result.
+
 An inventory builder MUST return success explicitly after a successful scan,
 including when no candidates match. Its status MUST NOT depend on candidate
 order or the final filter comparison. Collection and read failures still
 propagate before callers consume partial results.
+
+### Zsh options and match state
+
+Public commands, dispatchers, and validators MUST begin their owned logic
+with `emulate -L zsh`, unless the execution boundary below requires a
+non-emulated coordinator. Pure core and suite helpers SHOULD apply the same
+isolation. Completion functions retain the options required by Zsh's
+completion system.
+
+Wrappers of arbitrary caller commands MUST NOT reset the command's inherited
+options wholesale with `emulate`. Any deliberate service-specific option
+change MUST be narrow and documented. Existing capture and watchdog process
+policies, such as `NO_PIPE_FAIL` and `NO_MONITOR`, remain scoped to their
+services; they do not authorize a wholesale option reset.
+
+When a service promises current-shell execution, its invocation MUST also
+remain outside any option-restoring scope introduced by ZDX that would
+discard the invoked code's intended session changes. In particular, plugin
+activation and invocation through `zdx`, `zdx-menu`, or `zdx-plugins` MUST run
+after emulated preparation has returned. Use small emulated helpers for
+parsing, validation, and built-in module loading, then invoke the caller's
+command or activate the plugin through a non-emulated coordinator in the
+current shell. Subshells and command substitutions cannot provide activation
+whose definitions and session changes must persist. Services that explicitly
+execute a child process do not promise persistence of that child's shell
+changes. A scope deliberately introduced by the caller is not a ZDX scope.
+
+The execution exception applies to wrappers of arbitrary caller commands
+and to user/plugin source boundaries. Plugin entrypoints remain subject to the
+[source-time contract](plugins.md#source-time-contract). Service-owned
+implementation hooks,
+such as the picker, temporary-root, error, availability, and confirmation
+capture callbacks of the picker and confirmation primitives, execute under
+that service's isolated options. Those hooks do not promise to preserve
+arbitrary caller option changes.
+
+Core execution coordinators that must not acquire a wholesale emulated
+scope include `_timed`, `_zdx_run_with_timeout`, `_zdx_run_captured`,
+`_zdx_run_captured_here`, `_zdx_timeout_watchdog`, `_zdx_lazy_dispatch`, and
+plugin activation. `_log_telemetry` also remains a non-emulated coordinator;
+its private validation and persistence helpers isolate their own options.
+The current-shell rule also applies to `_zdx_step_exec` and to ancestors of
+user/plugin execution, even when those ancestors do not source code directly.
+
+Regex-result parameters are separate from option isolation. Every core or
+suite function that uses `=~` for its own internal work MUST localize `MATCH`,
+`MBEGIN`, `MEND`, `match`, `mbegin`, and `mend` before matching, or delegate the
+match to an isolated helper. This does not require a generic execution
+wrapper to hide changes deliberately made by the caller's command.
+`emulate -L` alone does not isolate these parameters. Tests MUST cover both
+existing seeded values and initially unset state.
 
 ### Argument routing
 
@@ -529,7 +587,10 @@ Therefore:
   builtin that replaces the user's `stat` command for the rest of the session,
   and `test/platform_tools.bats` rejects it in product code;
 - no sourced file may call `exit` on a runtime path;
-- suite-local option changes use `setopt LOCAL_OPTIONS` inside a function;
+- suite-local option changes stay inside functions and follow the
+  [option and match-state contract](#zsh-options-and-match-state), including
+  its exceptions for caller-command execution and persistent user/plugin
+  activation; do not change global shell options at file scope;
 - temporary aliases, functions, variables, and traps are cleaned up;
 - loader failures name the exact missing module and return non-zero without
   leaving a false "loaded" sentinel.
