@@ -6,6 +6,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   mkdir -m 700 "$TEST_TEMP_DIR/runtime"
   PLATFORM_TMP=$(cd -P "$TEST_TEMP_DIR/runtime" && pwd -P)
   export PLATFORM_TMP
@@ -1399,4 +1400,145 @@ SH
   ' zsh "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
   [[ "$output" != *": builtin"* ]]
+}
+
+@test "F3-04 invariant: zero-bound timeout keeps current-shell callback semantics" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt sh_word_split
+    _f304_callback() {
+      [[ -o sh_word_split ]] || return 78
+      setopt null_glob
+      typeset -g F304_CALLBACK_EFFECT=visible
+      return 23
+    }
+    _zdx_run_with_timeout 0 _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 23 && -o sh_word_split && -o null_glob && "$F304_CALLBACK_EFFECT" == visible ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: watchdog callbacks inherit options in a child shell" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    command() {
+      if [[ "${1:-}" == -v && ( "${2:-}" == timeout || "${2:-}" == gtimeout ) ]]; then
+        return 1
+      fi
+      builtin command "$@"
+    }
+    setopt sh_word_split
+    typeset -g F304_CALLBACK_EFFECT=parent
+    _f304_callback() {
+      [[ -o sh_word_split ]] || return 78
+      typeset -g F304_CALLBACK_EFFECT=child
+      print -r -- inherited > "$HOME/callback.options"
+      return 23
+    }
+    _zdx_run_with_timeout 3 _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 23 && -o sh_word_split && "$F304_CALLBACK_EFFECT" == parent ]] || exit 31
+    [[ "$(<"$HOME/callback.options")" == inherited ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation: zero timeout preserves all six callback regex parameters" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304a_callback() {
+      [[ foobarbaz =~ "(bar)" ]] || return 78
+      return 7
+    }
+    _zdx_run_with_timeout 0 _f304a_callback
+    local callback_rc=$?
+    [[ "$callback_rc" == 7 && "$MATCH" == bar && "$MBEGIN" == 4 && "$MEND" == 6 ]] || exit 31
+    [[ "${match[1]}" == bar && "${mbegin[1]}" == 4 && "${mend[1]}" == 6 ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation: zdx zselect deadlines preserve FORCE_FLOAT statuses" {
+  f304_mock_local_probes
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    if [[ "$2" == zdx ]]; then
+      source "$1/functions.zsh" || exit 90
+    else
+      source "$1/functions/sys-common.zsh" || exit 90
+      (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
+    fi
+    zmodload zsh/zselect || exit 77
+    source "$PLATFORM_NO_TIMEOUT" || exit 92
+    export TMPDIR="$PLATFORM_TMP"
+    setopt force_float
+    _f304a_callback() {
+      [[ -o force_float ]] || return 78
+      print -r -- inherited > "$HOME/callback.options"
+      command sleep "$1"
+      print -r -- complete > "$HOME/callback.complete"
+      return "$2"
+    }
+    local callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 0.2 0 || callback_rc=$?
+    [[ "$callback_rc" == 0 && -o force_float ]] || exit 31
+    [[ "$(<"$HOME/callback.options")" == inherited ]] || exit 32
+    callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 0.2 7 || callback_rc=$?
+    [[ "$callback_rc" == 7 && -o force_float ]] || exit 33
+    command rm -- "$HOME/callback.complete" || exit 34
+    callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 3 0 || callback_rc=$?
+    [[ "$callback_rc" == 124 && -o force_float && ! -e "$HOME/callback.complete" ]] || exit 35
+    local -a markers=("$PLATFORM_TMP"/*(DN))
+    (( ${#markers} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" zdx
+  [ "$status" -ne 77 ] || skip "zsh/zselect is unavailable"
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation: sys zselect deadlines preserve FORCE_FLOAT statuses" {
+  f304_mock_local_probes
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    if [[ "$2" == zdx ]]; then
+      source "$1/functions.zsh" || exit 90
+    else
+      source "$1/functions/sys-common.zsh" || exit 90
+      (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 91
+    fi
+    zmodload zsh/zselect || exit 77
+    source "$PLATFORM_NO_TIMEOUT" || exit 92
+    export TMPDIR="$PLATFORM_TMP"
+    setopt force_float
+    _f304a_callback() {
+      [[ -o force_float ]] || return 78
+      print -r -- inherited > "$HOME/callback.options"
+      command sleep "$1"
+      print -r -- complete > "$HOME/callback.complete"
+      return "$2"
+    }
+    local callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 0.2 0 || callback_rc=$?
+    [[ "$callback_rc" == 0 && -o force_float ]] || exit 31
+    [[ "$(<"$HOME/callback.options")" == inherited ]] || exit 32
+    callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 0.2 7 || callback_rc=$?
+    [[ "$callback_rc" == 7 && -o force_float ]] || exit 33
+    command rm -- "$HOME/callback.complete" || exit 34
+    callback_rc=0
+    "_${2}_run_with_timeout" 1 _f304a_callback 3 0 || callback_rc=$?
+    [[ "$callback_rc" == 124 && -o force_float && ! -e "$HOME/callback.complete" ]] || exit 35
+    local -a markers=("$PLATFORM_TMP"/*(DN))
+    (( ${#markers} == 0 ))
+  ' _ "$TEST_SUITE_ROOT" sys
+  [ "$status" -ne 77 ] || skip "zsh/zselect is unavailable"
+  [ "$status" -eq 0 ]
 }

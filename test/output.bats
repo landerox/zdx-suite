@@ -5,6 +5,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
 }
 
 teardown() {
@@ -422,4 +423,259 @@ teardown() {
   '
   [ "$status" -eq 0 ]
   [[ "$output" == *"RESULT=SUCCESS"* ]]
+}
+
+@test "F3-04 regex: duration preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'duration' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: duration preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'duration' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: count preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'count' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: count preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'count' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: step-counter preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'step-counter' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: step-counter preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'step-counter' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: step-banner preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'step-banner' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: step-banner preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'step-banner' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: table preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'table' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: table preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'table' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: capture-args preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'capture-args' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: capture-args preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'capture-args' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: capture-redaction preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'capture-redaction' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: capture-redaction preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'capture-redaction' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:duration preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:duration' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:duration preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:duration' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:count preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:count' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:count preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:count' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:step-counter preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:step-counter' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:step-counter preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:step-counter' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:capture-args preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:capture-args' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: reject:capture-args preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'reject:capture-args' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 invariant: timed user callbacks retain caller options and shell effects" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt sh_word_split
+    _f304_callback() {
+      [[ -o sh_word_split ]] || return 78
+      setopt null_glob
+      typeset -g F304_CALLBACK_EFFECT=visible
+      return 23
+    }
+    _timed "sys:sys-info" _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 23 && -o sh_word_split && -o null_glob && "$F304_CALLBACK_EFFECT" == visible ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 regression: a timer preserves the user callback own regex results" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304_callback() { [[ foobarbaz =~ "(bar)" ]]; }
+    _timed "sys:sys-info" _f304_callback || exit 31
+    [[ "$MATCH" == bar && "$MBEGIN" == 4 && "$MEND" == 6 ]] || exit 32
+    [[ "${match[1]}" == bar && "${mbegin[1]}" == 4 && "${mend[1]}" == 6 ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: in-shell capture keeps user options shell effects and regex results" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt sh_word_split
+    _f304_callback() {
+      [[ -o sh_word_split ]] || return 78
+      setopt null_glob
+      typeset -g F304_CALLBACK_EFFECT=visible
+      [[ foobarbaz =~ "(bar)" ]] || return 79
+      return 23
+    }
+    _zdx_run_captured_here probe 4096 0 _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 23 && -o sh_word_split && -o null_glob && "$F304_CALLBACK_EFFECT" == visible ]] || exit 31
+    [[ "$MATCH" == bar && "$MBEGIN" == 4 && "$MEND" == 6 \
+      && "${match[1]}" == bar && "${mbegin[1]}" == 4 && "${mend[1]}" == 6 ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: pipeline capture inherits options but isolates child shell effects" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt sh_word_split pipe_fail
+    typeset -g F304_CALLBACK_EFFECT=parent
+    _f304_callback() {
+      [[ -o sh_word_split && ! -o pipe_fail ]] || return 78
+      typeset -g F304_CALLBACK_EFFECT=child
+      print -r -- inherited > "$HOME/callback.options"
+      return 23
+    }
+    _zdx_run_captured probe 4096 0 _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 23 && -o sh_word_split && -o pipe_fail && "$F304_CALLBACK_EFFECT" == parent ]] || exit 31
+    [[ "$(<"$HOME/callback.options")" == inherited ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: step user callbacks retain caller options and shell effects" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt sh_word_split
+    _f304_callback() {
+      [[ -o sh_word_split ]] || return 78
+      setopt null_glob
+      typeset -g F304_CALLBACK_EFFECT=visible
+      return 143
+    }
+    _zdx_step_exec _f304_callback
+    local call_rc=$?
+    [[ $call_rc == 143 && -o sh_word_split && -o null_glob && "$F304_CALLBACK_EFFECT" == visible ]] || exit 31
+    [[ "${reply[1]}" == interrupted ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation: step execution preserves all six callback regex parameters" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _f304a_callback() {
+      [[ foobarbaz =~ "(bar)" ]] || return 78
+      return 143
+    }
+    _zdx_step_exec _f304a_callback
+    local callback_rc=$?
+    [[ "$callback_rc" == 143 && "$MATCH" == bar && "$MBEGIN" == 4 && "$MEND" == 6 ]] || exit 31
+    [[ "${match[1]}" == bar && "${mbegin[1]}" == 4 && "${mend[1]}" == 6 ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: FORCE_FLOAT preserves the decimal duration and caller option" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt force_float
+    _zdx_format_duration 1.5 || exit 31
+    [[ -o force_float ]] || exit 32
+    print -r -- "duration=$REPLY"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = duration=1.5s ]
 }

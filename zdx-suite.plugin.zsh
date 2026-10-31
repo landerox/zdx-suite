@@ -27,89 +27,102 @@ fi
 # Oh My Zsh initializes completion before it sources plugin entrypoints. Add
 # the directory for direct/manual loaders, then explicitly load and bind each
 # owned declaration when compdef is already available.
-typeset _zdx_completion_dir="$_zdx_plugin_dir/completions"
-typeset -A _zdx_completion_dir_state=()
-if ! zmodload -F zsh/stat b:zstat 2>/dev/null \
-  || ! zstat -LH _zdx_completion_dir_state \
-    -- "$_zdx_completion_dir" 2>/dev/null; then
-  print -u2 -r -- \
-    "zdx-suite.plugin.zsh: could not inspect the completions directory"
-  unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
-  unset _zdx_completion_dir_state
-  return 1 2>/dev/null || exit 1
-fi
-if [[ ! -d "$_zdx_completion_dir" || -L "$_zdx_completion_dir" \
-  || ! -O "$_zdx_completion_dir" \
-  || "${_zdx_completion_dir:A}" != "$_zdx_completion_dir" ]] \
-  || (( (_zdx_completion_dir_state[mode] & 8#170000) != 8#040000 \
-    || _zdx_completion_dir_state[uid] != EUID \
-    || (_zdx_completion_dir_state[mode] & 8#22) != 0 )); then
-  print -u2 -r -- \
-    "zdx-suite.plugin.zsh: refusing an unsafe completions directory"
-  unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
-  unset _zdx_completion_dir_state
-  return 1 2>/dev/null || exit 1
-fi
-unset _zdx_completion_dir_state
-if (( ${fpath[(Ie)$_zdx_completion_dir]} == 0 )); then
-  fpath=("$_zdx_completion_dir" "${fpath[@]}")
-fi
-
-_zdx_register_completion_file() {
-  local completion_file="$1"
-  local completion_name="${completion_file:t}"
-  local -A completion_state=()
-  [[ "$completion_name" =~ '^_[a-z][a-z0-9-]*$' \
-    && -f "$completion_file" && ! -L "$completion_file" \
-    && -O "$completion_file" && -r "$completion_file" \
-    && "${completion_file:A}" == "$completion_file" \
-    && "${completion_file:A:h}" == "$_zdx_completion_dir" ]] \
-    && zstat -LH completion_state -- "$completion_file" 2>/dev/null \
-    && (( (completion_state[mode] & 8#170000) == 8#100000 \
-      && completion_state[uid] == EUID \
-      && completion_state[nlink] == 1 \
-      && (completion_state[mode] & 8#22) == 0 \
-      && completion_state[size] >= 1 \
-      && completion_state[size] <= 1024 * 1024 )) || return 1
-
-  local declaration=""
-  IFS= read -r declaration < "$completion_file" || return 1
-  [[ "$declaration" == '#compdef '* \
-    && "$declaration" != *[[:cntrl:]]* ]] || return 1
-  local -a completion_commands=(
-    "${(@s: :)${declaration#\#compdef }}"
-  )
-  (( ${#completion_commands[@]} > 0 )) || return 1
-  local completion_command=""
-  for completion_command in "${completion_commands[@]}"; do
-    [[ "$completion_command" =~ '^[a-z][a-z0-9-]*$' ]] || return 1
-  done
-
-  autoload -Uz "$completion_name" || return 1
-  autoload +X "$completion_name" || return 1
-  compdef "$completion_name" "${completion_commands[@]}"
-}
-
-if (( ${+functions[compdef]} )); then
-  typeset _zdx_completion_file=""
-  for _zdx_completion_file in "$_zdx_completion_dir"/_*-menu(N); do
-    _zdx_register_completion_file "$_zdx_completion_file" || {
-      _zdx_plugin_source_rc=$?
-      print -u2 -r -- \
-        "zdx-suite.plugin.zsh: failed to register ${_zdx_completion_file:t}"
-      break
-    }
-  done
-  unset _zdx_completion_file
-  # Custom plugins may ship their own completion; the core validates it.
-  (( _zdx_plugin_source_rc == 0 )) && _zdx_register_plugin_completions
-  if (( _zdx_plugin_source_rc != 0 )); then
-    unset -f _zdx_register_completion_file
+() {
+  emulate -L zsh
+  unsetopt aliases
+  typeset _zdx_completion_dir="$_zdx_plugin_dir/completions"
+  typeset -A _zdx_completion_dir_state=()
+  if ! zmodload -F zsh/stat b:zstat 2>/dev/null \
+    || ! zstat -LH _zdx_completion_dir_state \
+      -- "$_zdx_completion_dir" 2>/dev/null; then
+    print -u2 -r -- \
+      "zdx-suite.plugin.zsh: could not inspect the completions directory"
     unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
+    unset _zdx_completion_dir_state
     return 1 2>/dev/null || exit 1
   fi
-fi
-unset -f _zdx_register_completion_file
+  if [[ ! -d "$_zdx_completion_dir" || -L "$_zdx_completion_dir" \
+    || ! -O "$_zdx_completion_dir" \
+    || "${_zdx_completion_dir:A}" != "$_zdx_completion_dir" ]] \
+    || (( (_zdx_completion_dir_state[mode] & 8#170000) != 8#040000 \
+      || _zdx_completion_dir_state[uid] != EUID \
+      || (_zdx_completion_dir_state[mode] & 8#22) != 0 )); then
+    print -u2 -r -- \
+      "zdx-suite.plugin.zsh: refusing an unsafe completions directory"
+    unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
+    unset _zdx_completion_dir_state
+    return 1 2>/dev/null || exit 1
+  fi
+  unset _zdx_completion_dir_state
+  if (( ${fpath[(Ie)$_zdx_completion_dir]} == 0 )); then
+    fpath=("$_zdx_completion_dir" "${fpath[@]}")
+  fi
+
+  _zdx_register_completion_file() {
+    emulate -L zsh
+    local MATCH="" MBEGIN=0 MEND=0
+    local -a match=() mbegin=() mend=()
+    local completion_file="$1"
+    local completion_name="${completion_file:t}"
+    local -A completion_state=()
+    [[ "$completion_name" =~ '^_[a-z][a-z0-9-]*$' \
+      && -f "$completion_file" && ! -L "$completion_file" \
+      && -O "$completion_file" && -r "$completion_file" \
+      && "${completion_file:A}" == "$completion_file" \
+      && "${completion_file:A:h}" == "$_zdx_completion_dir" ]] \
+      && zstat -LH completion_state -- "$completion_file" 2>/dev/null \
+      && (( (completion_state[mode] & 8#170000) == 8#100000 \
+        && completion_state[uid] == EUID \
+        && completion_state[nlink] == 1 \
+        && (completion_state[mode] & 8#22) == 0 \
+        && completion_state[size] >= 1 \
+        && completion_state[size] <= 1024 * 1024 )) || return 1
+
+    local declaration=""
+    IFS= read -r declaration < "$completion_file" || return 1
+    [[ "$declaration" == '#compdef '* \
+      && "$declaration" != *[[:cntrl:]]* ]] || return 1
+    local -a completion_commands=(
+      "${(@s: :)${declaration#\#compdef }}"
+    )
+    (( ${#completion_commands[@]} > 0 )) || return 1
+    local completion_command=""
+    for completion_command in "${completion_commands[@]}"; do
+      [[ "$completion_command" =~ '^[a-z][a-z0-9-]*$' ]] || return 1
+    done
+
+    autoload -Uz "$completion_name" || return 1
+    autoload +X "$completion_name" || return 1
+    compdef "$completion_name" "${completion_commands[@]}"
+  }
+
+  if (( ${+functions[compdef]} )); then
+    typeset _zdx_completion_file=""
+    for _zdx_completion_file in "$_zdx_completion_dir"/_*-menu(N); do
+      _zdx_register_completion_file "$_zdx_completion_file" || {
+        _zdx_plugin_source_rc=$?
+        print -u2 -r -- \
+          "zdx-suite.plugin.zsh: failed to register ${_zdx_completion_file:t}"
+        break
+      }
+    done
+    unset _zdx_completion_file
+    # Custom plugins may ship their own completion; the core validates it.
+    (( _zdx_plugin_source_rc == 0 )) && _zdx_register_plugin_completions
+    if (( _zdx_plugin_source_rc != 0 )); then
+      unset -f _zdx_register_completion_file
+      unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
+      return 1 2>/dev/null || exit 1
+    fi
+  fi
+  unset -f _zdx_register_completion_file
+  return 0
+}
+_zdx_plugin_source_rc=$?
+(( _zdx_plugin_source_rc == 0 )) || {
+  unset _zdx_plugin_dir _zdx_plugin_source_rc _zdx_completion_dir
+  return 1 2>/dev/null || exit 1
+}
 
 # --- Zsh Keyboard Shortcuts & Bindings ----------------------------------------
 if [[ "${ZDX_KEYBINDINGS:-1}" == "1" ]] && [[ -o interactive ]] && (( $+widgets )); then
@@ -145,7 +158,7 @@ if [[ "${ZDX_KEYBINDINGS:-1}" == "1" ]] && [[ -o interactive ]] && (( $+widgets 
       local widget_file="${_ZDX_FUNCTIONS_DIR:-}/zdx-widgets.zsh"
       if [[ -z "${_ZDX_FUNCTIONS_DIR:-}" || ! -f "$widget_file" \
         || -L "$widget_file" || ! -r "$widget_file" ]] \
-        || ! builtin source "$widget_file" \
+        || ! _zdx_source_builtin "$widget_file" \
         || [[ -z "${_ZDX_WIDGETS_SOURCED:-}" ]]; then
         zle -M "zdx: could not load zdx-widgets.zsh"
         return 1
@@ -204,15 +217,15 @@ fi
 if [[ "${ZDX_GIT_IDENTITY_GUARD:-0}" == "1" ]] && [[ -o interactive ]]; then
   typeset -gA _ZDX_GIT_IDENTITY_GUARD_SEEN=()
 
-  _zdx_git_identity_guard() {
+  _zdx_git_identity_guard_prepare() {
     emulate -L zsh
     [[ "${ZDX_GIT_IDENTITY_GUARD:-0}" == "1" ]] && (( ZSH_SUBSHELL == 0 )) ||
-      return 0
+      return 1
     local base_dir="${WS_BASE_DIR-${HOME:A}/workspaces}"
-    [[ "$base_dir" == /* ]] || return 0
+    [[ "$base_dir" == /* ]] || return 1
     base_dir="${base_dir:A}"
     local current_dir="${PWD:A}"
-    [[ "$base_dir" != / && "$current_dir" == "$base_dir"/*/*/?* ]] || return 0
+    [[ "$base_dir" != / && "$current_dir" == "$base_dir"/*/*/?* ]] || return 1
 
     # The repository root is the nearest directory with a .git entry strictly
     # below the <platform>/<identity> directory.
@@ -225,10 +238,15 @@ if [[ "${ZDX_GIT_IDENTITY_GUARD:-0}" == "1" ]] && [[ -o interactive ]]; then
       && ! -e "$repository_root/.git" ]]; do
       repository_root="${repository_root:h}"
     done
-    [[ "$repository_root" == "$identity_dir"/?* ]] || return 0
-    (( ! ${+_ZDX_GIT_IDENTITY_GUARD_SEEN[$repository_root]} )) || return 0
+    [[ "$repository_root" == "$identity_dir"/?* ]] || return 1
+    (( ! ${+_ZDX_GIT_IDENTITY_GUARD_SEEN[$repository_root]} )) || return 1
     _ZDX_GIT_IDENTITY_GUARD_SEEN[$repository_root]=1
 
+    return 0
+  }
+
+  _zdx_git_identity_guard() {
+    _zdx_git_identity_guard_prepare || return 0
     # The git-identity-check stub loads the Git suite on first use. With
     # ZDX_DIRECT_COMMANDS=0 only the git-menu stub exists; its help loads the
     # suite without probes, and the discarded usage text is the only output.

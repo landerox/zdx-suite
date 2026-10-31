@@ -2,6 +2,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
 }
 
 teardown() {
@@ -385,5 +386,154 @@ EOF
     done
   "
 
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regression: a core lazy stub keeps its literal identity under KSH_ARRAYS" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+setopt ksh_arrays
+zdx-status --help > "$HOME/help.data" 2> "$HOME/help.ui"
+local call_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+[[ $call_rc == 0 && "$kept" == on ]] || exit 31
+[[ ! -s "$HOME/help.data" ]] || exit 32
+command grep -Fq "Usage:" "$HOME/help.ui"
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 regression: a late cat alias cannot replace lazy status help" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+alias cat='print -r -- F304_ALIASED_CAT'
+zdx-status --help > "$HOME/help.data" 2> "$HOME/help.ui" || exit 31
+[[ ! -s "$HOME/help.data" ]] || exit 32
+command grep -Fq "Usage:" "$HOME/help.ui" || exit 33
+[[ "${aliases[cat]:-}" == 'print -r -- F304_ALIASED_CAT' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *F304_ALIASED_CAT* ]]
+}
+
+
+@test "F3-04 regression: a late awk alias cannot replace lazy provider parsing" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+alias awk='print -r -- F304_ALIASED_AWK'
+vpn-menu --help >/dev/null 2>&1 || exit 31
+_vpn_load_provider_urls() {
+  reply=()
+  [[ "$1" == _vpn_ipinfo_trace_providers ]] || return 1
+  reply=(https://trace.example.invalid/)
+}
+_vpn_curl_bounded() { print -rl -- ip=198.51.100.7 loc=XX colo=TEST; }
+local result
+result=$(_vpn_get_ip_info) || exit 32
+[[ "$result" == 198.51.100.7$'\t'* && "$result" == *$'\tXX\t'* ]] || exit 33
+[[ "${aliases[awk]:-}" == 'print -r -- F304_ALIASED_AWK' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *F304_ALIASED_AWK* ]]
+}
+
+
+@test "F3-04 invariant: a git alias does not rewrite a probe argument" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+alias git='print -r -- F304_ALIASED_GIT'
+sys-menu --help >/dev/null 2>&1 || exit 31
+[[ "${functions[sys-info]}" != *F304_ALIASED_GIT* \
+  && "${functions[_sys_info_json]}" != *F304_ALIASED_GIT* ]] || exit 32
+[[ "${aliases[git]:-}" == 'print -r -- F304_ALIASED_GIT' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 regression: a restored core lazy stub keeps its literal identity" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+command mkdir -p "$HOME/fake-modules"
+_ZDX_FUNCTIONS_DIR="$HOME/fake-modules"
+print -r -- 'return 23' > "$_ZDX_FUNCTIONS_DIR/zdx-status.zsh"
+zdx-status >/dev/null 2>&1
+[[ $? == 23 && ${+functions[zdx-status]} == 1 ]] || exit 31
+print -r -- 'zdx-status() { printf "<%s>\n" "$@"; }' > "$_ZDX_FUNCTIONS_DIR/zdx-status.zsh"
+setopt ksh_arrays
+zdx-status 'one two' --literal > "$HOME/retry.data"
+local call_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+[[ $call_rc == 0 && "$kept" == on ]] || exit 32
+[[ "$(<"$HOME/retry.data")" == $'<one two>\n<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: the built-in source helper returns before an override runs" {
+  f304_mock_local_probes
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+_ZDX_OVERRIDE_FUNCTIONS[zdx-status]='[[ -o sh_word_split ]] || return 78; setopt null_glob; printf "<%s>\n" "$@"'
+unsetopt null_glob
+setopt sh_word_split
+zdx-status 'one two' --literal > "$HOME/override.data" || exit 31
+[[ -o sh_word_split && -o null_glob ]] || exit 32
+[[ "$(<"$HOME/override.data")" == $'<one two>\n<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation: eager startup keeps KSH_ARRAYS and loads the next plugin" {
+  f304_mock_local_probes
+  local plugin_root="$HOME/.config/zdx/plugins"
+  mkdir -p "$plugin_root/alpha" "$plugin_root/beta"
+  chmod -- 700 "$HOME/.config" "$HOME/.config/zdx" "$plugin_root" "$plugin_root/alpha" "$plugin_root/beta"
+  cat > "$plugin_root/alpha/alpha-menu.zsh" <<'ZSH'
+setopt ksh_arrays
+alpha-menu() { printf 'alpha:<%s>\n' "$@"; }
+ZSH
+  cat > "$plugin_root/beta/beta-menu.zsh" <<'ZSH'
+typeset -g BETA_SAW_KSH="${options[ksharrays]}"
+beta-menu() { printf 'beta:<%s>\n' "$@"; }
+ZSH
+  chmod -- 600 "$plugin_root/alpha/alpha-menu.zsh" "$plugin_root/beta/beta-menu.zsh"
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    unset -m "ZDX_*"
+    ZDX_EAGER_LOAD=1 NO_COLOR=1
+    compdef() { printf "%s\n" "$@" >> "$HOME/completion.records"; }
+    _omz_source() {
+      local context filepath="$1"
+      source "$filepath"
+    }
+    _omz_source "$1/zdx-suite.plugin.zsh" || exit 90
+    local kept="${options[ksharrays]}"
+    alpha-menu "one two" --literal > "$HOME/alpha.data" || exit 31
+    beta-menu "three four" > "$HOME/beta.data" || exit 32
+    zdx-plugins --help > "$HOME/stdout" 2> "$HOME/manager.help" || exit 33
+    [[ -o ksh_arrays ]] || exit 34
+    unsetopt ksh_arrays
+    [[ "$kept" == on && "$BETA_SAW_KSH" == on ]] || exit 35
+    [[ "${ZDX_LOADED_PLUGINS[(Ie)alpha]}" != 0 && "${ZDX_LOADED_PLUGINS[(Ie)beta]}" != 0 ]] || exit 36
+    [[ "${ZDX_DISCOVERED_PLUGINS[(Ie)alpha]}" != 0 && "${ZDX_DISCOVERED_PLUGINS[(Ie)beta]}" != 0 ]] || exit 37
+    [[ "$(<"$HOME/alpha.data")" == "alpha:<one two>${(#):-10}alpha:<--literal>" \
+      && "$(<"$HOME/beta.data")" == "beta:<three four>" && ! -s "$HOME/stdout" ]] || exit 38
+    command grep -Fxq zdx-status "$HOME/completion.records"
+  ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
 }

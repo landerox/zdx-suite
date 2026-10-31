@@ -19,6 +19,7 @@ fi
 # listing, and picker rendering usable when this file is sourced on its own.
 
 _zdx_plugins_color_enabled() {
+  emulate -L zsh
   if (( ${+functions[_zdx_ui_color_enabled]} )); then
     _zdx_ui_color_enabled
     return
@@ -28,6 +29,7 @@ _zdx_plugins_color_enabled() {
 
 # Usage: _zdx_plugins_say <success|info|warn|error|dim> <text>
 _zdx_plugins_say() {
+  emulate -L zsh
   local level="${1-}" text="${2-}" glyph=""
   if (( ${+functions[_zdx_ui_say]} )); then
     _zdx_ui_say "$level" "$text"
@@ -43,13 +45,29 @@ _zdx_plugins_say() {
   printf '%s%s\n' "$glyph" "${(V)text}" >&2
 }
 
-_zdx_plugins_info()    { _zdx_plugins_say info "${1-}"; }
-_zdx_plugins_success() { _zdx_plugins_say success "${1-}"; }
-_zdx_plugins_warn()    { _zdx_plugins_say warn "${1-}"; }
-_zdx_plugins_error()   { _zdx_plugins_say error "${1-}"; }
-_zdx_plugins_dim()     { _zdx_plugins_say dim "${1-}"; }
+_zdx_plugins_info() {
+  emulate -L zsh
+  _zdx_plugins_say info "${1-}"
+}
+_zdx_plugins_success() {
+  emulate -L zsh
+  _zdx_plugins_say success "${1-}"
+}
+_zdx_plugins_warn() {
+  emulate -L zsh
+  _zdx_plugins_say warn "${1-}"
+}
+_zdx_plugins_error() {
+  emulate -L zsh
+  _zdx_plugins_say error "${1-}"
+}
+_zdx_plugins_dim() {
+  emulate -L zsh
+  _zdx_plugins_say dim "${1-}"
+}
 
 _zdx_plugins_header() {
+  emulate -L zsh
   if (( ${+functions[_zdx_ui_heading]} )); then
     _zdx_ui_heading "${1-}"
     return
@@ -59,6 +77,7 @@ _zdx_plugins_header() {
 
 # Usage: _zdx_plugins_section [--first] <title>
 _zdx_plugins_section() {
+  emulate -L zsh
   if (( ${+functions[_zdx_ui_section]} )); then
     _zdx_ui_section "$@"
     return
@@ -68,6 +87,7 @@ _zdx_plugins_section() {
 }
 
 _zdx_plugins_label() {
+  emulate -L zsh
   if (( ${+functions[_zdx_ui_label]} )); then
     _zdx_ui_label "${1-}" "${2-}"
     return
@@ -77,6 +97,7 @@ _zdx_plugins_label() {
 
 # REPLY: "<count> <noun>". Usage: _zdx_plugins_count_noun <count> <singular> [plural]
 _zdx_plugins_count_noun() {
+  emulate -L zsh
   if (( ${+functions[_zdx_count_noun]} )); then
     _zdx_count_noun "$@"
     return
@@ -89,6 +110,7 @@ _zdx_plugins_count_noun() {
 
 # REPLY: a display path with HOME shown as ~. Display only; never used again.
 _zdx_plugins_tilde() {
+  emulate -L zsh
   local target="${1-}" home="${HOME-}"
   REPLY="$target"
   if [[ -n "$home" && "$home" != / && "$target" == "$home"/* ]]; then
@@ -100,6 +122,7 @@ _zdx_plugins_tilde() {
 # message when no step slot is reachable from this shell.
 # Usage: _zdx_plugins_report_result <outcome> <detail> <level> <message>
 _zdx_plugins_report_result() {
+  emulate -L zsh
   local outcome="${1-}" detail="${2-}" level="${3:-info}" message="${4-}"
   if (( ${+functions[_zdx_step_report]} )) \
     && _zdx_step_report "$outcome" "$detail" 2>/dev/null; then
@@ -111,6 +134,7 @@ _zdx_plugins_report_result() {
 # Prints a failure and records it for an enclosing aggregate step.
 # Usage: _zdx_plugins_fail <failed|blocked> <detail> <message>
 _zdx_plugins_fail() {
+  emulate -L zsh
   _zdx_plugins_error "${3-}"
   if (( ${+functions[_zdx_step_report]} )); then
     _zdx_step_report "${1:-failed}" "${2-}" 2>/dev/null
@@ -121,17 +145,20 @@ _zdx_plugins_fail() {
 # --- Menu rows and fzf ------------------------------------------------------
 
 _zdx_plugins_menu_section() {
+  emulate -L zsh
   local title="$1" description="${2:-}"
   printf "── %s ──|:|%s\n" "$title" "$description"
 }
 
 _zdx_plugins_menu_entry() {
+  emulate -L zsh
   local label="$1" command="$2" description="$3"
   printf "  %s|%s|%s\n" "$label" "$command" "$description"
 }
 
 # Keep picker rendering independent of the user's standalone fzf defaults.
 _zdx_plugins_fzf() {
+  emulate -L zsh
   local -a options=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow')
   if typeset -f _zdx_fzf_color_opts &>/dev/null; then
     local theme_option=""
@@ -166,6 +193,7 @@ _zdx_plugins_fzf() {
 # core's validated temporary root, removed only while it keeps its identity.
 # The plugin manager always runs with the core loaded.
 _zdx_plugins_fzf_capture() {
+  emulate -L zsh
   REPLY=""
   (( ${+functions[_zdx_picker_capture]} )) || {
     _zdx_plugins_error "The plugin menu requires the ZDX core."
@@ -178,6 +206,7 @@ _zdx_plugins_fzf_capture() {
 
 # True when the complete selected row is one exact row of the menu snapshot.
 _zdx_plugins_row_in_snapshot() {
+  emulate -L zsh
   local selected="${1-}" snapshot_row=""
   shift
   for snapshot_row in "$@"; do
@@ -190,11 +219,13 @@ _zdx_plugins_row_in_snapshot() {
 
 # True when a confirmation prompt can reach a person.
 _zdx_plugins_terminal() {
+  emulate -L zsh
   [[ -t 0 && -t 2 ]]
 }
 
 # Status 0 accepted, 1 declined, 2 no terminal for the prompt.
 _zdx_plugins_confirm() {
+  emulate -L zsh
   local prompt="${1:-Proceed?}" auto_yes="${2:-no}" answer=""
   [[ "$auto_yes" == yes ]] && return 0
   _zdx_plugins_terminal || return 2
@@ -210,6 +241,7 @@ _zdx_plugins_confirm() {
 # Refuses a change that could neither prompt nor rely on --yes, before any
 # network access, staging, or deletion.
 _zdx_plugins_require_authorization() {
+  emulate -L zsh
   [[ "${1:-no}" == yes || "${2:-no}" == yes ]] && return 0
   _zdx_plugins_terminal && return 0
   _zdx_plugins_error "Plugin changes need a terminal for the trust decision; review with --dry-run, then pass --yes to proceed without a prompt."
@@ -219,6 +251,9 @@ _zdx_plugins_require_authorization() {
 # --- Validation primitives ----------------------------------------------------
 
 _zdx_plugins_name_valid() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
   local plugin_name="${1-}"
   (( ${#plugin_name} >= 1 && ${#plugin_name} <= 128 )) \
     && [[ "$plugin_name" =~ '^[a-z0-9_-]+$' ]]
@@ -227,12 +262,14 @@ _zdx_plugins_name_valid() {
 # True when the core reserves NAME for a built-in suite or route; see
 # _zdx_plugin_name_reserved in functions.zsh.
 _zdx_plugins_name_reserved() {
+  emulate -L zsh
   (( ${+functions[_zdx_plugin_name_reserved]} )) || return 1
   _zdx_plugin_name_reserved "$@"
 }
 
 # True when a name is one exact entry of ZDX_LOADED_PLUGINS.
 _zdx_plugins_loaded() {
+  emulate -L zsh
   local plugin_name="${1-}" loaded_name=""
   (( ${+ZDX_LOADED_PLUGINS} )) || return 1
   for loaded_name in "${ZDX_LOADED_PLUGINS[@]}"; do
@@ -243,6 +280,7 @@ _zdx_plugins_loaded() {
 
 # A Git URL or local path is data for Git, never an option or shell text.
 _zdx_plugins_url_valid() {
+  emulate -L zsh
   local url="${1-}"
   (( ${#url} >= 1 && ${#url} <= 2048 )) \
     && [[ "$url" != -* && "$url" != *[[:cntrl:]]* ]]
@@ -251,6 +289,7 @@ _zdx_plugins_url_valid() {
 # REPLY: a display form of a Git URL with any userinfo of a scheme URL, and
 # any query or fragment, hidden. Display only; never used to fetch.
 _zdx_plugins_redact_url() {
+  emulate -L zsh
   local remote_url="${1-}" suffix=""
   REPLY=""
   if [[ "$remote_url" == *[\?\#]* ]]; then
@@ -285,6 +324,7 @@ _zdx_plugins_dir_identity() {
 # Lifecycle actions reuse the core loader's root, entrypoint, capture, and
 # output services, so the manager and loader apply one rule set.
 _zdx_plugins_require_runtime() {
+  emulate -L zsh
   local service=""
   for service in _zdx_plugin_root_resolve _zdx_plugin_root_safe \
     _zdx_plugin_entrypoint_safe _zdx_capture_parent_safe _zdx_run_captured \
@@ -302,6 +342,7 @@ _zdx_plugins_require_runtime() {
 # macOS ships /usr/bin/git as a Command Line Tools placeholder that opens an
 # installation dialog; it is reported as missing and never run.
 _zdx_plugins_require_git() {
+  emulate -L zsh
   local git_path=""
   git_path=$(whence -p git 2>/dev/null) || git_path=""
   if [[ -n "$git_path" && "${OSTYPE:-}" == darwin* \
@@ -320,6 +361,7 @@ _zdx_plugins_require_git() {
 
 # Usage: _zdx_plugins_git [--timeout SECONDS] <git arguments...>
 _zdx_plugins_git() {
+  emulate -L zsh
   local -i seconds=0
   if [[ "${1-}" == --timeout ]]; then
     seconds="${2:-0}"
@@ -346,6 +388,7 @@ _zdx_plugins_git() {
 # transfer, so a hidden prompt or a dead peer cannot hang the shell.
 # Credentials must come from a credential helper or an SSH agent.
 _zdx_plugins_git_network() {
+  emulate -L zsh
   (
     # The loader refuses plugin files that group or other users can write,
     # so clones never inherit a permissive caller umask.
@@ -369,6 +412,9 @@ _zdx_plugins_git_network() {
 
 # REPLY: the full commit object ID at HEAD of one exact repository.
 _zdx_plugins_head() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
   local repository="${1-}" oid=""
   REPLY=""
   oid=$(_zdx_plugins_git -C "$repository" rev-parse --verify --quiet \
@@ -379,6 +425,7 @@ _zdx_plugins_head() {
 
 # REPLY: one origin-supplied text field as bounded, single-line display data.
 _zdx_plugins_display_field() {
+  emulate -L zsh
   local value="${1-}"
   value="${value//[[:cntrl:]]/ }"
   (( ${#value} > 100 )) && value="${value[1,99]}…"
@@ -387,6 +434,7 @@ _zdx_plugins_display_field() {
 
 # REPLY: "<short-oid> <subject>" for one commit; display data, never code.
 _zdx_plugins_commit_line() {
+  emulate -L zsh
   local repository="${1-}" oid="${2-}" subject=""
   subject=$(_zdx_plugins_git -C "$repository" -c log.showSignature=false \
     show -s --format=%s "$oid" -- 2>/dev/null) || subject=""
@@ -398,6 +446,7 @@ _zdx_plugins_commit_line() {
 # bad, unsigned, or unknown. An unsigned commit is a verdict, not a failure.
 # The verifier is bounded because a GnuPG configuration can reach the network.
 _zdx_plugins_signature() {
+  emulate -L zsh
   local repository="${1-}" oid="${2-}" raw="" code="" signer=""
   raw=$(_zdx_plugins_git --timeout 15 -C "$repository" \
     -c log.showSignature=false show -s --format='%G?%x1f%GS' "$oid" -- \
@@ -431,6 +480,7 @@ _zdx_plugins_signature() {
 # installed commit is absent from the fetched history; count is the number of
 # commits only the new history has, or empty when unknown.
 _zdx_plugins_transition() {
+  emulate -L zsh
   local repository="${1-}" old_oid="${2-}" new_oid="${3-}" count=""
   reply=(unknown "")
   _zdx_plugins_git -C "$repository" cat-file -e "${old_oid}^{commit}" \
@@ -448,6 +498,7 @@ _zdx_plugins_transition() {
 
 # Lists at most ten incoming commits, newest first, as escaped display lines.
 _zdx_plugins_show_incoming() {
+  emulate -L zsh
   local repository="${1-}" old_oid="${2-}" new_oid="${3-}" count="${4-}"
   local log_output="" line="" REPLY=""
   log_output=$(_zdx_plugins_git -C "$repository" -c log.showSignature=false \
@@ -468,6 +519,7 @@ _zdx_plugins_show_incoming() {
 # replacing it cannot discard local work and its files equal its commit.
 # Otherwise reply holds up to three porcelain status lines as display text.
 _zdx_plugins_checkout_clean() {
+  emulate -L zsh
   local repository="${1-}" changes="" line="" REPLY=""
   reply=()
   changes=$(_zdx_plugins_git -C "$repository" status --porcelain --ignored \
@@ -486,6 +538,7 @@ _zdx_plugins_checkout_clean() {
 # REPLY: the canonical plugin root, created private when asked. The core
 # loader's resolver decides, so the manager and the loader agree on the root.
 _zdx_plugins_root() {
+  emulate -L zsh
   local create="${1:-no}"
   local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
   REPLY=""
@@ -547,6 +600,7 @@ _zdx_plugins_lock() {
 }
 
 _zdx_plugins_unlock() {
+  emulate -L zsh
   [[ -n "${_ZDX_PLUGINS_LOCK_FD:-}" ]] || return 0
   zsystem flock -u "$_ZDX_PLUGINS_LOCK_FD" 2>/dev/null
   unset _ZDX_PLUGINS_LOCK_FD
@@ -579,6 +633,7 @@ _zdx_plugins_mv_command() {
 # destination now holds exactly the expected directory.
 # Usage: _zdx_plugins_move <source> <destination> <expected-identity>
 _zdx_plugins_move() {
+  emulate -L zsh
   local source_dir="${1-}" destination="${2-}" identity="${3-}" REPLY=""
   local -a reply=()
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
@@ -616,6 +671,7 @@ _zdx_plugins_stage_create() {
 # checks keep the deletion to the manager's own staging, and rm -rf never
 # follows links inside the tree.
 _zdx_plugins_remove_stage() {
+  emulate -L zsh
   local stage="${1-}" root="${2-}" identity="${3-}" REPLY=""
   [[ -n "$stage" && -n "$root" && "${stage:h}" == "$root" \
     && "${stage:t}" == .zdx-staging.* ]] || return 1
@@ -633,6 +689,8 @@ _zdx_plugins_remove_stage() {
 # removal quarantine) is discarded.
 _zdx_plugins_recover_stale() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
   local root="${1-}" stage="" plugin_name="" REPLY=""
   local -a stages=("$root"/.zdx-staging.*(DN))
   for stage in "${stages[@]}"; do
@@ -671,6 +729,7 @@ _zdx_plugins_recover_stale() {
 # recovery of interrupted staging. It fills the caller's _zdx_plugins_session
 # map (root, root_id), which _zdx_plugins_session_close ends.
 _zdx_plugins_session_open() {
+  emulate -L zsh
   local create="${1:-no}" REPLY=""
   _zdx_plugins_require_runtime || return 1
   _zdx_plugins_root "$create" || return 1
@@ -687,6 +746,7 @@ _zdx_plugins_session_open() {
 
 # True when the session root still resolves to the same canonical directory.
 _zdx_plugins_root_unchanged() {
+  emulate -L zsh
   local root="${_zdx_plugins_session[root]-}" REPLY=""
   [[ -n "$root" ]] \
     && _zdx_plugin_root_safe "$root" \
@@ -698,6 +758,7 @@ _zdx_plugins_root_unchanged() {
 # map tracks the phase: staged, swapping, published, activated, removed,
 # rolled-back, or stranded.
 _zdx_plugins_tx_open() {
+  emulate -L zsh
   local plugin_name="${1-}"
   local -a reply=()
   _zdx_plugins_stage_create "${_zdx_plugins_session[root]}" "$plugin_name" \
@@ -713,6 +774,7 @@ _zdx_plugins_tx_open() {
 # rolled back first. Staging is then removed, unless it still holds the only
 # copy of a previous version, which is kept and named for recovery.
 _zdx_plugins_tx_close() {
+  emulate -L zsh
   [[ -n "${_zdx_plugins_tx[stage]-}" ]] || return 0
   local stage="${_zdx_plugins_tx[stage]}" REPLY=""
   local plugin_name="${_zdx_plugins_tx[name]}"
@@ -768,6 +830,7 @@ _zdx_plugins_tree_links() {
 # directory as its root, then refuses links and checks the entrypoint syntax.
 # Usage: _zdx_plugins_tree_validate <container> <plugin-name>
 _zdx_plugins_tree_validate() {
+  emulate -L zsh
   local container="${1-}" plugin_name="${2-}"
   local tree="${1-}/${2-}"
   local entrypoint="$tree/${plugin_name}-menu.zsh"
@@ -795,6 +858,7 @@ _zdx_plugins_tree_validate() {
 # directory, the staged tree and its reviewed commit, and its clean files.
 # Usage: _zdx_plugins_revalidate_staged <reviewed-oid>
 _zdx_plugins_revalidate_staged() {
+  emulate -L zsh
   local reviewed_oid="${1-}" REPLY=""
   local plugin_name="${_zdx_plugins_tx[name]}" stage="${_zdx_plugins_tx[stage]}"
   if ! _zdx_plugins_root_unchanged \
@@ -822,6 +886,7 @@ _zdx_plugins_revalidate_staged() {
 # staging, so it stays intact until the new version is active. Each rename is
 # atomic within the root; a failed second rename restores the first.
 _zdx_plugins_publish() {
+  emulate -L zsh
   local plugin_name="${_zdx_plugins_tx[name]}" stage="${_zdx_plugins_tx[stage]}"
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/${_zdx_plugins_tx[name]}"
@@ -858,6 +923,7 @@ _zdx_plugins_publish() {
 # staging, and an update moves the failed tree aside and the previous version
 # back. Identity checks prove each step; any doubt leaves it stranded.
 _zdx_plugins_rollback() {
+  emulate -L zsh
   local plugin_name="${_zdx_plugins_tx[name]}" stage="${_zdx_plugins_tx[stage]}"
   local target="${_zdx_plugins_session[root]}/${_zdx_plugins_tx[name]}"
   if ! _zdx_plugins_move "$target" "$stage/failed" \
@@ -875,15 +941,11 @@ _zdx_plugins_rollback() {
   _zdx_plugins_tx[phase]=rolled-back
 }
 
-# Sources a published entrypoint into this shell after the loader's checks,
-# the way the loader would. Nothing on this call path uses emulate or
-# LOCAL_OPTIONS, so the plugin's top-level options and definitions persist as
-# they would at shell start. Plugin source-time output goes to stderr.
-# Usage: _zdx_plugins_activate <root> <plugin-name>
-_zdx_plugins_activate() {
-  local _zdx_plugins_activate_dir="$1/$2" _zdx_plugins_activate_name="$2"
-  local _zdx_plugins_activate_entry="$1/$2/$2-menu.zsh"
-  local -i _zdx_plugins_activate_rc=0
+# Owns path/syntax checks and the function snapshot; returns before source.
+_zdx_plugins_activate_prepare() {
+  emulate -L zsh
+  local REPLY=""
+  local -a reply=()
   if _zdx_plugins_name_reserved "$2"; then
     _zdx_plugins_error "The plugin name '$2' is reserved for ZDX."
     return 1
@@ -906,7 +968,14 @@ _zdx_plugins_activate() {
   }
   (( ${+functions[_zdx_plugin_namespace_snapshot]} )) \
     && _zdx_plugin_namespace_snapshot
-  source "$_zdx_plugins_activate_entry" >&2 || _zdx_plugins_activate_rc=$?
+  return 0
+}
+
+# Owns verification after source without hiding the plugin's session changes.
+_zdx_plugins_activate_finish() {
+  emulate -L zsh
+  local REPLY=""
+  local -a reply=()
   if (( ${+functions[_zdx_plugin_namespace_verify]} )) \
     && ! _zdx_plugin_namespace_verify "$_zdx_plugins_activate_name"; then
     _zdx_plugins_error "Ecosystem Contract Violation: '${_zdx_plugins_activate_name}-menu.zsh' defined or replaced functions outside its namespace."
@@ -920,6 +989,19 @@ _zdx_plugins_activate() {
     _zdx_plugins_error "Ecosystem Contract Violation: Function '${_zdx_plugins_activate_name}-menu' was not defined after sourcing."
     return 1
   fi
+  return 0
+}
+
+# Sources the validated entrypoint outside the owned preparation/verification
+# scopes, so options and intentional parameters persist. Source UI is stderr.
+# Usage: _zdx_plugins_activate <root> <plugin-name>
+_zdx_plugins_activate() {
+  local _zdx_plugins_activate_dir="$1/$2" _zdx_plugins_activate_name="$2"
+  local _zdx_plugins_activate_entry="$1/$2/$2-menu.zsh"
+  local -i _zdx_plugins_activate_rc=0
+  _zdx_plugins_activate_prepare "$@" || return $?
+  source "$_zdx_plugins_activate_entry" >&2 || _zdx_plugins_activate_rc=$?
+  _zdx_plugins_activate_finish
 }
 
 # Activates the published tree and, when activation fails, rolls the files
@@ -927,7 +1009,10 @@ _zdx_plugins_activate() {
 # that activation replaced. Other definitions the failed source made cannot
 # be undone, so the user is told to open a new shell. State that must survive
 # the plugin's own top-level code lives in the namespaced transaction map.
-_zdx_plugins_activate_published() {
+_zdx_plugins_activate_published_prepare() {
+  emulate -L zsh
+  local REPLY=""
+  local -a reply=()
   _zdx_plugins_tx[sentinel]="${_zdx_plugins_tx[name]//-/_}"
   _zdx_plugins_tx[sentinel]="_${(U)_zdx_plugins_tx[sentinel]}_MENU_SOURCED"
   _zdx_plugins_tx[had_function]=0
@@ -943,9 +1028,14 @@ _zdx_plugins_activate_published() {
   # A reload clears the plugin's documented idempotency sentinel, so its
   # guard does not turn the new source into a no-op.
   unset -- "${_zdx_plugins_tx[sentinel]}" 2>/dev/null
+  return 0
+}
 
-  if _zdx_plugins_activate "${_zdx_plugins_session[root]}" \
-    "${_zdx_plugins_tx[name]}"; then
+_zdx_plugins_activate_published_finish() {
+  emulate -L zsh
+  local REPLY=""
+  local -a reply=()
+  if (( ${1:-1} == 0 )); then
     _zdx_plugins_tx[phase]=activated
     _zdx_plugins_loaded "${_zdx_plugins_tx[name]}" \
       || ZDX_LOADED_PLUGINS+=("${_zdx_plugins_tx[name]}")
@@ -978,11 +1068,20 @@ _zdx_plugins_activate_published() {
   return 1
 }
 
+_zdx_plugins_activate_published() {
+  _zdx_plugins_activate_published_prepare
+  local -i _zdx_plugins_published_rc=0
+  _zdx_plugins_activate "${_zdx_plugins_session[root]}" \
+    "${_zdx_plugins_tx[name]}" || _zdx_plugins_published_rc=$?
+  _zdx_plugins_activate_published_finish "$_zdx_plugins_published_rc"
+}
+
 # --- Fetch and review -----------------------------------------------------------
 
 # Clones one origin into staging with captured, credential-redacted output.
 # Usage: _zdx_plugins_fetch <origin> <origin-display> <destination> <clone-options...>
 _zdx_plugins_fetch() {
+  emulate -L zsh
   local origin="${1-}" origin_display="${2-}" destination="${3-}" REPLY=""
   shift 3
   _zdx_plugins_tilde "$destination"
@@ -1001,6 +1100,7 @@ _zdx_plugins_fetch() {
 # Usage: _zdx_plugins_review <repository> <new-oid>
 #          [<old-oid> <old-commit-line> <relation> <count>]
 _zdx_plugins_review() {
+  emulate -L zsh
   local repository="${1-}" new_oid="${2-}" old_oid="${3-}"
   local old_line="${4-}" relation="${5-}" count="${6-}" REPLY=""
   local -a reply=()
@@ -1042,8 +1142,8 @@ _zdx_plugins_review() {
 
 # --- Install --------------------------------------------------------------------
 
-_zdx_plugins_install() {
-  local url="${1-}" plugin_name="${2-}" dry_run="${3:-no}" auto_yes="${4:-no}"
+_zdx_plugins_install_check() {
+  emulate -L zsh
   if [[ -z "$url" ]]; then
     _zdx_plugins_error "Git repository URL is required."
     return 2
@@ -1070,6 +1170,11 @@ _zdx_plugins_install() {
   _zdx_plugins_require_git || return 1
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
+}
+
+_zdx_plugins_install() {
+  local url="${1-}" plugin_name="${2-}" dry_run="${3:-no}" auto_yes="${4:-no}"
+  _zdx_plugins_install_check || return $?
   local -A _zdx_plugins_session=() _zdx_plugins_tx=()
   local -i install_rc=0
   {
@@ -1086,7 +1191,8 @@ _zdx_plugins_install() {
   return $install_rc
 }
 
-_zdx_plugins_install_locked() {
+_zdx_plugins_install_prepare() {
+  emulate -L zsh
   local url="$1" plugin_name="$2" dry_run="$3" auto_yes="$4" REPLY=""
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/$2"
@@ -1145,7 +1251,24 @@ _zdx_plugins_install_locked() {
     return 1
   fi
   _zdx_plugins_publish || return 1
+  _zdx_plugins_install_oid="$new_oid"
+  _zdx_plugins_install_ready=1
+  return 0
+}
+
+_zdx_plugins_install_locked() {
+  local _zdx_plugins_install_oid=""
+  local -i _zdx_plugins_install_ready=0
+  _zdx_plugins_install_prepare "$@" || return $?
+  (( _zdx_plugins_install_ready )) || return 0
   _zdx_plugins_activate_published || return 1
+  _zdx_plugins_install_success "${_zdx_plugins_tx[name]}" "$_zdx_plugins_install_oid"
+}
+
+_zdx_plugins_install_success() {
+  emulate -L zsh
+  local REPLY="" plugin_name="$1" new_oid="$2"
+  local -a reply=()
   _zdx_plugins_success "Plugin '$plugin_name' installed and activated at ${new_oid[1,7]}."
 }
 
@@ -1164,7 +1287,8 @@ _zdx_plugins_update_one() {
   return $_zdx_plugins_update_rc
 }
 
-_zdx_plugins_update_staged() {
+_zdx_plugins_update_prepare() {
+  emulate -L zsh
   local plugin_name="${1-}" dry_run="${2:-no}" auto_yes="${3:-no}" REPLY=""
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/${1-}"
@@ -1331,17 +1455,34 @@ _zdx_plugins_update_staged() {
       "Plugin '$plugin_name' was not updated."
     return 1
   fi
+  _zdx_plugins_update_transition="$transition"
+  _zdx_plugins_update_ready=1
+  return 0
+}
+
+_zdx_plugins_update_staged() {
+  local _zdx_plugins_update_transition=""
+  local -i _zdx_plugins_update_ready=0
+  _zdx_plugins_update_prepare "$@" || return $?
+  (( _zdx_plugins_update_ready )) || return 0
   if ! _zdx_plugins_activate_published; then
     _zdx_plugins_report_result failed "activation failed; rolled back" error \
-      "Plugin '$plugin_name' was not updated."
+      "Plugin '${_zdx_plugins_tx[name]}' was not updated."
     return 1
   fi
+  _zdx_plugins_update_success "${_zdx_plugins_tx[name]}" "$_zdx_plugins_update_transition"
+}
+
+_zdx_plugins_update_success() {
+  emulate -L zsh
+  local REPLY="" plugin_name="$1" transition="$2"
+  local -a reply=()
   _zdx_plugins_report_result updated "$transition" success \
     "Plugin '$plugin_name' updated ($transition) and sourced in this shell."
 }
 
-_zdx_plugins_update() {
-  local plugin_name="${1-}" dry_run="${2:-no}" auto_yes="${3:-no}"
+_zdx_plugins_update_check() {
+  emulate -L zsh
   if ! _zdx_plugins_name_valid "$plugin_name"; then
     _zdx_plugins_error "Invalid plugin name: '$plugin_name'."
     return 2
@@ -1354,6 +1495,11 @@ _zdx_plugins_update() {
   _zdx_plugins_require_git || return 1
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
+}
+
+_zdx_plugins_update() {
+  local plugin_name="${1-}" dry_run="${2:-no}" auto_yes="${3:-no}"
+  _zdx_plugins_update_check || return $?
   local -A _zdx_plugins_session=() _zdx_plugins_tx=()
   local -i update_rc=0
   {
@@ -1382,8 +1528,8 @@ _zdx_plugins_names() {
   return 0
 }
 
-_zdx_plugins_update_all() {
-  local dry_run="${1:-no}" auto_yes="${2:-no}"
+_zdx_plugins_update_all_check() {
+  emulate -L zsh
   local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
   if [[ ! -e "$plugins_dir" && ! -L "$plugins_dir" ]]; then
     _zdx_plugins_info "No plugins are installed."
@@ -1392,6 +1538,15 @@ _zdx_plugins_update_all() {
   _zdx_plugins_require_git || return 1
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
+  _zdx_plugins_update_all_ready=1
+  return 0
+}
+
+_zdx_plugins_update_all() {
+  local dry_run="${1:-no}" auto_yes="${2:-no}"
+  local -i _zdx_plugins_update_all_ready=0
+  _zdx_plugins_update_all_check || return $?
+  (( _zdx_plugins_update_all_ready )) || return 0
   local -A _zdx_plugins_session=() _zdx_plugins_tx=()
   local -i update_rc=0
   {
@@ -1409,10 +1564,12 @@ _zdx_plugins_update_all() {
 
 # One step per plugin: each fetches into its own staging and asks for its
 # own trust decision, then the summary, verdict, and retry hints follow.
-_zdx_plugins_update_all_locked() {
-  local dry_run="$1" auto_yes="$2" REPLY=""
+# Builds the exact existing aggregate plan before any activation occurs.
+_zdx_plugins_update_all_prepare() {
+  emulate -L zsh
+  local REPLY=""
   local root="${_zdx_plugins_session[root]}"
-  local -a reply=() plugin_names=()
+  local -a reply=()
   _zdx_plugins_names "$root"
   plugin_names=("${reply[@]}")
   if (( ${#plugin_names} == 0 )); then
@@ -1420,7 +1577,8 @@ _zdx_plugins_update_all_locked() {
     return 0
   fi
 
-  local -i total=${#plugin_names} index=0
+  total=${#plugin_names[@]}
+  local -i index=0
   local plugin_name="" origin=""
   local -a rows=()
   for (( index = 1; index <= total; index++ )); do
@@ -1444,42 +1602,39 @@ _zdx_plugins_update_all_locked() {
     _zdx_plugins_warn "--yes trusts every changed plugin without a prompt."
   fi
 
-  local -a records=() hints=()
-  local outcome="" detail="" seconds="" hint=""
-  local -i step_rc=0 failed=0 stopped=0 updated=0 current=0 planned=0
-  local -i skipped=0
-  for (( index = 1; index <= total; index++ )); do
-    plugin_name="${plugin_names[index]}"
-    if (( stopped )); then
-      records+=("$plugin_name"$'\t'"not-run"$'\t\t'"update interrupted")
-      continue
-    fi
-    _zdx_ui_step_banner "$index" "$total" "$plugin_name"
-    step_rc=0
-    reply=()
-    _zdx_step_exec _zdx_plugins_update_one "$plugin_name" "$dry_run" \
-      "$auto_yes" || step_rc=$?
-    outcome="${reply[1]:-failed}" detail="${reply[2]-}" seconds="${reply[3]-}"
-    _zdx_ui_step_result "$index" "$total" "$plugin_name" "$outcome" \
-      "$detail" "$seconds"
-    records+=("$plugin_name"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
-    case "$outcome" in
-      updated) (( updated++ )) ;;
-      current) (( current++ )) ;;
-      planned) (( planned++ )) ;;
-      skipped) (( skipped++ )) ;;
-      failed|blocked|timed-out|interrupted)
-        (( failed++ ))
-        hint="zdx-plugins --update $plugin_name"
-        [[ "$dry_run" == yes ]] && hint+=" --dry-run"
-        hints+=("$hint")
-        ;;
-    esac
-    if (( step_rc == 130 || step_rc == 143 )); then
-      stopped=$step_rc
-    fi
-  done
+  return 0
+}
 
+# Consumes the core step's documented reply tuple under native Zsh indices.
+_zdx_plugins_update_all_collect() {
+  emulate -L zsh
+  local outcome="" detail="" seconds="" hint="" REPLY=""
+  outcome="${reply[1]:-failed}" detail="${reply[2]-}" seconds="${reply[3]-}"
+  _zdx_ui_step_result "$index" "$total" "$plugin_name" "$outcome" \
+    "$detail" "$seconds"
+  records+=("$plugin_name"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
+  case "$outcome" in
+    updated) (( updated++ )) ;;
+    current) (( current++ )) ;;
+    planned) (( planned++ )) ;;
+    skipped) (( skipped++ )) ;;
+    failed|blocked|timed-out|interrupted)
+      (( failed++ ))
+      hint="zdx-plugins --update $plugin_name"
+      [[ "$dry_run" == yes ]] && hint+=" --dry-run"
+      hints+=("$hint")
+      ;;
+  esac
+  if (( step_rc == 130 || step_rc == 143 )); then
+    stopped=$step_rc
+  fi
+  return 0
+}
+
+_zdx_plugins_update_all_finish() {
+  emulate -L zsh
+  local REPLY=""
+  local -a reply=()
   _zdx_ui_step_summary --first-column Plugin "Plugin Update Summary" \
     "${records[@]}"
   local -a parts=()
@@ -1506,9 +1661,32 @@ _zdx_plugins_update_all_locked() {
   (( failed == 0 ))
 }
 
+_zdx_plugins_update_all_locked() {
+  local dry_run="$1" auto_yes="$2" plugin_name=""
+  local -a plugin_names=() records=() hints=()
+  local -i total=0 index=0 step_rc=0 failed=0 stopped=0
+  local -i updated=0 current=0 planned=0 skipped=0
+  _zdx_plugins_update_all_prepare || return $?
+  (( total )) || return 0
+  for plugin_name in "${plugin_names[@]}"; do
+    (( ++index ))
+    if (( stopped )); then
+      records+=("$plugin_name"$'\t'"not-run"$'\t\t'"update interrupted")
+      continue
+    fi
+    _zdx_ui_step_banner "$index" "$total" "$plugin_name"
+    step_rc=0
+    _zdx_step_exec _zdx_plugins_update_one "$plugin_name" "$dry_run" \
+      "$auto_yes" || step_rc=$?
+    _zdx_plugins_update_all_collect
+  done
+  _zdx_plugins_update_all_finish
+}
+
 # --- Remove ---------------------------------------------------------------------
 
 _zdx_plugins_remove() {
+  emulate -L zsh
   local plugin_name="${1-}" dry_run="${2:-no}" auto_yes="${3:-no}"
   if [[ -z "$plugin_name" ]]; then
     _zdx_plugins_error "Plugin name is required."
@@ -1545,6 +1723,7 @@ _zdx_plugins_remove() {
 # staging before the recursive deletion, so the plugin directory disappears
 # atomically and the deletion only ever touches the reviewed directory.
 _zdx_plugins_remove_locked() {
+  emulate -L zsh
   local plugin_name="$1" dry_run="$2" auto_yes="$3" REPLY=""
   local target="${_zdx_plugins_session[root]}/$1"
   if ! _zdx_plugins_dir_identity "$target"; then
@@ -1701,88 +1880,106 @@ _zdx_plugins_list() {
 
 # --- Interactive menu -------------------------------------------------------------
 
-# A stateful manager loop. Every picker runs in the foreground through the
-# private capture, and only an exact row of the current snapshot dispatches.
-# The loop sets no local options, because actions source plugin code.
+# Returns only the action from an exact row of the current foreground picker.
+_zdx_plugins_select_action() {
+  emulate -L zsh
+  local REPLY=""
+  _zdx_plugins_menu_action=""
+  local -a options=(
+    "$(_zdx_plugins_menu_section "Plugin Manager" "List, install, update, and remove custom plugins.")"
+    "$(_zdx_plugins_menu_entry "List Installed Plugins" "list" "Show installed plugins, their status, and their origin.")"
+    "$(_zdx_plugins_menu_entry "Install New Plugin" "install" "Fetch a plugin from a Git URL, review its commit, and activate it after your trust decision.")"
+    "$(_zdx_plugins_menu_entry "Update Installed Plugins" "update" "Stage each update, review the exact commits, and activate only what you trust.")"
+    "$(_zdx_plugins_menu_entry "Uninstall Plugin" "remove" "Review and remove one installed plugin.")"
+  )
+
+  local -a fzf_opts=(
+    --height=50%
+    --layout=reverse
+    --border=rounded
+    --delimiter='[|]'
+    --with-nth=1
+    --pointer='▶'
+    --prompt='Plugins > '
+    --header=$'Select a plugin action\n[Enter] Select  [Esc] Exit'
+  )
+
+  # Keep picker state in this owned scope; the coordinator receives one action.
+  local selected=""
+  local -i fzf_rc=0
+  _zdx_plugins_fzf_capture "${fzf_opts[@]}" \
+    < <(printf '%s\n' "${options[@]}") || fzf_rc=$?
+  selected="$REPLY"
+  if (( fzf_rc != 0 )); then
+    (( fzf_rc == 1 || fzf_rc == 130 )) && return 0
+    _zdx_plugins_error "Unable to open the plugin menu (status $fzf_rc)."
+    return 1
+  fi
+  [[ -z "$selected" ]] && return 0
+  if ! _zdx_plugins_row_in_snapshot "$selected" "${options[@]}"; then
+    _zdx_plugins_error "The selected action was not in the plugin menu snapshot."
+    return 1
+  fi
+
+  _zdx_plugins_menu_action="${${selected#*|}%%|*}"
+  return 0
+}
+
+_zdx_plugins_menu_install_prompt() {
+  emulate -L zsh
+  _zdx_plugins_header "Install New Plugin"
+  printf '? Enter Git Repository URL: ' >&2
+  _zdx_plugins_menu_url=""
+  _zdx_plugins_menu_name=""
+  read -r _zdx_plugins_menu_url
+  if [[ -n "$_zdx_plugins_menu_url" ]]; then
+    printf '? Enter Custom Name (optional): ' >&2
+    read -r _zdx_plugins_menu_name
+  fi
+  return 0
+}
+
+_zdx_plugins_menu_pause() {
+  emulate -L zsh
+  local REPLY=""
+  if _zdx_plugins_terminal; then
+    printf '\n%s\n' "Press any key to return to Plugins menu..." >&2
+    read -k1
+  fi
+  return 0
+}
+
+# The stateful loop has no option-restoring scope around install/update.
 _zdx_plugins_menu() {
   local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
+  local _zdx_plugins_menu_action="" _zdx_plugins_menu_url="" _zdx_plugins_menu_name=""
   while true; do
-    local -a options=(
-      "$(_zdx_plugins_menu_section "Plugin Manager" "List, install, update, and remove custom plugins.")"
-      "$(_zdx_plugins_menu_entry "List Installed Plugins" "list" "Show installed plugins, their status, and their origin.")"
-      "$(_zdx_plugins_menu_entry "Install New Plugin" "install" "Fetch a plugin from a Git URL, review its commit, and activate it after your trust decision.")"
-      "$(_zdx_plugins_menu_entry "Update Installed Plugins" "update" "Stage each update, review the exact commits, and activate only what you trust.")"
-      "$(_zdx_plugins_menu_entry "Uninstall Plugin" "remove" "Review and remove one installed plugin.")"
-    )
-
-    local -a fzf_opts=(
-      --height=50%
-      --layout=reverse
-      --border=rounded
-      --delimiter='[|]'
-      --with-nth=1
-      --pointer='▶'
-      --prompt='Plugins > '
-      --header=$'Select a plugin action\n[Enter] Select  [Esc] Exit'
-    )
-
-    # In-loop locals keep an initializer: re-declaring an existing local
-    # without one makes zsh print the variable on every later iteration.
-    local selected=""
-    local -i fzf_rc=0
-    _zdx_plugins_fzf_capture "${fzf_opts[@]}" \
-      < <(printf '%s\n' "${options[@]}") || fzf_rc=$?
-    selected="$REPLY"
-    if (( fzf_rc != 0 )); then
-      (( fzf_rc == 1 || fzf_rc == 130 )) && return 0
-      _zdx_plugins_error "Unable to open the plugin menu (status $fzf_rc)."
-      return 1
-    fi
-    [[ -z "$selected" ]] && return 0
-    if ! _zdx_plugins_row_in_snapshot "$selected" "${options[@]}"; then
-      _zdx_plugins_error "The selected action was not in the plugin menu snapshot."
-      return 1
-    fi
-
-    local action="${${selected#*|}%%|*}"
-    [[ "$action" == ":" ]] && continue
-
-    case "$action" in
+    _zdx_plugins_select_action || return $?
+    case "$_zdx_plugins_menu_action" in
+      "") return 0 ;;
+      :) continue ;;
       list)
         _zdx_plugins_header "Installed Plugins"
         _zdx_plugins_list
         ;;
       install)
-        _zdx_plugins_header "Install New Plugin"
-        printf '? Enter Git Repository URL: ' >&2
-        local url=""
-        read -r url
-        if [[ -n "$url" ]]; then
-          printf '? Enter Custom Name (optional): ' >&2
-          local custom_name=""
-          read -r custom_name
-          _zdx_plugins_install "$url" "$custom_name" no no
+        _zdx_plugins_menu_install_prompt
+        if [[ -n "$_zdx_plugins_menu_url" ]]; then
+          _zdx_plugins_install "$_zdx_plugins_menu_url" "$_zdx_plugins_menu_name" no no
         else
           _zdx_plugins_warn "No URL entered. Installation canceled."
         fi
         ;;
-      update)
-        _zdx_plugins_update_all no no
-        ;;
-      remove)
-        _zdx_plugins_menu_remove "$plugins_dir"
-        ;;
+      update) _zdx_plugins_update_all no no ;;
+      remove) _zdx_plugins_menu_remove "$plugins_dir" ;;
     esac
-
-    if _zdx_plugins_terminal; then
-      printf '\n%s\n' "Press any key to return to Plugins menu..." >&2
-      read -k1
-    fi
+    _zdx_plugins_menu_pause
   done
 }
 
 # Picks one installed plugin from a frozen snapshot of valid names.
 _zdx_plugins_menu_remove() {
+  emulate -L zsh
   local plugins_dir="${1-}" REPLY=""
   local -a reply=() plugin_names=()
   _zdx_plugins_header "Uninstall Plugin"
@@ -1822,6 +2019,7 @@ _zdx_plugins_menu_remove() {
 # --- Public API Command -------------------------------------------------------
 
 _zdx_plugins_usage() {
+  emulate -L zsh
   cat >&2 <<'EOF'
 Usage:
   zdx-plugins                                   Interactive menu (list, install, update, remove)
@@ -1847,19 +2045,21 @@ Notes:
 EOF
 }
 
-zdx-plugins() {
-  local action="${1-}"
-  case "$action" in
+# Parses only the existing public grammar; fixed actions are invoked later.
+_zdx_plugins_parse_request() {
+  emulate -L zsh
+  _zdx_plugins_request_action="${1-}"
+  case "$_zdx_plugins_request_action" in
     "")
       if ! command -v fzf &>/dev/null; then
         _zdx_plugins_error "fzf not found. Plugin manager interactive menu requires fzf."
         return 1
       fi
-      _zdx_plugins_menu
-      return
+      _zdx_plugins_request_action=menu
+      return 0
       ;;
     -h|--help)
-      _zdx_plugins_usage
+      _zdx_plugins_request_action=help
       return 0
       ;;
     --list)
@@ -1867,14 +2067,14 @@ zdx-plugins() {
         _zdx_plugins_error "--list takes no arguments."
         return 2
       fi
-      _zdx_plugins_list
-      return
+      _zdx_plugins_request_action=list
+      return 0
       ;;
     --install|--update|--remove)
       shift
       ;;
     *)
-      _zdx_plugins_error "Unknown flag: $action"
+      _zdx_plugins_error "Unknown flag: $_zdx_plugins_request_action"
       _zdx_plugins_dim "Run 'zdx-plugins --help' for usage."
       return 2
       ;;
@@ -1890,7 +2090,7 @@ zdx-plugins() {
         --yes)     auto_yes=yes; continue ;;
         --)        options_done=1; continue ;;
         -?*)
-          _zdx_plugins_error "Unknown option for $action: $argument"
+          _zdx_plugins_error "Unknown option for $_zdx_plugins_request_action: $argument"
           return 2
           ;;
       esac
@@ -1898,7 +2098,7 @@ zdx-plugins() {
     positional+=("$argument")
   done
 
-  case "$action" in
+  case "$_zdx_plugins_request_action" in
     --install)
       if (( ${#positional} == 0 )); then
         _zdx_plugins_error "Missing Git URL for --install flag."
@@ -1908,8 +2108,8 @@ zdx-plugins() {
         _zdx_plugins_error "Usage: zdx-plugins --install <url> [name] [--dry-run] [--yes]"
         return 2
       fi
-      _zdx_plugins_install "${positional[1]}" "${positional[2]-}" \
-        "$dry_run" "$auto_yes"
+      _zdx_plugins_request_action=install
+      _zdx_plugins_request_args=("${positional[1]}" "${positional[2]-}" "$dry_run" "$auto_yes")
       ;;
     --update)
       if (( ${#positional} > 1 )); then
@@ -1917,9 +2117,11 @@ zdx-plugins() {
         return 2
       fi
       if (( ${#positional} == 1 )); then
-        _zdx_plugins_update "${positional[1]}" "$dry_run" "$auto_yes"
+        _zdx_plugins_request_action=update
+        _zdx_plugins_request_args=("${positional[1]}" "$dry_run" "$auto_yes")
       else
-        _zdx_plugins_update_all "$dry_run" "$auto_yes"
+        _zdx_plugins_request_action=update-all
+        _zdx_plugins_request_args=("$dry_run" "$auto_yes")
       fi
       ;;
     --remove)
@@ -1931,8 +2133,25 @@ zdx-plugins() {
         _zdx_plugins_error "Usage: zdx-plugins --remove <name> [--dry-run] [--yes]"
         return 2
       fi
-      _zdx_plugins_remove "${positional[1]}" "$dry_run" "$auto_yes"
+      _zdx_plugins_request_action=remove
+      _zdx_plugins_request_args=("${positional[1]}" "$dry_run" "$auto_yes")
       ;;
+  esac
+  return 0
+}
+
+zdx-plugins() {
+  local _zdx_plugins_request_action=""
+  local -a _zdx_plugins_request_args=()
+  _zdx_plugins_parse_request "$@" || return $?
+  case "$_zdx_plugins_request_action" in
+    menu)       _zdx_plugins_menu ;;
+    help)       _zdx_plugins_usage ;;
+    list)       _zdx_plugins_list ;;
+    install)    _zdx_plugins_install "${_zdx_plugins_request_args[@]}" ;;
+    update)     _zdx_plugins_update "${_zdx_plugins_request_args[@]}" ;;
+    update-all) _zdx_plugins_update_all "${_zdx_plugins_request_args[@]}" ;;
+    remove)     _zdx_plugins_remove "${_zdx_plugins_request_args[@]}" ;;
   esac
 }
 

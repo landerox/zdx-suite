@@ -11,16 +11,19 @@ if [[ -n "${_ZDX_DOCTOR_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# funcstack preserves the source filename before diagnostic display escaping.
-typeset -g _ZDX_DOCTOR_SOURCE_FILE="${${funcstack[1]:-$0}:A}"
+# Keep source bytes raw; pattern lookup selects the first stack entry under
+# either array indexing convention. Display escaping happens only at rendering.
+typeset -g _ZDX_DOCTOR_SOURCE_FILE="${${funcstack[(r)*]:-$0}:A}"
 
 # --- Private UI & Logging Helpers ---------------------------------------------
 
 _zdx_doctor_color_enabled() {
+  emulate -L zsh
   [[ -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" && -t 2 ]]
 }
 
 _zdx_doctor_log() {
+  emulate -L zsh
   local level="${1:-info}"
   local message="${2:-}"
   local color="" marker=""
@@ -44,6 +47,7 @@ _zdx_doctor_log() {
 }
 
 _zdx_doctor_header() {
+  emulate -L zsh
   local title="${1:-ZDX Doctor}"
   print -u2 -r -- ""
   if _zdx_doctor_color_enabled; then
@@ -55,6 +59,7 @@ _zdx_doctor_header() {
 }
 
 _zdx_doctor_section() {
+  emulate -L zsh
   local title="${1:-Dependencies}"
   print -u2 -r -- ""
   if _zdx_doctor_color_enabled; then
@@ -75,6 +80,7 @@ _zdx_doctor_not_applicable() { _zdx_doctor_log na "${1:-}"; }
 # Reports configuration presence and the loaded copy without reading option
 # files, inspecting theme contents, or querying terminal control sequences.
 _zdx_doctor_visual_diagnostics() {
+  emulate -L zsh
   local color_mode="terminal defaults"
   local theme_state="not configured"
   local options_state="unset" file_state="unset"
@@ -107,6 +113,9 @@ _zdx_doctor_visual_diagnostics() {
 # returns 1. Status 0 with no output means the command has no version probe,
 # and the caller shows only its path.
 _zdx_doctor_get_version() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local cmd="$1"
   local version_output="" version_token="" IFS=$' \t\n'
   local -a version_fields=()
@@ -160,6 +169,7 @@ _zdx_doctor_get_version() {
 # callers report the command as missing instead of probing it. Other /usr/bin
 # commands, such as curl, are part of macOS itself.
 _zdx_doctor_clt_placeholder() {
+  emulate -L zsh
   local cmd="${1-}" resolved="${2-}" developer_dir=""
   case "$cmd" in
     git|python3) ;;
@@ -180,6 +190,7 @@ _zdx_doctor_clt_placeholder() {
 # kernel release string. A stripped environment keeps the kernel evidence.
 # The optional argument replaces /proc for fixtures.
 _zdx_doctor_is_wsl() {
+  emulate -L zsh
   local proc_root="${1:-/proc}" kernel_release=""
   [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ]] && return 0
   [[ -e "$proc_root/sys/fs/binfmt_misc/WSLInterop" \
@@ -193,6 +204,7 @@ _zdx_doctor_is_wsl() {
 # stdout: macOS, WSL, Linux, or Unknown. The optional argument replaces /proc
 # for WSL fixtures.
 _zdx_doctor_detect_os() {
+  emulate -L zsh
   if [[ "$OSTYPE" == darwin* ]]; then
     print -r -- "macOS"
   elif [[ "$OSTYPE" == linux* ]]; then
@@ -210,6 +222,7 @@ _zdx_doctor_detect_os() {
 # Linux and WSL prefer the system manager over a Linuxbrew brew; macOS uses
 # Homebrew only.
 _zdx_doctor_detect_pkg_manager() {
+  emulate -L zsh
   local os_name="${1:-}"
   [[ -n "$os_name" ]] || os_name=$(_zdx_doctor_detect_os)
   local -a candidates=()
@@ -233,6 +246,9 @@ _zdx_doctor_detect_pkg_manager() {
 }
 
 _zdx_doctor_confirm() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local prompt="${1:-Continue?}"
   [[ -t 0 && -t 2 ]] || return 2
 
@@ -252,6 +268,9 @@ _zdx_doctor_confirm() {
 }
 
 _zdx_doctor_package_name_valid() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local package_name="${1:-}"
   (( ${#package_name} >= 1 && ${#package_name} <= 128 )) \
     && [[ "$package_name" =~ '^[A-Za-z0-9][A-Za-z0-9+._-]*$' ]]
@@ -259,6 +278,7 @@ _zdx_doctor_package_name_valid() {
 
 # REPLY: COUNT with its noun, through the core service when it is loaded.
 _zdx_doctor_count_noun() {
+  emulate -L zsh
   if (( ${+functions[_zdx_count_noun]} )); then
     _zdx_count_noun "$@"
     return
@@ -276,6 +296,7 @@ _zdx_doctor_count_noun() {
 # executable regular file that group and other users cannot write, owned by
 # root, or also by the current user when OWNER is "user".
 _zdx_doctor_program_trusted() {
+  emulate -L zsh
   local program="${1:-}" owner="${2:-root}" target=""
   local -A program_state=()
   [[ "$program" == /* ]] || return 1
@@ -296,6 +317,7 @@ _zdx_doctor_program_trusted() {
 # may belong to the current user and never runs through sudo or as root.
 # Usage: _zdx_doctor_install_plan PACKAGE_MANAGER PACKAGE...
 _zdx_doctor_install_plan() {
+  emulate -L zsh
   local package_manager="${1:-}"
   shift 2>/dev/null || true
   local -a package_names=("$@")
@@ -373,6 +395,7 @@ _zdx_doctor_install_plan() {
 # every command in MISSING_NAME still absent from PATH.
 # Usage: _zdx_doctor_install_plan_current PM PLAN_NAME MISSING_NAME PACKAGE...
 _zdx_doctor_install_plan_current() {
+  emulate -L zsh
   local package_manager="$1"
   local -a expected_plan=("${(@P)2}") missing_commands=("${(@P)3}")
   shift 3
@@ -400,6 +423,7 @@ _zdx_doctor_install_plan_current() {
 # remaining commands are printed for the user instead of prompting again.
 # Usage: _zdx_doctor_run_install DRY_RUN PM MISSING_NAME PACKAGE...
 _zdx_doctor_run_install() {
+  emulate -L zsh
   local -i dry_run="$1"
   local package_manager="$2" missing_name="$3"
   shift 3
@@ -495,6 +519,7 @@ _zdx_doctor_run_install() {
 # dropped and the program is shown by name.
 # Usage: _zdx_doctor_step_label SUDO_PROGRAM WORD...
 _zdx_doctor_step_label() {
+  emulate -L zsh
   local sudo_program="$1"
   shift
   local -a label_words=("$@")
@@ -509,6 +534,7 @@ _zdx_doctor_step_label() {
 # Prints one install step result through the core output service when it is
 # loaded. STATUS is an exit status or "skip".
 _zdx_doctor_step_result() {
+  emulate -L zsh
   local index="$1" total="$2" label="$3" step_status="$4" started_at="$5"
   local seconds=""
   if [[ "$step_status" != skip && "$started_at" != 0* && -n "${EPOCHREALTIME:-}" ]]; then
@@ -533,6 +559,7 @@ _zdx_doctor_step_result() {
 
 # Sets REPLY to the first available external timeout implementation.
 _zdx_doctor_timeout_command() {
+  emulate -L zsh
   REPLY=""
 
   local candidate=""
@@ -548,6 +575,7 @@ _zdx_doctor_timeout_command() {
 
 # Sets REPLY to fd, or to fdfind, the name Debian and Ubuntu install it under.
 _zdx_doctor_fd_command() {
+  emulate -L zsh
   REPLY=""
 
   local candidate=""
@@ -563,6 +591,7 @@ _zdx_doctor_fd_command() {
 
 # Sets REPLY to the first available SHA-256 implementation.
 _zdx_doctor_sha256_command() {
+  emulate -L zsh
   REPLY=""
 
   local candidate=""
@@ -579,6 +608,7 @@ _zdx_doctor_sha256_command() {
 # Sets reply=(path version-line) for the first of tar and gtar that reports
 # GNU tar, the order in which the File suite resolves its archiver.
 _zdx_doctor_gnu_tar() {
+  emulate -L zsh
   reply=()
 
   local candidate="" resolved_command="" version_text=""
@@ -600,6 +630,7 @@ _zdx_doctor_gnu_tar() {
 # missing_pkgs arrays and its issue counters through dynamic scope. An
 # interrupted version probe returns its 130 or 143 status.
 _zdx_doctor_report_dependency() {
+  emulate -L zsh
   local -a fields=("${(@s:|:)1}")
   local cmd="${fields[1]-}" suite="${fields[2]-}" sev="${fields[3]-}"
   local url="${fields[4]-}" apt_n="${fields[5]-}" brew_n="${fields[6]-}"
@@ -677,6 +708,7 @@ _zdx_doctor_report_dependency() {
 }
 
 _zdx_doctor_usage() {
+  emulate -L zsh
   cat >&2 <<'EOF'
 
   ═════════════════════════════════════════════════════════════
@@ -706,6 +738,7 @@ EOF
 }
 
 zdx-doctor() {
+  emulate -L zsh
   local -i dry_run=0
   case "${1:-}" in
     "")

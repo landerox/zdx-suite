@@ -40,6 +40,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Keep lazy command identities literal, compile owned modules without caller
+  aliases, and isolate internal option, numeric, and regex state. Plugin
+  activation retains its current-shell effects while registry and manager
+  bookkeeping remain valid after option changes. Picker descriptors, duration
+  labels, and native watchdog tick counts also work with `FORCE_FLOAT`.
 - System maintenance tests compare complete privileged-call records, so words
   in a temporary path cannot look like extra operations. The checks still
   require exactly one validated TERM and reject additional calls.

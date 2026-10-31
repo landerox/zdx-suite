@@ -6,6 +6,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   LAZY_HOME="$TEST_TEMP_DIR/lazy-home"
   LAZY_PLUGINS="$LAZY_HOME/.config/zdx/plugins"
   mkdir -p "$LAZY_PLUGINS/demo"
@@ -155,4 +156,120 @@ lazy_shell() {
   [ "${lines[3]}" = "demo menu: three" ]
   [[ "${lines[4]}" =~ ^demo\ +Active\ +Local$ ]]
   [ "$(grep -c '^demo sourced$' "$LAZY_LOG")" -eq 1 ]
+}
+
+@test "F3-04 regression: a plugin lazy stub keeps its literal identity under KSH_ARRAYS" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+unsetopt null_glob
+setopt ksh_arrays
+optiondemo-action "one two" --literal > "$HOME/action.data"
+local call_rc=$? kept="${options[ksharrays]}" activated="${options[nullglob]}"
+unsetopt ksh_arrays
+[[ $call_rc == 0 && "$kept" == on && "$activated" == on ]] || exit 31
+[[ "$(<"$HOME/action.data")" == $'action:<one two>\naction:<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: a direct plugin stub preserves top-level option changes" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+unsetopt null_glob
+setopt sh_word_split
+typeset -g F304_EXPECT_SPLIT=yes
+optiondemo-action "one two" --literal > "$HOME/action.data" || exit 31
+[[ -o null_glob && "$OPTIONDEMO_SOURCE_OPTION" == on ]] || exit 32
+[[ "$(<"$HOME/action.data")" == $'action:<one two>\naction:<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: the zdx plugin route preserves top-level option changes" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+unsetopt null_glob
+setopt sh_word_split
+typeset -g F304_EXPECT_SPLIT=yes
+zdx optiondemo "one two" --literal > "$HOME/action.data" || exit 31
+[[ -o null_glob && "$OPTIONDEMO_SOURCE_OPTION" == on ]] || exit 32
+[[ "$(<"$HOME/action.data")" == $'plugin:<one two>\nplugin:<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 invariant: the interactive master route activates outside emulated selection" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+zdx --help >/dev/null 2>&1 || exit 31
+_zdx_fzf_capture() {
+  local row
+  while IFS= read -r row; do
+    if [[ "$row" == *"|optiondemo|"* ]]; then
+      REPLY="$row"
+      return 0
+    fi
+  done
+  return 1
+}
+unsetopt null_glob
+setopt sh_word_split
+typeset -g F304_EXPECT_SPLIT=yes
+zdx > "$HOME/action.data" || exit 32
+[[ -o null_glob && "$OPTIONDEMO_SOURCE_OPTION" == on ]] || exit 33
+[[ "$(<"$HOME/action.data")" == 'plugin:<>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+
+@test "F3-04 regression: plugin option changes may enable KSH_ARRAYS during activation" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  printf '%s\n' 'setopt ksh_arrays' >> "$HOME/.config/zdx/plugins/optiondemo/optiondemo-menu.zsh"
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+optiondemo-action 'one two' --literal > "$HOME/action.data"
+local call_rc=$? kept="${options[ksharrays]}"
+unsetopt ksh_arrays
+print -r -- "activation:status=$call_rc:ksh=${kept}:loaded=${(j:,:)ZDX_LOADED_PLUGINS}:stubs=${(j:,:)${(k)_ZDX_PLUGIN_STUBS}}"
+[[ $call_rc == 0 && "$kept" == on && -o null_glob ]] || exit 31
+[[ "${ZDX_LOADED_PLUGINS[(Ie)optiondemo]}" != 0 ]] || exit 32
+[[ ! ${+_ZDX_PLUGIN_STUBS[optiondemo-action]} == 1 ]] || exit 33
+[[ "$(<"$HOME/action.data")" == $'action:<one two>\naction:<--literal>' ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: the plugin menu stub preserves literal argv with KSH_ARRAYS" {
+  f304_mock_local_probes
+  f304_write_option_plugin
+  cat > "$HOME/program.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || exit 80
+setopt ksh_arrays
+optiondemo-menu 'one two' 'literal;$(exit 9)' > "$HOME/menu.data"
+local menu_rc=$? kept="${options[ksharrays]}" activated="${options[nullglob]}"
+unsetopt ksh_arrays
+[[ "$menu_rc" == 0 && "$kept" == on && "$activated" == on ]] || exit 31
+[[ "$(<"$HOME/menu.data")" == "plugin:<one two>${(#):-10}plugin:<literal;\$(exit 9)>" ]]
+ZSH
+  run f304_lazy_shell "$HOME/program.zsh"
+  [ "$status" -eq 0 ]
 }

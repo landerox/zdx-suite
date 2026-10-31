@@ -14,10 +14,12 @@ fi
 # --- Private Logging & UI Helpers ---------------------------------------------
 
 _zdx_color_enabled() {
+  emulate -L zsh
   [[ -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" && -t 2 ]]
 }
 
 _zdx_header() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)message}" >&2
@@ -27,6 +29,7 @@ _zdx_header() {
 }
 
 _zdx_info() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\033[1;34mℹ [info]\033[0m %s\n' "${(V)message}" >&2
@@ -36,6 +39,7 @@ _zdx_info() {
 }
 
 _zdx_success() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\033[1;32m✔ [success]\033[0m %s\n' "${(V)message}" >&2
@@ -45,6 +49,7 @@ _zdx_success() {
 }
 
 _zdx_warn() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\033[1;33m⚠ [warning]\033[0m %s\n' "${(V)message}" >&2
@@ -54,6 +59,7 @@ _zdx_warn() {
 }
 
 _zdx_error() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\033[1;31m✘ [error]\033[0m %s\n' "${(V)message}" >&2
@@ -63,6 +69,7 @@ _zdx_error() {
 }
 
 _zdx_dim() {
+  emulate -L zsh
   local message="${1:-}"
   if _zdx_color_enabled; then
     printf '\033[0;90m%s\033[0m\n' "${(V)message}" >&2
@@ -72,6 +79,7 @@ _zdx_dim() {
 }
 
 _zdx_menu_field_safe() {
+  emulate -L zsh
   local value="${1:-}"
   local -i maximum_length="${2:-2048}"
 
@@ -83,12 +91,16 @@ _zdx_menu_field_safe() {
 }
 
 _zdx_plugin_name_valid() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local plugin_name="${1:-}"
   (( ${#plugin_name} >= 1 && ${#plugin_name} <= 128 )) \
     && [[ "$plugin_name" =~ '^[a-z0-9_-]+$' ]]
 }
 
 _zdx_wrapper_name_reserved() {
+  emulate -L zsh
   case "${1:-}" in
     dev|env|file|git|plugins|py|sys|vpn|ws|doctor|status|help|version)
       return 0
@@ -102,6 +114,7 @@ _zdx_wrapper_name_reserved() {
 # True when NAME is a plugin the core loaded or, in a lazy shell, discovered
 # and registered a menu stub for.
 _zdx_plugin_loaded() {
+  emulate -L zsh
   local plugin_name="${1:-}"
   _zdx_plugin_name_valid "$plugin_name" || return 1
 
@@ -113,6 +126,7 @@ _zdx_plugin_loaded() {
 }
 
 _zdx_menu_section() {
+  emulate -L zsh
   local title="${1:-}"
   local description="${2:-}"
 
@@ -126,6 +140,9 @@ _zdx_menu_section() {
 }
 
 _zdx_menu_entry() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local label="${1:-}"
   local command_name="${2:-}"
   local description="${3:-}"
@@ -142,6 +159,7 @@ _zdx_menu_entry() {
 }
 
 _zdx_fzf() {
+  emulate -L zsh
   local -a fzf_options=(
     --height=80%
     --layout=reverse
@@ -337,6 +355,9 @@ _zdx_fzf_capture() {
 #          --temp-root FUNCTION -- [picker-argument...]
 _zdx_menu_picker_capture() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   local zpc_tag="" zpc_noun="" zpc_error_function="" zpc_picker_function=""
   local zpc_temp_root_function=""
@@ -556,6 +577,7 @@ _zdx_menu_picker_capture() {
 # <<< zdx-primitive picker-capture
 
 _zdx_fzf_rc_is_cancel() {
+  emulate -L zsh
   (( ${1:-0} == 1 || ${1:-0} == 130 ))
 }
 
@@ -592,6 +614,7 @@ _zdx_dispatch_plugin() {
 }
 
 _zdx_require_suite_function() {
+  emulate -L zsh
   local function_name="${1:-}"
   (( ${+functions[$function_name]} )) && return 0
   _zdx_error \
@@ -656,6 +679,7 @@ _zdx_dispatch_suite() {
 # --- Menu Model ---------------------------------------------------------------
 
 _zdx_menu_model() {
+  emulate -L zsh
   local -a definitions=(
     $'section\tProjects\tWork with repositories and maintain projects.'
     $'entry\tNavigate Workspaces (ws)\tws\tJump between repositories, clone into the workspace layout, and review status across them.'
@@ -751,6 +775,7 @@ _zdx_menu_model() {
 }
 
 _zdx_selected_row_in_snapshot() {
+  emulate -L zsh
   local selected="${1:-}"
   shift 2>/dev/null || true
 
@@ -761,7 +786,9 @@ _zdx_selected_row_in_snapshot() {
   return 1
 }
 
-_zdx_interactive() {
+_zdx_interactive_select() {
+  emulate -L zsh
+  local REPLY=""
   command -v fzf &>/dev/null || {
     _zdx_error \
       "fzf is required for the interactive menu; use 'zdx <suite>' directly."
@@ -803,7 +830,16 @@ _zdx_interactive() {
   local selected_fields="${selected#*|}"
   local suite_name="${selected_fields%%|*}"
   [[ "$suite_name" == ":" ]] && return 0
-  _zdx_dispatch_suite "$suite_name"
+  _zdx_selected_suite="$suite_name"
+  return 0
+}
+
+# The selection scope has returned before an override or plugin is invoked.
+_zdx_interactive() {
+  local _zdx_selected_suite=""
+  _zdx_interactive_select || return
+  [[ -n "$_zdx_selected_suite" ]] || return 0
+  _zdx_dispatch_suite "$_zdx_selected_suite"
 }
 
 typeset -g _ZDX_COMMON_SOURCED=1

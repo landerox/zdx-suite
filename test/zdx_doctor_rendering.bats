@@ -3,6 +3,7 @@
 
 setup() {
   load test_helper
+  load core_options_test_helper
   unset FZF_DEFAULT_OPTS FZF_DEFAULT_OPTS_FILE FZF_DEFAULT_COMMAND
   export NO_COLOR=1
   export MOCK_DOCTOR_VERSION='0.74.3 (fixture)'
@@ -416,4 +417,198 @@ _doctor_fixture_macos_tools() {
   [[ "$output" == *"GNU coreutils provides the faster timeout command"* ]]
   [[ "$output" == *"1 dependency or capability issue"* ]]
   [[ "$output" != *"Not applicable"* ]]
+}
+
+@test "F3-04 regex: doctor-version preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'doctor-version' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: doctor-version preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'doctor-version' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: doctor-package preserves seeded caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'doctor-package' seeded
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regex: doctor-package preserves unset caller state" {
+  f304_mock_local_probes
+  run f304_regex_probe 'doctor-package' unset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 regression: the doctor report retains field meanings under hostile options" {
+  f304_mock_local_probes
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _zdx_doctor_detect_os() { print -r -- Linux; }
+    _zdx_doctor_detect_pkg_manager() { print -r -- none; }
+    _zdx_doctor_timeout_command() { return 1; }
+    _zdx_doctor_sha256_command() { return 1; }
+    command() {
+      if [[ "${1:-}" == -v ]]; then
+        [[ "${2:-}" == fzf ]]
+      else
+        builtin command "$@"
+      fi
+    }
+    setopt ksh_arrays sh_word_split force_float pipe_fail
+    zdx-doctor > "$HOME/doctor.data" 2> "$HOME/doctor.ui"
+    local call_rc=$? kept="${options[ksharrays]}:${options[shwordsplit]}:${options[forcefloat]}:${options[pipefail]}"
+    unsetopt ksh_arrays sh_word_split force_float pipe_fail
+    [[ $call_rc == 1 && "$kept" == on:on:on:on ]] || exit 31
+    [[ ! -s "$HOME/doctor.data" ]] || exit 32
+    command grep -Fq "fzf - Installed" "$HOME/doctor.ui" || exit 33
+    command grep -Fq "v0.74.3" "$HOME/doctor.ui"
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under ksh_arrays" {
+  f304_mock_local_probes
+  run f304_doctor_option_field ksh_arrays
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under sh_word_split" {
+  f304_mock_local_probes
+  run f304_doctor_option_field sh_word_split
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under force_float" {
+  f304_mock_local_probes
+  run f304_doctor_option_field force_float
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under pipe_fail" {
+  f304_mock_local_probes
+  run f304_doctor_option_field pipe_fail
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under nounset" {
+  f304_mock_local_probes
+  run f304_doctor_option_field nounset
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: doctor field under warn_create_global" {
+  f304_mock_local_probes
+  run f304_doctor_option_field warn_create_global
+  [ "$status" -eq 0 ]
+}
+
+@test "F3-04 augmentation v2: lazy doctor source identity is its actual file under KSH_ARRAYS" {
+  f304_mock_local_probes
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME -u ZDX_EAGER_LOAD ZDX_LAZY_LOAD=1 zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions.zsh" || exit 90
+    setopt ksh_arrays
+    zdx-doctor --help > "$HOME/doctor.stdout" 2> "$HOME/doctor.stderr"
+    local call_rc=$? source_name="${_ZDX_DOCTOR_SOURCE_FILE-}" kept="${options[ksharrays]}"
+    unsetopt ksh_arrays
+    [[ "$call_rc" == 0 && "$kept" == on && ! -s "$HOME/doctor.stdout" ]] || exit 31
+    [[ "$source_name" == "$1/functions/zdx-doctor.zsh" ]]
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+# Run the actual confirmation branch on a private Zsh-owned pseudo-terminal;
+# stdin and stderr are TTYs, while stdout is still checked independently.
+# The sandbox child uses -i to own that terminal (docs/testing.md); -f skips
+# optional startup files and HOME remains the isolated test directory.
+f304_module_confirm_state() {
+  export F304_CONFIRM_STATE="$1"
+  cat > "$HOME/f304-confirm-child.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || exit 80
+source "$TEST_SUITE_ROOT/functions/zdx-doctor.zsh" || exit 81
+if [[ "$F304_CONFIRM_STATE" == seeded ]]; then
+  MATCH=caller MBEGIN=7 MEND=12
+  match=(captured other) mbegin=(2 5) mend=(8 11)
+else
+  unset MATCH MBEGIN MEND match mbegin mend
+fi
+_zdx_doctor_confirm F304_CONFIRM > "$HOME/confirm.stdout"
+local confirm_rc=$?
+print -r -- "rc=$confirm_rc state=${+MATCH}:${+MBEGIN}:${+MEND}:${+match}:${+mbegin}:${+mend}" \
+  > "$HOME/confirm.diagnostic"
+[[ "$confirm_rc" == "$1" && ! -s "$HOME/confirm.stdout" ]] || exit 82
+if [[ "$F304_CONFIRM_STATE" == seeded ]]; then
+  print -r -- "$MATCH:$MBEGIN:$MEND:${(j:,:)match}:${(j:,:)mbegin}:${(j:,:)mend}" \
+    >> "$HOME/confirm.diagnostic"
+  [[ "$MATCH" == caller && "$MBEGIN" == 7 && "$MEND" == 12 \
+    && "${(j:,:)match}" == captured,other && "${(j:,:)mbegin}" == 2,5 \
+    && "${(j:,:)mend}" == 8,11 ]] || exit 83
+else
+  (( ! ${+MATCH} && ! ${+MBEGIN} && ! ${+MEND} \
+    && ! ${+match} && ! ${+mbegin} && ! ${+mend} )) || exit 84
+fi
+print -r -- "ok:$confirm_rc" > "$HOME/confirm.result.tmp" || exit 85
+command mv -- "$HOME/confirm.result.tmp" "$HOME/confirm.result" || exit 86
+ZSH
+  zsh -n "$HOME/f304-confirm-child.zsh" || return 96
+  run zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    zmodload zsh/zpty || exit 81
+    zmodload zsh/zselect || exit 82
+    local answer="" expected="" chunk="" transcript="" enter="${(#):-13}"
+    local -i attempt=0 sent=0
+    for answer expected in y 0 N 1 yes 1 "" 1; do
+      command rm -f -- "$HOME/confirm.result" "$HOME/confirm.result.tmp" "$HOME/confirm.diagnostic"
+      transcript="" sent=0 attempt=0
+      zpty -b F304CONFIRM zsh -f -i "$HOME/f304-confirm-child.zsh" "$expected" || exit 83
+      {
+        while (( ++attempt <= 1000 )); do
+          if zpty -r -t F304CONFIRM chunk 2>/dev/null; then
+            transcript+="$chunk"
+          fi
+          if (( ! sent )) && [[ "$transcript" == *"F304_CONFIRM [y/N]: "* ]]; then
+            # A zero-byte zpty write can fail before it appends a newline.
+            # Send the real Enter byte even for the empty decline response.
+            zpty -n -w F304CONFIRM "$answer$enter" || exit 84
+            sent=1
+          fi
+          [[ -f "$HOME/confirm.result" ]] && break
+          zpty -t F304CONFIRM 2>/dev/null || break
+          zselect -t 1
+        done
+      } always {
+        zpty -d F304CONFIRM 2>/dev/null || :
+      }
+      if (( ! sent )) || [[ ! -f "$HOME/confirm.result" ]] \
+        || [[ "$(<"$HOME/confirm.result")" != "ok:$expected" ]]; then
+        [[ ! -f "$HOME/confirm.diagnostic" ]] || command cat "$HOME/confirm.diagnostic"
+        print -r -- "confirmation transcript: ${(V)transcript}"
+        exit 85
+      fi
+    done
+    print -r -- confirmation-state-kept
+  '
+  if [ "$status" -ne 0 ]; then
+    printf 'Confirmation controller status: %s\n%s\n' "$status" "$output"
+    if [ -f "$HOME/confirm.diagnostic" ]; then
+      cat "$HOME/confirm.diagnostic"
+    fi
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = confirmation-state-kept ]
+}
+
+@test "F3-04 module regex: actual doctor confirmation preserves seeded caller state" {
+  f304_module_confirm_state seeded
+}
+
+@test "F3-04 module regex: actual doctor confirmation preserves unset caller state" {
+  f304_module_confirm_state unset
 }

@@ -300,6 +300,9 @@ _py_confirm_ask() {
 #          [--capture FUNCTION] [--available FUNCTION] -- PROMPT
 _py_confirm_prompt() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local zcp_style="" zcp_error_function="" zcp_capture_function=""
   local zcp_available_function=""
   while (( $# > 0 )); do
@@ -838,6 +841,9 @@ _py_fzf_capture() {
 #          --temp-root FUNCTION -- [picker-argument...]
 _py_picker_capture() {
   emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   REPLY=""
   local zpc_tag="" zpc_noun="" zpc_error_function="" zpc_picker_function=""
   local zpc_temp_root_function=""
