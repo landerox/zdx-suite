@@ -180,7 +180,8 @@ only plugin-management command. A suite MUST NOT add an independent plugin
 contract, implementation, storage format, or compatibility bridge.
 
 The master's custom section and completion show only valid, available plugins
-already loaded in the shell; that membership is not a source-review attestation.
+already loaded or discovered in the shell; rows distinguish those states, and
+that membership is not a source-review attestation.
 The plugin manager shares the rendering wrapper policy and the private picker
 capture, and runs installs and updates as staged, trust-gated transactions.
 See [`plugins.md`](plugins.md) and

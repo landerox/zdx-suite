@@ -63,15 +63,33 @@ plugin must not use a built-in suite name (`dev`, `env`, `file`, `git`, `py`,
 `zdx-plugins --install` refuse these names, and `zdx-plugins` refuses to
 activate one.
 
+Custom plugin namespaces MUST also be disjoint. Replace `-` with `_` in each
+identifier: two distinct identifiers conflict when the results are equal or
+one starts with the other followed by `_`. For example, `foo`, `foo-bar`,
+and `foo_bar` overlap, while `foo` and `foobar` do not. The loader checks the
+complete owner set before any new custom registration or plugin activation
+and refuses every participant for those actions; discovery order never
+chooses a winner. Existing loaded state is retained.
+
+A filesystem claimant is a real direct directory with a valid, nonreserved
+runtime identifier and an observed matching `<name>-menu.zsh` entry. Unsafe
+permissions, a linked or dangling entrypoint, or a wrong entrypoint type still
+reserve the namespace; they do not authorize execution. Directory links and
+directories without the matching entry do not create a claim. Loaded and
+discovered identifiers and registered stub owners remain claimants even when
+their files disappear. An incomplete inventory refuses new custom activation
+and publication instead of treating partial results as an empty owner set.
+
 The loader enforces the namespace while it sources an entrypoint. It records
 every function definition first; afterwards, a plugin may have added or
 changed only `<plugin-name>-*` and `_<plugin_name>_*` functions, plus new
 autoload stubs such as `add-zsh-hook`, which replace nothing. A plugin that
-defines another name, or replaces or removes an existing function (a ZDX
-command, a lazy stub, a core helper, or anything else already defined), is
-refused: every function its source added is removed, every function it
-replaced is restored, and the offending names are printed. The check also runs
-when the source fails and when `zdx-plugins` activates an install or update.
+defines another name, or replaces or removes an existing function outside its
+namespace, is refused: every function its source added is removed, every
+function it replaced is restored, and the offending names are printed. The
+complete owner check prevents overlap with another registered plugin before
+source. The function-table check also runs when the source fails and when
+`zdx-plugins` activates an install or update.
 It covers functions only; aliases, widgets, hooks, options, and parameters set
 at source time are not restored.
 
@@ -202,10 +220,11 @@ safe manual next step.
 
 ## Loader behavior
 
-An eager shell (`ZDX_EAGER_LOAD=1` or test mode) loads every plugin at
-startup with the steps below. A lazy shell, the default, runs only the cheap
-name, reservation, root, and entrypoint checks at startup: it records the
-plugin in `ZDX_DISCOVERED_PLUGINS` and registers stubs for `<plugin-name>-menu`
+An eager shell (`ZDX_EAGER_LOAD=1` or test mode) loads eligible plugins at
+startup with the steps below. A lazy shell, the default, validates the root,
+performs the complete namespace inventory with timed external producers, and checks entrypoint
+eligibility at startup: it records eligible plugins in
+`ZDX_DISCOVERED_PLUGINS` and registers stubs for `<plugin-name>-menu`
 and for the commands of the optional manifest. The first call of any stub runs
 every step below, records the plugin in `ZDX_LOADED_PLUGINS`, removes the
 plugin's remaining stubs, and runs the requested command. Startup therefore
@@ -227,10 +246,32 @@ wrapper autoloads it from its absolute path after the built-in completions,
 so nothing in it runs until completion calls it, and `zdx <plugin-name>`
 completion delegates to it.
 
+Custom discovery uses GNU/BSD `find` with physical traversal and NUL output.
+Each producer has a ten-second core timeout. One shallow listing observes the root;
+at most one further listing observes the immediate children of all eligible
+real directories. Only a successful complete result is accepted. Traversal,
+metadata, framing, launch, or timeout failure discards the whole observation.
+There is no recursive scan of plugin contents. A normally absent configured
+root stays quiet; an inaccessible or otherwise failed observation is reported.
+Missing or unusable `find` disables new custom discovery and activation,
+installation, and update locally. Builtins, existing loaded state, help, and
+removal remain available. ZDX never installs this dependency automatically.
+
+This is a narrow core startup exception for read-only plugin inventory and
+the existing private capture/watchdog resources needed to bound it. It does
+not allow plugin entrypoints to perform source-time workflows. A successful
+listing is not an atomic snapshot; a same-user process can still change paths
+between observations.
+
+The producer deadline is not a whole-inventory time or capacity budget.
+Successful output is retained completely; disk capture, regular-descriptor
+reads, in-memory records, and owner comparisons can exceed that deadline and
+consume substantial resources for large directories. No byte/count limit or
+silent truncation substitutes for the complete owner set.
+
 The core loader:
 
-1. scans direct child directories of `ZDX_PLUGINS_DIR`;
-2. resolves the plugin root through trusted aliases only (a root-owned system
+1. resolves the plugin root through trusted aliases only (a root-owned system
    link such as Fedora Atomic's `/home`, or a link owned by the current user
    above the root inside a directory that group and other users cannot write),
    then requires a non-symlink canonical root that the current user owns and
@@ -238,7 +279,11 @@ The core loader:
    the current user that group and other users cannot write (a root-owned
    sticky directory such as `/tmp` is allowed); scanning and sourcing use only
    that canonical root;
-3. validates the directory-name pattern accepted by the runtime;
+2. enumerates direct root entries, validates runtime identifiers and
+   reservations, and inspects metadata to select real directories;
+3. completely inventories those directories' immediate entries, establishes
+   structural claims independently of execution trust, unions registered live
+   owners, and marks every conflict participant before new custom loading;
 4. requires an owned, singly linked regular entrypoint that is an exact child
    of its plugin directory, with no symlink in its path, and neither the
    entrypoint nor the plugin directory may be writable by group or other
@@ -248,8 +293,17 @@ The core loader:
 6. checks that `<plugin-name>-menu` is defined and that the source stayed in
    the plugin's namespace (see "Identifier and naming rules");
 7. records the plugin for the master menu; and
-8. requires exact loaded-name membership again before the `zdx` wrapper calls
-   the validated `<plugin-name>-menu` function with literal arguments.
+8. requires exact loaded-or-discovered membership and an available matching
+   menu function before the `zdx` wrapper dispatches literal arguments. A lazy
+   stub completes the activation checks and records loaded membership before
+   invoking the real plugin command.
+
+The namespace inventory is renewed before first lazy activation and before
+managed fetch, publication, and reload. Updating the same exact owner is
+allowed; a different identifier with an overlapping normalized prefix is not.
+A newly appearing peer or an inventory error preserves existing loaded
+functions and retryable stubs while refusing the new activation. A trust
+confirmation does not override these checks.
 
 The loader is not a sandbox, linter, signature verifier, or permission
 boundary. A plugin can execute code while it is being sourced, before the
@@ -378,6 +432,19 @@ keep their identities, renames the directory into staging so it leaves the
 root atomically, unregisters the plugin and its menu function, and deletes
 the quarantined tree by identity. A partial deletion is reported with the
 remaining path.
+
+Unregistration removes the exact name from both discovered and loaded lists
+and forgets all of its stub records even if it was never loaded. Only stubs
+whose current bodies still match the recorded loader definitions are removed;
+foreign replacements and unregistered same-prefix functions remain. Loaded
+plugin helpers also remain until a new shell. Dry runs, declined decisions,
+and failed quarantine moves leave registration intact. Removal remains usable
+to resolve conflicts or an inventory failure.
+
+After successful removal, retained helpers no longer carry a registered
+owner. Neither they nor arbitrary preexisting functions inside an incoming
+plugin's own namespace gain perpetual reservation from the owner inventory.
+Open a new shell to discard definitions left by a removed plugin.
 
 The plugin-manager menu captures every picker selection through a private,
 byte-bounded file below the validated temporary root, and dispatches only a

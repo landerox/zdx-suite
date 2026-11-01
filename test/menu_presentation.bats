@@ -28,10 +28,17 @@ capture_command_menus() {
     for suite in dev file git sys py env ws zdx; do
       source "$ZSH_CUSTOM/functions/${suite}-menu.zsh" || return 1
     done
+    source "$ZSH_CUSTOM/functions/zdx-plugins.zsh" || return 1
 
     export MENU_UI_SUITE
-    for MENU_UI_SUITE in dev file git sys py env ws zdx; do
-      "${MENU_UI_SUITE}-menu" >"$MENU_UI_DIR/$MENU_UI_SUITE.stdout" || return 1
+    local menu_command=""
+    for MENU_UI_SUITE in dev file git sys py env ws zdx plugins; do
+      if [[ "$MENU_UI_SUITE" == plugins ]]; then
+        menu_command=zdx-plugins
+      else
+        menu_command="${MENU_UI_SUITE}-menu"
+      fi
+      "$menu_command" >"$MENU_UI_DIR/$MENU_UI_SUITE.stdout" || return 1
       [[ -s "$MENU_UI_DIR/$MENU_UI_SUITE.argv" ]] || return 2
       [[ ! -s "$MENU_UI_DIR/$MENU_UI_SUITE.stdout" ]] || return 3
     done
@@ -47,7 +54,7 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for suite in "dev file git sys py env ws zdx".split():
+for suite in "dev file git sys py env ws zdx plugins".split():
     args = (root / (suite + ".argv")).read_bytes().decode().split("\0")[:-1]
     options = {}
     bindings = []
@@ -106,16 +113,16 @@ description = f"Keep literal $(touch {marker}); 'quotes', `code`, and percent %s
 for path in sorted(root.glob("*.argv")):
     args = path.read_bytes().decode().split("\0")[:-1]
     preview = [arg.partition("=")[2] for arg in args if arg.startswith("--preview=")][-1]
-    for command in (":", "example-status"):
+    for command in (":", "list" if path.stem == "plugins" else "example-status"):
         # fzf quotes field placeholders before starting its constant preview.
         rendered = preview.replace("{2}", shlex.quote(command))
         rendered = rendered.replace("{3}", shlex.quote(description))
-        result = subprocess.run(["zsh", "-f", "-c", rendered], capture_output=True, text=True)
+        result = subprocess.run(["/bin/sh", "-c", rendered], capture_output=True, text=True)
         assert result.returncode == 0 and result.stderr == "", (path, result)
         if command == ":":
             assert result.stdout == description + "\n", (path, result.stdout)
         else:
-            prefix = "zdx " if path.stem == "zdx" else ""
+            prefix = "zdx " if path.stem == "zdx" else "zdx-plugins --" if path.stem == "plugins" else ""
             assert result.stdout == f"Command: {prefix}{command}\n\n{description}\n", path
         assert not marker.exists(), path
 PY
@@ -138,7 +145,7 @@ canonical = {"dev", "env", "file", "git", "py", "sys", "ws"}
 fact = r"(?:missing|unavailable): [^();]+"
 mark = re.compile(r"^  ○ \S.* \(" + fact + r"(?:; " + fact + r")*\)$")
 marked = {}
-for suite in "dev file git sys py env ws zdx".split():
+for suite in "dev file git sys py env ws zdx plugins".split():
     args = (root / (suite + ".argv")).read_bytes().decode().split("\0")[:-1]
     header = [arg.partition("=")[2] for arg in args if arg.startswith("--header=")][-1]
     lines = header.splitlines()

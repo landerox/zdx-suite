@@ -122,7 +122,7 @@ See [`output-spec.md`](output-spec.md) for the full contract.
 | ZDX Tools | Status, Doctor, Plugins |
 
 Use `zdx status` for a one-screen summary of where you are and
-`zdx doctor` to inspect missing dependencies. Loaded custom plugins appear
+`zdx doctor` to inspect missing dependencies. Available custom plugins appear
 in their own group and are available through `zdx <plugin>` and completion.
 Selecting a suite runs it once and returns to the shell when it finishes.
 
@@ -2058,8 +2058,9 @@ ZDX features a dynamic plugin manager for custom interactive menus located in `~
 Custom plugins must adhere to the **plugin runtime contract** (see [docs/plugins.md](plugins.md)) to enforce:
 
 - **Namespace Safety**: Public commands named `<plugin-name>-*` and helpers
-  prefixed with `_<plugin-name>_*`. The loader refuses a plugin that defines
-  anything else or replaces an existing function, and a name reserved for
+  prefixed with `_<plugin_name>_*` (hyphens become underscores). The loader
+  refuses functions outside that namespace, overlapping plugin owners, and a
+  name reserved for
   ZDX (a built-in suite, a `zdx` route, or one of those followed by `-` or
   `_`).
 - **Exit Prevention**: Early returns instead of shell-killing `exit` calls.
@@ -2075,11 +2076,27 @@ check. `zdx status` reports loaded and available plugins separately. A plugin
 may also ship a completion as `<plugin>/_<plugin>-menu`; it is checked like
 the plugin itself and may complete only the plugin's own commands.
 
+Plugin names must remain disjoint after replacing hyphens with underscores:
+`foo` conflicts with `foo-bar` and `foo_bar`; `foo` and `foobar` can coexist.
+All conflicting participants are refused. A present unsafe or linked matching
+entrypoint still reserves its name, so changing permissions is not a way to
+choose the winner. Remove or rename the conflicting plugin, then open a new
+shell. Registered owners remain reserved if their files disappear.
+
+Discovery uses read-only GNU/BSD `find` commands with timeouts. A missing observer
+or an incomplete directory/metadata read refuses new custom loading,
+installation, or update; builtins, help, and removal still work. Fix the
+reported problem and open a new shell for discovery; existing stubs and
+manager operations can be retried. The manager repeats the check before
+fetch and publication, so accepting a trust prompt cannot override a newly
+appearing conflict.
+
 ### 🕹️ CLI Actions & Dynamic Loading
 
 - **Interactive Manager (`zdx-plugins` or `zdx plugins`)**: Opens a dedicated
   FZF control screen to list, install, update, or uninstall custom plugins.
-  Selections are captured privately and must match the current menu.
+  It uses the shared command frame, with `Ctrl-/` for details. Selections are
+  captured privately and must match the current menu.
 - **Install Plugin (`zdx-plugins --install <git-url> [name] [--dry-run] [--yes]`)**:
   Clones the repository into a private staging directory inside the plugin
   root, checks it with the loader's rules (layout, ownership, no symbolic
@@ -2101,8 +2118,11 @@ the plugin itself and may complete only the plugin's own commands.
   is lost.
 - **Uninstall Plugin (`zdx-plugins --remove <name> [--dry-run] [--yes]`)**:
   Shows the plugin's path, origin, and commit, asks for confirmation, checks
-  that nothing changed, and then deletes the directory. Its menu function is
-  unregistered; other functions it defined stay until a new shell.
+  that nothing changed, and quarantines the directory before deleting it.
+  Its discovery and stub records are removed even if it was never loaded.
+  Replacements of recorded lazy stubs and unregistered same-prefix functions
+  are preserved. A loaded plugin's menu is unregistered; its other definitions
+  stay until a new shell.
 - **Review and automation**: `--dry-run` fetches and validates, or plans a
   removal, without changing anything. Without a terminal, a change needs
   `--yes`, which trusts every reviewed change without a prompt; review with
@@ -2130,7 +2150,12 @@ The core **`zdx`** executable serves as the centralized orchestrator and wrapper
   forwards every trailing argument as its original literal array element.
 - **Custom-plugin dispatch (`zdx <plugin-name> [args]`)**: A dynamic plugin name
   must satisfy the loader identifier grammar, match one exact entry in
-  `ZDX_LOADED_PLUGINS`, and still define its expected menu function. Literal
+  `ZDX_LOADED_PLUGINS` or `ZDX_DISCOVERED_PLUGINS`, and still define its
+  expected menu function. A registered lazy stub loads its plugin through
+  every activation check on first use. Dispatch preserves an intentional
+  current-shell replacement of that function. Only actually loaded plugins
+  are described as loaded.
+  Literal
   arguments are then forwarded without flattening or evaluation. This boundary
   does not sandbox the already trusted plugin code.
 - **Status dashboard (`zdx status [--json]`)**: A read-only summary of the

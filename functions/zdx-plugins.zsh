@@ -147,19 +147,35 @@ _zdx_plugins_fail() {
 _zdx_plugins_menu_section() {
   emulate -L zsh
   local title="$1" description="${2:-}"
+  local field=""
+  for field in "$title" "$description"; do
+    if [[ "$field" == *'|'* || "$field" == *$'\n'* || "$field" == *$'\0'* ]]; then
+      _zdx_plugins_error "Invalid menu section fields."
+      return 2
+    fi
+  done
   printf "── %s ──|:|%s\n" "$title" "$description"
 }
 
 _zdx_plugins_menu_entry() {
   emulate -L zsh
   local label="$1" command="$2" description="$3"
+  local field=""
+  for field in "$label" "$command" "$description"; do
+    if [[ "$field" == *'|'* || "$field" == *$'\n'* || "$field" == *$'\0'* ]]; then
+      _zdx_plugins_error "Invalid menu entry fields."
+      return 2
+    fi
+  done
   printf "  %s|%s|%s\n" "$label" "$command" "$description"
 }
 
 # Keep picker rendering independent of the user's standalone fzf defaults.
 _zdx_plugins_fzf() {
   emulate -L zsh
-  local -a options=('--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow')
+  local -a options=(--height=80% --layout=reverse --border=rounded
+    '--delimiter=[|]' --with-nth=1 '--pointer=▶'
+    '--color=16,fg:-1,bg:-1,fg+:-1,bg+:-1,border:-1:dim,info:yellow')
   if typeset -f _zdx_fzf_color_opts &>/dev/null; then
     local theme_option=""
     theme_option=$(_zdx_fzf_color_opts)
@@ -185,7 +201,7 @@ _zdx_plugins_fzf() {
   fi
 
   FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' FZF_DEFAULT_COMMAND='' \
-    SHELL=/bin/sh fzf "${options[@]}" "$@" "${terminal_options[@]}"
+    SHELL=/bin/sh command fzf "${options[@]}" "$@" "${terminal_options[@]}"
 }
 
 # Runs fzf in the terminal foreground and returns its selection in REPLY
@@ -327,6 +343,7 @@ _zdx_plugins_require_runtime() {
   emulate -L zsh
   local service=""
   for service in _zdx_plugin_root_resolve _zdx_plugin_root_safe \
+    _zdx_plugin_namespace_available \
     _zdx_plugin_entrypoint_safe _zdx_capture_parent_safe _zdx_run_captured \
     _zdx_run_with_timeout _zdx_ui_label _zdx_ui_table _zdx_ui_step_banner \
     _zdx_ui_step_result _zdx_ui_step_summary _zdx_step_exec _zdx_step_report \
@@ -890,6 +907,7 @@ _zdx_plugins_publish() {
   local plugin_name="${_zdx_plugins_tx[name]}" stage="${_zdx_plugins_tx[stage]}"
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/${_zdx_plugins_tx[name]}"
+  _zdx_plugin_namespace_available "$root" "$plugin_name" || return 1
   if [[ "${_zdx_plugins_tx[mode]}" == update ]]; then
     if ! _zdx_plugins_move "$target" "$stage/previous" \
       "${_zdx_plugins_tx[active_id]}"; then
@@ -960,14 +978,21 @@ _zdx_plugins_activate_prepare() {
     _zdx_plugins_error "Ecosystem Contract Violation: Syntax error in '$2-menu.zsh'."
     return 1
   fi
-  # Repeat the path boundary immediately before source, as the loader does.
+  _zdx_plugin_namespace_available "$1" "$2" || return 1
+  # Repeat execution trust after the inventory, as the loader does.
   _zdx_plugin_entrypoint_safe "$1" "$_zdx_plugins_activate_dir" \
     "$_zdx_plugins_activate_entry" || {
     _zdx_plugins_error "The published plugin changed during validation."
     return 1
   }
+  # Reset a published reload's conventional sentinel only after the last
+  # inventory/path checks, before returning to the transparent source call.
+  if [[ "${_zdx_plugins_tx[phase]-}" == published ]]; then
+    unset -- "${_zdx_plugins_tx[sentinel]}" 2>/dev/null
+  fi
   (( ${+functions[_zdx_plugin_namespace_snapshot]} )) \
     && _zdx_plugin_namespace_snapshot
+  _zdx_plugins_tx[source_started]=1
   return 0
 }
 
@@ -1013,6 +1038,7 @@ _zdx_plugins_activate_published_prepare() {
   emulate -L zsh
   local REPLY=""
   local -a reply=()
+  _zdx_plugins_tx[source_started]=0
   _zdx_plugins_tx[sentinel]="${_zdx_plugins_tx[name]//-/_}"
   _zdx_plugins_tx[sentinel]="_${(U)_zdx_plugins_tx[sentinel]}_MENU_SOURCED"
   _zdx_plugins_tx[had_function]=0
@@ -1025,9 +1051,6 @@ _zdx_plugins_activate_published_prepare() {
     _zdx_plugins_tx[had_sentinel]=1
     _zdx_plugins_tx[saved_sentinel]="${(P)_zdx_plugins_tx[sentinel]}"
   fi
-  # A reload clears the plugin's documented idempotency sentinel, so its
-  # guard does not turn the new source into a no-op.
-  unset -- "${_zdx_plugins_tx[sentinel]}" 2>/dev/null
   return 0
 }
 
@@ -1064,15 +1087,19 @@ _zdx_plugins_activate_published_finish() {
       _zdx_plugins_warn "Rolled back: '$plugin_name' was not installed."
     fi
   fi
-  _zdx_plugins_warn "The failed source may have left definitions in this shell; open a new shell to load plugins cleanly."
+  if [[ "${_zdx_plugins_tx[source_started]-}" == 1 ]]; then
+    _zdx_plugins_warn "The failed source may have left definitions in this shell; open a new shell to load plugins cleanly."
+  fi
   return 1
 }
 
 _zdx_plugins_activate_published() {
-  _zdx_plugins_activate_published_prepare
   local -i _zdx_plugins_published_rc=0
-  _zdx_plugins_activate "${_zdx_plugins_session[root]}" \
-    "${_zdx_plugins_tx[name]}" || _zdx_plugins_published_rc=$?
+  _zdx_plugins_activate_published_prepare || _zdx_plugins_published_rc=$?
+  if (( _zdx_plugins_published_rc == 0 )); then
+    _zdx_plugins_activate "${_zdx_plugins_session[root]}" \
+      "${_zdx_plugins_tx[name]}" || _zdx_plugins_published_rc=$?
+  fi
   _zdx_plugins_activate_published_finish "$_zdx_plugins_published_rc"
 }
 
@@ -1197,6 +1224,7 @@ _zdx_plugins_install_prepare() {
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/$2"
   local -a reply=()
+  _zdx_plugin_namespace_available "$root" "$plugin_name" || return 1
   _zdx_plugins_tilde "$target"
   local target_display="$REPLY"
   if [[ -e "$target" || -L "$target" ]]; then
@@ -1293,6 +1321,7 @@ _zdx_plugins_update_prepare() {
   local root="${_zdx_plugins_session[root]}"
   local target="${_zdx_plugins_session[root]}/${1-}"
   local -a reply=()
+  _zdx_plugin_namespace_available "$root" "$plugin_name" || return 1
   _zdx_plugins_tilde "$target"
   local target_display="$REPLY"
 
@@ -1788,14 +1817,15 @@ _zdx_plugins_remove_locked() {
   fi
   _zdx_plugins_tx[phase]=removed
 
-  # The plugin is gone from the root: unregister it and its menu function.
+  # Loaded removal retains its documented menu-unregistration rule. Lazy-only
+  # functions are removed below only when they are still exact owned stubs.
   if _zdx_plugins_loaded "$plugin_name"; then
-    ZDX_LOADED_PLUGINS=("${(@)ZDX_LOADED_PLUGINS:#$plugin_name}")
-    ZDX_DISCOVERED_PLUGINS=("${(@)ZDX_DISCOVERED_PLUGINS:#$plugin_name}")
-    (( ${+functions[_zdx_plugin_forget_stubs]} )) \
-      && _zdx_plugin_forget_stubs "$plugin_name"
+    unfunction -- "${plugin_name}-menu" 2>/dev/null
   fi
-  unfunction -- "${plugin_name}-menu" 2>/dev/null
+  ZDX_LOADED_PLUGINS=("${(@)ZDX_LOADED_PLUGINS:#$plugin_name}")
+  ZDX_DISCOVERED_PLUGINS=("${(@)ZDX_DISCOVERED_PLUGINS:#$plugin_name}")
+  (( ${+functions[_zdx_plugin_forget_stubs]} )) \
+    && _zdx_plugin_forget_stubs "$plugin_name"
 
   if ! _zdx_plugins_remove_stage "$stage" "${_zdx_plugins_session[root]}" \
     "${_zdx_plugins_tx[stage_id]}"; then
@@ -1885,23 +1915,25 @@ _zdx_plugins_select_action() {
   emulate -L zsh
   local REPLY=""
   _zdx_plugins_menu_action=""
-  local -a options=(
-    "$(_zdx_plugins_menu_section "Plugin Manager" "List, install, update, and remove custom plugins.")"
-    "$(_zdx_plugins_menu_entry "List Installed Plugins" "list" "Show installed plugins, their status, and their origin.")"
-    "$(_zdx_plugins_menu_entry "Install New Plugin" "install" "Fetch a plugin from a Git URL, review its commit, and activate it after your trust decision.")"
-    "$(_zdx_plugins_menu_entry "Update Installed Plugins" "update" "Stage each update, review the exact commits, and activate only what you trust.")"
-    "$(_zdx_plugins_menu_entry "Uninstall Plugin" "remove" "Review and remove one installed plugin.")"
-  )
+  local -a options=()
+  local row=""
+  row=$(_zdx_plugins_menu_section "Plugin Manager" "List, install, update, and remove custom plugins.") || return 2
+  options+=("$row")
+  row=$(_zdx_plugins_menu_entry "List Installed Plugins" "list" "Show installed plugins, their status, and their origin.") || return 2
+  options+=("$row")
+  row=$(_zdx_plugins_menu_entry "Install New Plugin" "install" "Fetch a plugin from a Git URL, review its commit, and activate it after your trust decision.") || return 2
+  options+=("$row")
+  row=$(_zdx_plugins_menu_entry "Update Installed Plugins" "update" "Stage each update, review the exact commits, and activate only what you trust.") || return 2
+  options+=("$row")
+  row=$(_zdx_plugins_menu_entry "Uninstall Plugin" "remove" "Review and remove one installed plugin.") || return 2
+  options+=("$row")
 
   local -a fzf_opts=(
-    --height=50%
-    --layout=reverse
-    --border=rounded
-    --delimiter='[|]'
-    --with-nth=1
-    --pointer='▶'
-    --prompt='Plugins > '
-    --header=$'Select a plugin action\n[Enter] Select  [Esc] Exit'
+    --prompt='plugins > '
+    --header='Type to filter | Enter run | Esc cancel | Ctrl-/ details'
+    --bind='ctrl-/:toggle-preview'
+    --preview='case {2} in :) printf "%s\n" {3} ;; *) printf "Command: zdx-plugins --%s\n\n%s\n" {2} {3} ;; esac'
+    --preview-window='down:4:wrap'
   )
 
   # Keep picker state in this owned scope; the coordinator receives one action.

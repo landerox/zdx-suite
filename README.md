@@ -160,6 +160,10 @@ only when you use them.
 - Suite-specific tools only when needed, such as `gh`, `wg-quick`, `uv`, or
   `pipx`; [`fd`](https://github.com/sharkdp/fd) optionally speeds up
   workspace discovery, which otherwise uses `find`.
+- Custom plugin discovery and activation, installation, and update need
+  GNU/BSD `find` with physical traversal and NUL output. A failed or missing
+  observer refuses those paths locally; builtins, help, and plugin removal
+  remain available. See the [plugin contract](docs/plugins.md#loader-behavior).
 
 Per platform:
 
@@ -266,7 +270,7 @@ ZDX is designed to adapt to your personal terminal workflow. You have complete f
 
 ### 1. 🎛️ The Unified `zdx` Wrapper
 
-Type `zdx` to explore every built-in suite and loaded custom plugin from one
+Type `zdx` to explore every built-in suite and available custom plugin from one
 searchable menu. Use a subcommand to route directly when you already know the
 destination:
 

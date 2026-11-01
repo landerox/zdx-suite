@@ -89,7 +89,7 @@ Options:
   -h, --help, help         Show this help
   -v, --version, version   Show the installed ZDX version
 
-Loaded custom plugins are available as `zdx <plugin-name> [args]`.
+Loaded and discovered custom plugins are available as `zdx <plugin-name> [args]`.
 EOF
 }
 

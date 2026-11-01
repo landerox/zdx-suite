@@ -123,9 +123,10 @@ host tools.
 
 The header identifies the current directory without probing services, GitHub,
 or authentication. Custom plugins appear only when the current runtime can
-dispatch them; an empty filtered group is omitted. Their text says they are
-loaded in this shell, without claiming an audit or trust record. Custom route
-completion uses the same loaded-name, namespace, and function checks as routing.
+dispatch them; an empty filtered group is omitted. Their text distinguishes
+loaded membership, available first-use stubs, and available current-shell
+menus, without claiming an audit or trust record. Custom route completion uses the same exact
+loaded-or-discovered membership, namespace, and function checks as routing.
 
 ## Exceptions and boundaries
 
