@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Refuse every custom plugin whose public or normalized private namespace
+  overlaps another filesystem or registered owner. Renew complete bounded
+  inventories before activation and managed publication; unreadable or failed
+  observations cannot authorize partial custom loading or publication.
 - Timing footers and new telemetry records use registered identifiers and their
   owning suite, replacing unknown or mismatched labels with fixed unknown
   values. Telemetry persistence refuses unsafe ancestors and linked or
@@ -40,6 +44,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Remove discovery and owned stub records after successful plugin quarantine,
+  including never-loaded plugins, while preserving replacements of those stubs.
+  Master rows distinguish available plugins from loaded plugins, and the
+  plugin manager uses the shared command-menu frame and validated rows.
 - Retry repaired partial core initialization while preserving loaded commands,
   plugin state and API constants. Eager loading uses the same declared modules
   as lazy loading, including optional user-local `zdir`/`wsj`. Failed trusted
@@ -562,7 +570,8 @@ system, files, the shell environment, Python environments, and WireGuard VPN.
 - The loader and `zdx-plugins` refuse names reserved for ZDX (a built-in
   suite, a `zdx` route, or one of those followed by `-` or `_`), and a
   namespace guard refuses a plugin that defines a function outside
-  `<plugin>-*` and `_<plugin>_*` or replaces an existing one, removing what it
+  `<plugin>-*` and `_<plugin_name>_*` (hyphens become underscores), or replaces
+  or removes an existing function outside those namespaces, removing what it
   added and restoring what it replaced. The plugin directory and entrypoint
   must not be writable by group or other users, and `zdx-plugins` clones with
   umask `022`.

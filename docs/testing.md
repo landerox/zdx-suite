@@ -168,6 +168,25 @@ while the genuine compatible API remains valid across repaired startup.
 `zdx_widgets.bats` covers the explicitly loaded eager widget backend and the
 wrapper's deferred first-use path to the same module.
 
+`plugins_ownership.bats` covers symmetric namespace refusal, complete connected
+conflicts, historical owners, prefetch/publication checks, exact-owner updates,
+lazy removal and foreign replacements, honest available/loaded master rows,
+and the manager's frame, validated fields, previews, and cancellation.
+`plugins_eligibility.bats` covers peers added before first lazy use and
+dangling or wrong-type matching entries that still reserve namespaces.
+`plugins_inventory.bats` injects an ordinary metadata failure for a present
+entry after another real entry was observed; real startup, lazy activation,
+and managed transactions retain state and recover when the error clears.
+`plugins_inventory_observer.bats` wraps the real external observer, retaining
+its NUL output before injecting a final failure or malformed framing. It
+checks both batches, literal argv and root paths, missing `find`, no partial
+registration/publication, and removal recovery. Injected `124` proves consumer
+failure handling; actual deadlines and watchdog cleanup belong to the timeout
+tests. `plugins_inventory_root.bats` checks real missing-root and parent-loop
+behavior before the first core source under unset/seeded ERRNO and tracing;
+it does not promise numeric caller errno preservation. Every Git origin and
+mutation stays inside the disposable test sandbox.
+
 ### Platform portability coverage
 
 `platform_paths.bats` also checks the core capture and master picker against

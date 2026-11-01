@@ -406,8 +406,8 @@ teardown() {
   ' _ "$TEST_SUITE_ROOT"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Skipping loaded plugin with reserved name: 'git'."* ]]
-  [[ "$output" == *"Skipping loaded plugin with reserved name: 'help'."* ]]
+  [[ "$output" == *"Skipping plugin with reserved name: 'git'."* ]]
+  [[ "$output" == *"Skipping plugin with reserved name: 'help'."* ]]
   [[ "$output" != *"UNEXPECTED_HELP_PLUGIN"* ]]
 }
 

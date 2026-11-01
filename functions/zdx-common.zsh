@@ -111,9 +111,16 @@ _zdx_wrapper_name_reserved() {
   esac
 }
 
-# True when NAME is a plugin the core loaded or, in a lazy shell, discovered
-# and registered a menu stub for.
+# Exact loaded membership is distinct from lazy availability.
 _zdx_plugin_loaded() {
+  emulate -L zsh
+  local plugin_name="${1:-}"
+  _zdx_plugin_name_valid "$plugin_name" || return 1
+  (( ${ZDX_LOADED_PLUGINS[(Ie)$plugin_name]} ))
+}
+
+# True for a registered loaded plugin or a discovered lazy plugin.
+_zdx_plugin_available() {
   emulate -L zsh
   local plugin_name="${1:-}"
   _zdx_plugin_name_valid "$plugin_name" || return 1
@@ -595,7 +602,7 @@ _zdx_dispatch_plugin() {
     _zdx_error "Custom plugin name '$plugin_name' is reserved by ZDX."
     return 2
   }
-  _zdx_plugin_loaded "$plugin_name" || {
+  _zdx_plugin_available "$plugin_name" || {
     _zdx_error "Unknown suite or command: '$plugin_name'."
     return 2
   }
@@ -603,7 +610,7 @@ _zdx_dispatch_plugin() {
   local plugin_function="${plugin_name}-menu"
   (( ${+functions[$plugin_function]} )) || {
     _zdx_error \
-      "Loaded plugin '$plugin_name' no longer defines '$plugin_function'."
+      "Plugin '$plugin_name' no longer defines '$plugin_function'."
     return 1
   }
 
@@ -733,20 +740,20 @@ _zdx_menu_model() {
     menu_rows+=("$row")
   done
 
-  local -a loaded_plugins=()
-  (( ${+ZDX_LOADED_PLUGINS} )) && loaded_plugins=("${ZDX_LOADED_PLUGINS[@]}")
+  local -a available_plugins=()
+  (( ${+ZDX_LOADED_PLUGINS} )) && available_plugins=("${ZDX_LOADED_PLUGINS[@]}")
   (( ${+ZDX_DISCOVERED_PLUGINS} )) \
-    && loaded_plugins+=("${ZDX_DISCOVERED_PLUGINS[@]}")
-  if (( ${#loaded_plugins[@]} > 0 )); then
-    local plugin_name=""
+    && available_plugins+=("${ZDX_DISCOVERED_PLUGINS[@]}")
+  if (( ${#available_plugins[@]} > 0 )); then
+    local plugin_name="" plugin_function="" plugin_description=""
     local -a included_plugins=() plugin_rows=()
-    for plugin_name in "${loaded_plugins[@]}"; do
+    for plugin_name in "${available_plugins[@]}"; do
       if ! _zdx_plugin_name_valid "$plugin_name"; then
-        _zdx_warn "Skipping invalid loaded plugin identifier: '$plugin_name'."
+        _zdx_warn "Skipping invalid plugin identifier: '$plugin_name'."
         continue
       fi
       if _zdx_wrapper_name_reserved "$plugin_name"; then
-        _zdx_warn "Skipping loaded plugin with reserved name: '$plugin_name'."
+        _zdx_warn "Skipping plugin with reserved name: '$plugin_name'."
         continue
       fi
       if (( ${included_plugins[(Ie)$plugin_name]} )); then
@@ -754,19 +761,26 @@ _zdx_menu_model() {
       fi
       if (( ! ${+functions[${plugin_name}-menu]} )); then
         _zdx_warn \
-          "Skipping loaded plugin '$plugin_name' because its menu is unavailable."
+          "Skipping plugin '$plugin_name' because its menu is unavailable."
         continue
       fi
-      row=$(_zdx_menu_entry \
-        "Open $plugin_name" "$plugin_name" \
-        "Loaded in this shell. Open the custom plugin menu.") || return
+      plugin_function="${plugin_name}-menu"
+      plugin_description="Available in this shell. Open the custom menu."
+      if _zdx_plugin_loaded "$plugin_name"; then
+        plugin_description="Loaded in this shell. Open the custom plugin menu."
+      elif (( ${+_ZDX_PLUGIN_STUB_BODIES[$plugin_function]} )) \
+        && [[ "${_ZDX_PLUGIN_STUBS[$plugin_function]-}" == "$plugin_name" \
+          && "${functions[$plugin_function]}" == "${_ZDX_PLUGIN_STUB_BODIES[$plugin_function]}" ]]; then
+        plugin_description="Available in this shell; loads on first use."
+      fi
+      row=$(_zdx_menu_entry "Open $plugin_name" "$plugin_name" "$plugin_description") || return
       plugin_rows+=("$row")
       included_plugins+=("$plugin_name")
     done
 
     if (( ${#plugin_rows[@]} > 0 )); then
       row=$(_zdx_menu_section \
-        "Custom Plugins" "Open custom suites loaded in this shell.") || return
+        "Custom Plugins" "Open available custom suites.") || return
       menu_rows+=("$row" "${plugin_rows[@]}")
     fi
   fi

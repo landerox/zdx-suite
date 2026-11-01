@@ -305,7 +305,10 @@ snippet and executes unintended code.
 - The master router loads one exact adjacent common module, routes built-in
   suites through fixed `case` arms, and forwards arguments as literal array
   elements. Dynamic plugin dispatch requires a bounded identifier, exact
-  membership in `ZDX_LOADED_PLUGINS`, and an already-defined matching function.
+  membership in `ZDX_LOADED_PLUGINS` or `ZDX_DISCOVERED_PLUGINS`, and an
+  already-defined matching function. Registered lazy stubs complete activation
+  before their real plugin command runs; intentional current-shell function
+  replacements remain callable. Row text distinguishes available from loaded.
   Its foreground picker captures into a private bounded file, distinguishes
   cancellation from failure, and accepts only an exact row from the current
   menu snapshot.
@@ -317,9 +320,9 @@ snippet and executes unintended code.
 - The unified command-menu preview uses a constant `case` and `printf` with
   fzf-quoted fields. Sections display explanatory text instead of an executable
   sentinel. The details toggle changes presentation only. Master plugin
-  completion applies loaded membership, identifier, reserved-name, and
-  function-availability checks without sourcing plugins or executing their
-  menus.
+  completion applies loaded-or-discovered membership, identifier,
+  reserved-name, and function-availability checks without sourcing plugins or
+  executing their menus.
 - Built-in suite, master, and plugin-manager picker wrappers locally empty
   `FZF_DEFAULT_OPTS`, `FZF_DEFAULT_OPTS_FILE`, and `FZF_DEFAULT_COMMAND`. This
   prevents ambient fzf settings from injecting executable bindings, hiding
@@ -1523,22 +1526,37 @@ executes arbitrary code in the user's shell.
   Names reserved for built-in suites and `zdx` routes, and names that begin
   with them followed by `-` or `_`, are refused by the loader, the installer,
   and activation.
+- Custom namespace checks compare the complete filesystem and registered
+  owner set before new registration or source. Hyphens normalize to
+  underscores; equality and underscore-boundary ancestry refuse both
+  participants. Observable unsafe, linked, dangling, and wrong-type matching
+  entries still reserve their namespace independently of execution trust.
+  Loaded/discovered names and stub owners survive filesystem disappearance;
+  disjoint candidates may proceed, and order never selects a winner.
+- Physical GNU/BSD `find` producers each have a ten-second core timeout and
+  provide complete NUL records and an explicit status. Failed, malformed, missing-tool, timed-out,
+  or partial observations refuse custom activation and managed publication.
+  Metadata and directory identities are checked explicitly; first lazy use,
+  managed prefetch, publication, and reload renew the observation. Builtins,
+  previous loaded state, help, and removal remain usable. The core's narrow
+  startup exception permits only this read-only inventory and the existing
+  trusted private capture/watchdog resources needed to bound it.
 - A namespace guard around every plugin source records the function table
   first. A plugin that adds a function outside `<name>-*` and `_<name>_*`
-  (new autoload stubs excepted) or replaces or removes any existing function
-  is refused, its additions are removed, and the replaced definitions are
-  restored, also after a failed source. Aliases, widgets, hooks, options, and
-  parameters are outside the guard. Owned parsing and registry bookkeeping
+  (new autoload stubs excepted) or replaces or removes an existing function
+  outside its namespace is refused. Its additions are removed, and replaced
+  definitions are restored, also after a failed source. Aliases, widgets,
+  hooks, options, and parameters are outside the guard. Owned parsing and registry bookkeeping
   isolate their options and all six regex-result parameters; entrypoint
   sourcing and arbitrary caller execution remain outside ZDX wholesale
   option-restoring scopes. The source-time plugin restrictions still apply.
 - Runtime loading performs a Zsh syntax check, and path validation repeats
   immediately before source. A lazy shell, the default, defers that chain to
   the first call of a plugin's stub: startup only validates the root, the
-  name, the reservation, and the entrypoint rule, so no plugin code runs and
-  a plugin changed after discovery is refused on first use. The optional
-  command manifest (`<plugin>/commands`) must be an owned, singly linked file
-  that group and other users cannot write, of at most 16 KiB and 128
+  name, the complete namespace inventory, and the entrypoint rule, so no
+  plugin code runs and a plugin changed after discovery is refused on first
+  use. The optional command manifest (`<plugin>/commands`) must be an owned,
+  singly linked file that group and other users cannot write, of at most 16 KiB and 128
   `<plugin>-<action>` names; an invalid entry refuses the whole manifest, and
   a name that is already a function is never replaced by a stub.
 - An optional plugin completion (`<plugin>/_<plugin>-menu`) follows the same
@@ -1608,7 +1626,11 @@ executes arbitrary code in the user's shell.
   of replaying accepted plugin entrypoints. Neither behavior rolls back prior
   user-code shell effects; loading and user-code trust tests cover the boundary.
 - Plugin removal follows the exact-plan, revalidation, and quarantine model
-  described under T3.
+  described under T3. Successful quarantine clears exact discovered/loaded
+  membership and every owned stub record even for a never-loaded plugin.
+  Only unchanged recorded lazy stubs are removed; replacements of those stubs
+  and unregistered same-prefix functions survive. A loaded menu is
+  unregistered, while its documented other helpers remain.
 - The plugin contract requires namespacing and source safety.
 - `zdx-plugins` is the single lifecycle owner; no suite maintains a second
   implementation or a delegating bridge.
@@ -1639,8 +1661,17 @@ files and the menu function, not every definition a failed source made in the
 running shell. A process with the same user ID can still race the final path
 operations between revalidation and rename. Removal and staging cleanup run
 `rm -rf` on an identity-checked directory, which narrows but cannot close that
-same-user race. The catalog therefore describes custom plugins only as loaded
-in the current shell; it does not claim an audit.
+same-user race. Complete inventories are not atomic snapshots and cannot close
+the final check-to-source window. The ten-second deadline covers each external
+producer, while complete disk capture, regular-file reads, in-memory records,
+and O(N²) owner comparisons have no fixed capacity or whole-operation deadline.
+Large finite inventories retain disk, memory, and startup costs. Nonblocking
+descriptor opens reject replacement FIFOs before validation but do not solve
+arbitrary kernel I/O stalls. After successful removal, retained helpers
+no longer have registered ownership; neither they nor arbitrary preexisting
+functions inside an incoming plugin's own namespace acquire perpetual
+reservation. The catalog describes current availability or loaded membership;
+it does not claim an audit.
 
 **Required treatment.** Present plugins as arbitrary code, stage and validate
 updates before activation, show origin and commit, require trust, preserve the

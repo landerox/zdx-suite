@@ -348,7 +348,9 @@ command-specific and capability-based, and each suite contract records its
 platform matrix and what only mocks verify.
 
 - Detect operating systems and facilities explicitly, at call time and never
-  while a file is sourced. Read the kernel from `$OSTYPE` or `uname -s`, so a
+  while a file is sourced, except the builtin native-observer eligibility
+  check at the narrow custom-plugin inventory boundary documented below.
+  Read the kernel from `$OSTYPE` or `uname -s`, so a
   test can pin it with an assignment or a mock.
 - Detect WSL only on a Linux kernel, from WSL evidence: the session variables
   `WSL_DISTRO_NAME` or `WSL_INTEROP`, the `WSLInterop` or `WSLInterop-late`
@@ -595,6 +597,20 @@ Therefore:
 - loader failures name the exact missing module and return non-zero without
   leaving a false "loaded" sentinel.
 
+Core custom-plugin discovery is a narrow exception to registration-only
+source work: it may perform read-only immediate-directory inventory with
+timeouts on its external producers
+and use the existing trusted private capture/watchdog resources required to
+finish it. Cleanup on success, failure, and interruption MUST follow the
+existing identity-checked capture/watchdog rules; replacements are preserved.
+Only a complete successful observation may establish owners;
+enumeration or metadata failure MUST NOT become an empty inventory. GNU/BSD
+`find` with physical traversal and NUL output is a capability of custom
+discovery and activation, installation, and update, not a prerequisite for
+builtins, help, or removal. This exception does not authorize plugin code to
+scan, write files, prompt, access the network, or invoke public workflows while
+being sourced. See [`plugins.md`](plugins.md#loader-behavior).
+
 Lazy and eager loading MUST expose the same public commands and behavior.
 A lazy shell registers a stub for every public command, so each one works
 from a new shell; `ZDX_DIRECT_COMMANDS=0` limits the stubs to the suite menus
@@ -633,6 +649,20 @@ the dispatcher is not covered by override reapplication.
 Shell startup is a product requirement. Top-level loading should perform only
 constant-time registration work. Defer external commands, filesystem scans,
 network calls, and dynamic previews until invocation.
+
+For an existing root, each namespace inventory uses one shallow root listing
+and at most one batched listing of eligible directories. Startup discovery,
+every eager activation, first lazy use, and managed prefetch/publication/reload
+boundaries renew the inventory. Do not cache it across plugin source or a user
+trust decision to save work. Listing success does not
+provide an atomic snapshot or remove the documented same-user race.
+
+Each external producer has a ten-second timeout. Complete successful output
+is retained on disk and in memory; subsequent reads, metadata processing,
+sorting, and the O(N²) startup owner comparison are outside that deadline.
+There is no fixed byte or whole-inventory time budget. Large finite
+inventories therefore retain disk, memory, and startup costs; completeness
+must never be obtained by silently omitting owners to fit a budget.
 
 Interactive commands SHOULD:
 

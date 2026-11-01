@@ -2216,6 +2216,297 @@ _zdx_plugin_name_reserved() {
   return 1
 }
 
+# Runtime identifiers deliberately include legacy underscores and separators.
+_zdx_plugin_identifier_valid() {
+  emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  [[ "${1-}" =~ '^[a-z0-9_-]+$' ]]
+}
+
+# Private: 0 means an observed entry, 3 proven initial absence, 1 an error.
+# Only this initial-root adapter interprets errno. Trace is disabled before
+# activating the special parameter; arbitrary DEBUG code is outside the rule.
+_zdx_plugin_root_present() {
+  emulate -L zsh
+  unsetopt xtrace force_float
+  local target="${1-}" symbol=""
+  local -i probe_rc=0 probe_errno=0
+  zmodload -F zsh/system p:errnos 2>/dev/null || return 1
+  local ERRNO=0
+  if [[ -L "$target" ]]; then
+    probe_errno=$ERRNO probe_rc=$?
+  else
+    probe_errno=$ERRNO probe_rc=$?
+  fi
+  (( probe_errno == 0 && (probe_rc == 0 || probe_rc == 1) )) && return 0
+  symbol="${errnos[$probe_errno]-}"
+  [[ "$symbol" == ENOENT ]] && return 3
+  return 1
+}
+
+# Private: one complete shallow NUL observation in reply, never a partial
+# stream. Reuse core private capture resources and timeout; human log tails
+# cannot carry this data. The producer finishes before any record is accepted.
+_zdx_plugin_inventory_observe() {
+  emulate -L zsh
+  unsetopt xtrace force_float multibyte
+  local find_path="$1"
+  shift
+  reply=()
+  (( $# > 0 )) || return 1
+  local _zdx_cap_dir="" _zdx_cap_log="" _zdx_cap_dir_id="" _zdx_cap_log_id=""
+  local -i write_fd=-1 read_fd=-1 producer_rc=0 read_rc=0 read_bytes=0 chunk_bytes=0
+  local -i expected_bytes=0 request_bytes=0
+  local -i cleanup_failed=0
+  local chunk="" data="" capture_identity=""
+  local -A capture_state=() directory_state=()
+  local -a records=()
+  zmodload -F zsh/system b:sysopen b:sysread 2>/dev/null || return 1
+  {
+    _zdx_capture_open || return 1
+    sysopen -w -o nofollow,nonblock,cloexec -u write_fd -- "$_zdx_cap_log" 2>/dev/null || return 1
+    zstat -H capture_state -f "$(( write_fd ))" 2>/dev/null \
+      && [[ "${capture_state[device]}:${capture_state[inode]}" == "$_zdx_cap_log_id" ]] \
+      && (( (capture_state[mode] & 8#170000) == 8#100000 \
+        && capture_state[uid] == EUID && capture_state[nlink] == 1 \
+        && (capture_state[mode] & 8#077) == 0 )) \
+      || return 1
+    _zdx_run_with_timeout 10 "$find_path" -P "$@" '!' -name . -prune -print0 \
+      </dev/null 1>&$(( write_fd )) 2>/dev/null || producer_rc=$?
+    { exec {write_fd}>&- } 2>/dev/null || return 1
+    write_fd=-1
+    (( producer_rc == 0 )) || return 1
+    zstat -LH directory_state -- "$_zdx_cap_dir" 2>/dev/null \
+      && [[ "${directory_state[device]}:${directory_state[inode]}" == "$_zdx_cap_dir_id" ]] \
+      && (( (directory_state[mode] & 8#170000) == 8#040000 \
+        && directory_state[uid] == EUID && (directory_state[mode] & 8#077) == 0 )) || return 1
+    capture_state=()
+    zstat -LH capture_state -- "$_zdx_cap_log" 2>/dev/null \
+      && [[ "${capture_state[device]}:${capture_state[inode]}" == "$_zdx_cap_log_id" ]] \
+      && (( (capture_state[mode] & 8#170000) == 8#100000 \
+        && capture_state[uid] == EUID && capture_state[nlink] == 1 \
+        && (capture_state[mode] & 8#077) == 0 )) || return 1
+    expected_bytes="${capture_state[size]}"
+    capture_identity="${capture_state[device]}:${capture_state[inode]}:${capture_state[mode]}:${capture_state[uid]}:${capture_state[nlink]}"
+    sysopen -r -o nofollow,nonblock,cloexec -u read_fd -- "$_zdx_cap_log" 2>/dev/null || return 1
+    capture_state=()
+    zstat -H capture_state -f "$(( read_fd ))" 2>/dev/null \
+      && [[ "${capture_state[device]}:${capture_state[inode]}:${capture_state[mode]}:${capture_state[uid]}:${capture_state[nlink]}" == "$capture_identity" ]] \
+      && (( capture_state[size] == expected_bytes )) || return 1
+    while (( read_rc == 0 )); do
+      chunk=""
+      chunk_bytes=0
+      request_bytes=$(( expected_bytes - read_bytes + 1 ))
+      (( request_bytes > 65536 )) && request_bytes=65536
+      sysread -c chunk_bytes -i "$(( read_fd ))" -s "$(( request_bytes ))" chunk 2>/dev/null || read_rc=$?
+      if (( read_rc == 0 )); then
+        read_bytes+=chunk_bytes
+        (( chunk_bytes > 0 && read_bytes <= expected_bytes )) || return 1
+        data+="$chunk"
+      fi
+    done
+    (( read_rc == 5 && read_bytes == expected_bytes )) || return 1
+    capture_state=()
+    zstat -LH capture_state -- "$_zdx_cap_log" 2>/dev/null \
+      && [[ "${capture_state[device]}:${capture_state[inode]}:${capture_state[mode]}:${capture_state[uid]}:${capture_state[nlink]}" == "$capture_identity" ]] \
+      && (( capture_state[size] == expected_bytes )) || return 1
+    directory_state=()
+    zstat -LH directory_state -- "$_zdx_cap_dir" 2>/dev/null \
+      && [[ "${directory_state[device]}:${directory_state[inode]}" == "$_zdx_cap_dir_id" ]] \
+      && (( (directory_state[mode] & 8#170000) == 8#040000 \
+        && directory_state[uid] == EUID && (directory_state[mode] & 8#077) == 0 )) || return 1
+    # Validate framing before splitting; modifiers must not hide empty records.
+    if [[ -n "$data" ]]; then
+      [[ "$data" == *$'\0' && "$data" != $'\0'* && "$data" != *$'\0\0'* ]] || return 1
+      data="${data%$'\0'}"
+      records=("${(@0)data}")
+    fi
+  } always {
+    (( write_fd < 0 )) || { exec {write_fd}>&- } 2>/dev/null || cleanup_failed=1
+    (( read_fd < 0 )) || { exec {read_fd}<&- } 2>/dev/null || cleanup_failed=1
+    [[ -z "$_zdx_cap_dir" ]] || _zdx_capture_close
+    if [[ -n "$_zdx_cap_dir" && ( -e "$_zdx_cap_dir" || -L "$_zdx_cap_dir" ) ]]; then
+      cleanup_failed=1
+    fi
+  }
+  (( cleanup_failed == 0 )) || return 1
+  reply=("${records[@]}")
+  return 0
+}
+
+# Private: REPLY is the canonical root (empty only for proven initial absence),
+# reply the filesystem's structural claims. All results are committed together.
+_zdx_plugin_inventory() {
+  emulate -L zsh
+  unsetopt xtrace force_float multibyte
+  local configured="${1-}" canonical="" find_path="" kernel=""
+  local record="" name="" relative="" entry="" identity=""
+  local -i presence_rc=0
+  local -a root_rows=() entry_rows=() starts=() claims=()
+  local -A root_state=() state=() directories=() claimed=()
+  REPLY=""
+  reply=()
+  [[ -n "$configured" && "$configured" != *$'\0'* ]] || return 1
+  while [[ "$configured" != / && "$configured" == */ ]]; do
+    configured="${configured%/}"
+  done
+  _zdx_plugin_root_present "$configured" || presence_rc=$?
+  (( presence_rc == 3 )) && return 0
+  (( presence_rc == 0 )) || return 1
+  _zdx_plugin_root_resolve "$configured" || return 1
+  canonical="$REPLY"
+  REPLY=""
+  [[ -r "$canonical" && -x "$canonical" ]] \
+    && zstat -LH root_state -- "$canonical" 2>/dev/null || return 1
+  identity="${root_state[device]}:${root_state[inode]}:${root_state[mode]}:${root_state[uid]}"
+  find_path=$(whence -p find 2>/dev/null) || return 1
+  [[ "$find_path" == /* && -f "$find_path" && -x "$find_path" ]] || return 1
+  if [[ "$OSTYPE" == linux* ]]; then
+    if [[ -r /proc/sys/kernel/osrelease ]]; then
+      IFS= read -r kernel < /proc/sys/kernel/osrelease || kernel=""
+    fi
+    if [[ -n "${WSL_DISTRO_NAME-}${WSL_INTEROP-}" || "${kernel:l}" == *microsoft* \
+      || -e /proc/sys/fs/binfmt_misc/WSLInterop \
+      || -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]]; then
+      [[ "${find_path:A}" != /mnt/[a-zA-Z]/* && "${find_path:A:l}" != *.exe ]] || return 1
+    fi
+  fi
+  _zdx_plugin_inventory_observe "$find_path" "$canonical/." || return 1
+  root_rows=("${reply[@]}")
+  reply=()
+  for record in "${root_rows[@]}"; do
+    [[ "$record" == "$canonical/./"* ]] || return 1
+    name="${record#"$canonical/./"}"
+    [[ -n "$name" && "$name" != */* && "$name" != . && "$name" != .. ]] || return 1
+    _zdx_plugin_identifier_valid "$name" || continue
+    if _zdx_plugin_name_reserved "$name"; then
+      print -u2 -r -- "zdx: refusing plugin '${name}': the name is reserved for ZDX"
+      continue
+    fi
+    state=()
+    zstat -LH state -- "$canonical/$name" 2>/dev/null || return 1
+    (( (state[mode] & 8#170000) == 8#040000 )) || continue
+    [[ -r "$canonical/$name" && -x "$canonical/$name" ]] || return 1
+    (( ! ${+directories[$name]} )) || return 1
+    directories[$name]="${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}"
+    starts+=("$canonical/$name/.")
+  done
+  if (( ${#starts} > 0 )); then
+    _zdx_plugin_inventory_observe "$find_path" "${starts[@]}" || return 1
+    entry_rows=("${reply[@]}")
+    reply=()
+    for record in "${entry_rows[@]}"; do
+      [[ "$record" == "$canonical/"* ]] || return 1
+      relative="${record#"$canonical/"}"
+      name="${relative%%/*}"
+      (( ${+directories[$name]} )) && [[ "$relative" == "$name/./"* ]] || return 1
+      entry="${relative#"$name/./"}"
+      [[ -n "$entry" && "$entry" != */* && "$entry" != . && "$entry" != .. ]] || return 1
+      [[ "$entry" == "$name-menu.zsh" ]] || continue
+      state=()
+      zstat -LH state -- "$canonical/$name/$entry" 2>/dev/null || return 1
+      if (( ! ${+claimed[$name]} )); then
+        claims+=("$name")
+        claimed[$name]=1
+      fi
+    done
+  fi
+  for name in "${(@k)directories}"; do
+    state=()
+    zstat -LH state -- "$canonical/$name" 2>/dev/null \
+      && [[ "${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}" == "${directories[$name]}" \
+        && -r "$canonical/$name" && -x "$canonical/$name" ]] || return 1
+  done
+  state=()
+  zstat -LH state -- "$canonical" 2>/dev/null \
+    && [[ "${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}" == "$identity" \
+      && -r "$canonical" && -x "$canonical" ]] \
+    && _zdx_plugin_root_safe "$canonical" || return 1
+  REPLY="$canonical"
+  reply=("${(@o)claims}")
+  return 0
+}
+
+# Private: caller-local plugins_dir, _zdx_plugin_candidates and
+# _zdx_plugin_conflicts receive a complete startup result. A nonempty target
+# checks only that prospective owner against the immutable complete union.
+_zdx_plugin_namespace_preflight() {
+  emulate -L zsh
+  unsetopt xtrace force_float
+  local root="$1" target="${2-}" REPLY="" name="" peer="" left="" right=""
+  local -a reply=() filesystem=() owners=()
+  local -A seen=() conflicts=()
+  local -i i=0 j=0
+  if [[ -n "$target" ]] \
+    && { ! _zdx_plugin_identifier_valid "$target" || _zdx_plugin_name_reserved "$target"; }; then
+    print -u2 -r -- "zdx: refusing an invalid or reserved custom plugin namespace."
+    return 1
+  fi
+  _zdx_plugin_inventory "$root" || {
+    print -u2 -r -- "zdx: refusing unsafe plugin root or incomplete custom plugin inventory; native find and readable, unchanged directories are required."
+    return 1
+  }
+  local canonical="$REPLY"
+  filesystem=("${reply[@]}")
+  for name in "${filesystem[@]}" "${ZDX_LOADED_PLUGINS[@]}" \
+    "${ZDX_DISCOVERED_PLUGINS[@]}" "${(@v)_ZDX_PLUGIN_STUBS}" "$target"; do
+    _zdx_plugin_identifier_valid "$name" || continue
+    _zdx_plugin_name_reserved "$name" && continue
+    (( ${+seen[$name]} )) && continue
+    seen[$name]=1
+    owners+=("$name")
+  done
+  owners=("${(@o)owners}")
+  if [[ -n "$target" ]]; then
+    left="${target//-/_}"
+    for peer in "${owners[@]}"; do
+      [[ "$peer" == "$target" ]] && continue
+      right="${peer//-/_}"
+      if [[ "$left" == "$right" || "$left" == "$right"_* || "$right" == "$left"_* ]]; then
+        conflicts[$target]="$peer"
+        break
+      fi
+    done
+  else
+    for (( i=1; i <= ${#owners}; ++i )); do
+      name="${owners[$i]}"
+      left="${name//-/_}"
+      for (( j=i+1; j <= ${#owners}; ++j )); do
+        peer="${owners[$j]}"
+        right="${peer//-/_}"
+        if [[ "$left" == "$right" || "$left" == "$right"_* || "$right" == "$left"_* ]]; then
+          (( ${+conflicts[$name]} )) || conflicts[$name]="$peer"
+          (( ${+conflicts[$peer]} )) || conflicts[$peer]="$name"
+        fi
+      done
+    done
+  fi
+  if [[ -n "$target" ]]; then
+    [[ -n "$canonical" ]] || {
+      print -u2 -r -- "zdx: custom plugin inventory root disappeared before activation or publication."
+      return 1
+    }
+    if (( ${+conflicts[$target]} )); then
+      print -u2 -r -- "zdx: refusing plugin '$target': namespace conflicts with '${conflicts[$target]}'."
+      return 1
+    fi
+  fi
+  plugins_dir="$canonical"
+  _zdx_plugin_candidates=("${filesystem[@]}")
+  _zdx_plugin_conflicts=("${(@kv)conflicts}")
+  return 0
+}
+
+# Owned preparation only; callers return before sourcing arbitrary plugins.
+_zdx_plugin_namespace_available() {
+  emulate -L zsh
+  local plugins_dir=""
+  local -a _zdx_plugin_candidates=()
+  local -A _zdx_plugin_conflicts=()
+  _zdx_plugin_namespace_preflight "$1" "$2"
+}
+
 # Every function definition captured just before a plugin entrypoint is
 # sourced; _zdx_plugin_namespace_verify compares the shell against it.
 typeset -gA _zdx_plugin_guard_before
@@ -2339,6 +2630,7 @@ typeset -ga ZDX_DISCOVERED_PLUGINS
 # Lazy plugin stubs by function name, mapped to their plugin, and the
 # canonical plugin root they were discovered in.
 typeset -gA _ZDX_PLUGIN_STUBS
+typeset -gA _ZDX_PLUGIN_STUB_BODIES
 typeset -g _ZDX_PLUGIN_ROOT
 
 # Private: sources one plugin through the loader's full chain: the path and
@@ -2363,7 +2655,8 @@ _zdx_plugin_activate() {
       "zdx: failed to load plugin '${plugin_name}' (invalid Zsh syntax)"
     return 1
   fi
-  # Repeat the path boundary after validation, immediately before source.
+  _zdx_plugin_namespace_available "$plugins_dir" "$plugin_name" || return 1
+  # Repeat execution trust after the inventory, immediately before source.
   _zdx_plugin_entrypoint_safe "$plugins_dir" "$plugin_dir" "$menu_file" || {
     print -u2 -r -- \
       "zdx: plugin '${plugin_name}' changed during validation"
@@ -2385,7 +2678,8 @@ _zdx_plugin_activation_finish() {
     return 1
   fi
   if (( ! ${+functions[${plugin_name}-menu]} )) \
-    || [[ "${functions[${plugin_name}-menu]}" == *_zdx_plugin_lazy_dispatch* ]]; then
+    || { (( ${+_ZDX_PLUGIN_STUB_BODIES[${plugin_name}-menu]} )) \
+      && [[ "${functions[${plugin_name}-menu]}" == "${_ZDX_PLUGIN_STUB_BODIES[${plugin_name}-menu]}" ]]; }; then
     print -u2 -r -- \
       "zdx: plugin '${plugin_name}' loaded but failed to define function '${plugin_name}-menu'"
     return 1
@@ -2451,9 +2745,11 @@ _zdx_plugin_forget_stubs() {
   local plugin_name="$1" stub_name=""
   for stub_name in "${(@k)_ZDX_PLUGIN_STUBS}"; do
     [[ "${_ZDX_PLUGIN_STUBS[$stub_name]}" == "$plugin_name" ]] || continue
-    [[ "${functions[$stub_name]-}" == *_zdx_plugin_lazy_dispatch* ]] \
+    (( ${+_ZDX_PLUGIN_STUB_BODIES[$stub_name]} )) \
+      && [[ "${functions[$stub_name]-}" == "${_ZDX_PLUGIN_STUB_BODIES[$stub_name]}" ]] \
       && unfunction -- "$stub_name"
     unset "_ZDX_PLUGIN_STUBS[$stub_name]"
+    unset "_ZDX_PLUGIN_STUB_BODIES[$stub_name]"
   done
 }
 
@@ -2545,27 +2841,19 @@ _zdx_register_plugin_completions() {
 _zdx_load_plugins_prepare() {
   emulate -L zsh
   local configured="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
-  local plugin_dir="" name="" menu_file="" REPLY=""
-  local MATCH="" MBEGIN=0 MEND=0
-  local -a match=() mbegin=() mend=()
-  [[ -d "$configured" ]] || return 1
-  _zdx_plugin_root_resolve "$configured" || {
-    print -u2 -r -- "zdx: refusing unsafe plugin root ${(V)configured}"
-    return 1
-  }
-  plugins_dir="$REPLY"
-  _ZDX_PLUGIN_ROOT="$plugins_dir"
-  for plugin_dir in "$plugins_dir"/*(N/); do
-    name="${plugin_dir:t}"
-    [[ "$name" =~ ^[a-z0-9_-]+$ ]] || continue
-    menu_file="$plugin_dir/${name}-menu.zsh"
-    [[ -e "$menu_file" || -L "$menu_file" ]] || continue
-    if _zdx_plugin_name_reserved "$name"; then
-      print -u2 -r -- "zdx: refusing plugin '${name}': the name is reserved for ZDX"
-      continue
+  local name=""
+  local -a eligible=()
+  local -A _zdx_plugin_conflicts=()
+  _zdx_plugin_namespace_preflight "$configured" || return 1
+  [[ -z "$plugins_dir" ]] || _ZDX_PLUGIN_ROOT="$plugins_dir"
+  for name in "${_zdx_plugin_candidates[@]}"; do
+    if (( ${+_zdx_plugin_conflicts[$name]} )); then
+      print -u2 -r -- "zdx: refusing plugin '$name': namespace conflicts with '${_zdx_plugin_conflicts[$name]}'."
+    else
+      eligible+=("$name")
     fi
-    _zdx_plugin_candidates+=("$name")
   done
+  _zdx_plugin_candidates=("${eligible[@]}")
   return 0
 }
 
@@ -2596,6 +2884,7 @@ _zdx_plugin_register_lazy() {
     fi
     _zdx_register_lazy_stub plugin "$command_name" || return 1
     _ZDX_PLUGIN_STUBS[$command_name]="$plugin_name"
+    _ZDX_PLUGIN_STUB_BODIES[$command_name]="${functions[$command_name]}"
   done
   _zdx_plugin_record_discovery "$plugin_name"
 }

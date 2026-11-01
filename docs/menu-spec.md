@@ -5,7 +5,8 @@ safety, stream, and architecture rules are defined in
 [`development.md`](development.md). What a command prints after a menu
 dispatches it is defined in [`output-spec.md`](output-spec.md).
 
-The top-level menus of all eight built-in suites and the master `zdx` catalog
+The top-level menus of all eight built-in suites, the core plugin manager,
+and the master `zdx` catalog
 follow this specification, with these known gaps:
 
 - The VPN profile and interface picker (`_vpn_pick_from_list`) still reads
@@ -20,6 +21,7 @@ are recorded in [`menu-design.md`](menu-design.md).
 This specification applies to:
 
 - the master `zdx` menu;
+- the core `zdx-plugins` manager, also reached by `zdx plugins`;
 - every built-in `<suite>-menu`;
 - nested action dashboards inside a suite;
 - custom plugin menus, together with [`plugins.md`](plugins.md).
@@ -66,6 +68,11 @@ System has no scope line. That difference is intended. Content browsers, such
 as branch or service pickers, keep the layout their content needs under
 [Preview layout](#preview-layout). `test/menu_presentation.bats` enforces the
 shared frame across suites.
+
+The plugin manager uses that same command frame with the `plugins >` prompt
+followed by a space and the `Enter run` legend. Its constant preview displays
+`zdx-plugins --<action>` and the description; section rows display only their description. Its
+uninstall picker is a content browser and keeps its explicit `40%` height.
 
 ## Command menu record format
 
