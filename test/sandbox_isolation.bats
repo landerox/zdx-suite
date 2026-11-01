@@ -6,25 +6,209 @@ setup() {
 }
 
 teardown() {
-  _zdx_test_stop_session_probe
-  cleanup_sandbox
+  local stop_status=0 sandbox_status=0
+  _zdx_test_stop_session_probe || stop_status=$?
+  cleanup_sandbox || sandbox_status=$?
+  [[ "$stop_status" -eq 0 && "$sandbox_status" -eq 0 ]]
 }
 
-# A timed-out PTY run can leave GNU parallel's stopped process groups behind.
-# Match only our private probe path, and never signal the outer test's group.
+# Private Linux PTY worker ownership; no process-name or global-table fallback.
+_zdx_test_session_probe_decimal() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] || return 1
+  case "$2" in
+    10) [[ ${#1} -le 10 ]] ;;
+    20) [[ ${#1} -le 20 ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# Direct-call output: capture this shell before any command substitution.
+_zdx_test_session_probe_self() {
+  local raw="" pid=""
+  REPLY=""
+  IFS= read -r raw < /proc/self/stat 2>/dev/null || return 1
+  pid=${raw%% *}
+  _zdx_test_session_probe_decimal "$pid" 10 && [[ "$pid" != 1 ]] || return 1
+  [[ -z "${BASHPID:-}" || "$pid" == "$BASHPID" ]] || return 1
+  REPLY="$pid"
+}
+
+# One targeted identity row; 0 valid, 1 absent, 2 unknown. STATE is transient.
+_zdx_test_session_probe_stat() {
+  local pid="${1:-}" raw="" tail="" observation="" group="" session="" extra=""
+  local -a fields=()
+  local line_feed="" carriage_return=""
+  [[ $# -eq 1 ]] && _zdx_test_session_probe_decimal "$pid" 10 \
+    && [[ "$pid" != 1 ]] || return 2
+  # Keep control-byte formats textual through declare -f and BATS preprocessing.
+  printf -v line_feed '\n' || return 2
+  printf -v carriage_return '\r' || return 2
+  [[ -n "$line_feed" && -n "$carriage_return" ]] || return 2
+  if ! raw=$(cat "/proc/$pid/stat" 2>/dev/null); then
+    [[ -r /proc && -x /proc && ! -e "/proc/$pid" ]] && return 1
+    return 2
+  fi
+  [[ "$raw" == "$pid ("*") "* ]] || return 2
+  # comm may contain spaces, parentheses and newlines; its final ') ' wins.
+  tail=${raw##*) }
+  [[ "$tail" != *"$line_feed"* && "$tail" != *"$carriage_return"* ]] || return 2
+  IFS=' ' read -r -a fields <<< "$tail"
+  [[ ${#fields[@]} -ge 20 && "${fields[0]}" == [RSDTtIWKPZXx] ]] || return 2
+  _zdx_test_session_probe_decimal "${fields[2]}" 10 \
+    && _zdx_test_session_probe_decimal "${fields[3]}" 10 \
+    && _zdx_test_session_probe_decimal "${fields[19]}" 20 || return 2
+  if ! observation=$(ps -p "$pid" -o pgid=,sid= 2>/dev/null); then
+    [[ -r /proc && -x /proc && ! -e "/proc/$pid" ]] && return 1
+    return 2
+  fi
+  [[ "$observation" != *$'\n'* ]] || return 2
+  IFS=' ' read -r group session extra <<< "$observation"
+  [[ -z "$extra" && "$group" == "${fields[2]}" \
+    && "$session" == "${fields[3]}" ]] || return 2
+  printf '%s %s %s %s %s\n' "$pid" "$group" "$session" "${fields[19]}" "${fields[0]}"
+}
+
+_zdx_test_session_probe_directory() {
+  local mode=""
+  [[ -d "$1" && ! -L "$1" && -O "$1" ]] || return 1
+  mode=$(file_mode "$1" 2>/dev/null) || return 1
+  [[ "$mode" == 700 ]]
+}
+
+_zdx_test_session_probe_data() {
+  local mode="" links=""
+  [[ -f "$1" && ! -L "$1" && -O "$1" ]] || return 1
+  mode=$(file_mode "$1" 2>/dev/null) || return 1
+  links=$(file_links "$1" 2>/dev/null) || return 1
+  [[ "$mode" == 600 && "$links" == 1 ]]
+}
+
+_zdx_test_session_probe_identities() {
+  local parent="" ready="" data=""
+  parent=$(file_identity "${1%/*}" 2>/dev/null) || return 1
+  ready=$(file_identity "$1.ready" 2>/dev/null) || return 1
+  data=$(file_identity "$1" 2>/dev/null) || return 1
+  printf '%s/%s/%s\n' "$parent" "$ready" "$data"
+}
+
+_zdx_test_session_probe_parent() {
+  local parent="${1%/*}" root="${TEST_TEMP_DIR:-}" relative="" component="" cursor=""
+  [[ "$root" == /* && "$parent" == "$root"/* ]] || return 1
+  _zdx_test_session_probe_directory "$root" || return 1
+  relative=${parent#"$root"/}
+  cursor=$root
+  while :; do
+    component=${relative%%/*}
+    [[ -n "$component" && "$component" != . && "$component" != .. ]] || return 1
+    cursor="$cursor/$component"
+    _zdx_test_session_probe_directory "$cursor" || return 1
+    [[ "$relative" == */* ]] || break
+    relative=${relative#*/}
+  done
+  return 0
+}
+
+# A complete record plus an atomic empty-directory commit; no overwrite.
+_zdx_test_session_probe_publish() {
+  local pid="${1:-}" receipt="${ZDX_TEST_SESSION_RECEIPT:-}" REPLY="" row=""
+  local observed="" group="" session="" start="" state="" extra=""
+  [[ $# -eq 1 ]] || return 1
+  _zdx_test_session_probe_self && [[ "$pid" == "$REPLY" ]] || return 1
+  _zdx_test_session_probe_parent "$receipt" || return 1
+  [[ ! -e "$receipt" && ! -L "$receipt" \
+    && ! -e "$receipt.ready" && ! -L "$receipt.ready" ]] || return 1
+  row=$(_zdx_test_session_probe_stat "$pid") || return 1
+  IFS=' ' read -r observed group session start state extra <<< "$row"
+  [[ "$observed" == "$pid" && -z "$extra" && "$state" == [RSDTtIWKP] ]] || return 1
+  _zdx_test_session_probe_decimal "$group" 10 \
+    && _zdx_test_session_probe_decimal "$session" 10 \
+    && _zdx_test_session_probe_decimal "$start" 20 \
+    && [[ "$group" != 1 && "$session" != 1 ]] || return 1
+  (
+    umask 077
+    set -C
+    printf 'zdx-session-probe-v1 %s %s %s %s\n' "$pid" "$group" "$session" "$start" > "$receipt"
+  ) || return 1
+  _zdx_test_session_probe_data "$receipt" || return 1
+  mkdir -m 700 "$receipt.ready"
+}
+
+# Four identity fields plus stable parent/ready/data identities, as data only.
+_zdx_test_session_probe_receipt() {
+  local receipt="${1:-}" ready="" tag="" pid="" group="" session="" start="" extra=""
+  local size="" identities="" after="" entry=""
+  ready="$receipt.ready"
+  _zdx_test_session_probe_parent "$receipt" || return 1
+  _zdx_test_session_probe_directory "$ready" || return 1
+  for entry in "$ready"/* "$ready"/.[!.]* "$ready"/..?*; do
+    [[ ! -e "$entry" && ! -L "$entry" ]] || return 1
+  done
+  _zdx_test_session_probe_data "$receipt" || return 1
+  size=$(file_size "$receipt" 2>/dev/null) || return 1
+  [[ "$size" =~ ^[1-9][0-9]?$ && "$size" -le 75 ]] || return 1
+  identities=$(_zdx_test_session_probe_identities "$receipt") || return 1
+  IFS=' ' read -r tag pid group session start extra < "$receipt" || return 1
+  [[ "$tag" == zdx-session-probe-v1 && -z "$extra" ]] || return 1
+  _zdx_test_session_probe_decimal "$pid" 10 \
+    && _zdx_test_session_probe_decimal "$group" 10 \
+    && _zdx_test_session_probe_decimal "$session" 10 \
+    && _zdx_test_session_probe_decimal "$start" 20 || return 1
+  [[ "$pid" != 1 && "$group" != 1 && "$session" != 1 ]] || return 1
+  cmp -s "$receipt" <(printf 'zdx-session-probe-v1 %s %s %s %s\n' "$pid" "$group" "$session" "$start") || return 1
+  _zdx_test_session_probe_parent "$receipt" \
+    && _zdx_test_session_probe_directory "$ready" || return 1
+  for entry in "$ready"/* "$ready"/.[!.]* "$ready"/..?*; do
+    [[ ! -e "$entry" && ! -L "$entry" ]] || return 1
+  done
+  _zdx_test_session_probe_data "$receipt" || return 1
+  after=$(_zdx_test_session_probe_identities "$receipt") || return 1
+  [[ "$identities" == "$after" ]] || return 1
+  printf '%s %s %s %s %s\n' "$pid" "$group" "$session" "$start" "$identities"
+}
+
 _zdx_test_stop_session_probe() {
   [[ -n "${ZDX_TEST_SESSION_PROBE:-}" ]] || return 0
-  local _pid group args own_group
-  own_group=$(ps -p "$BASHPID" -o pgid=)
-  own_group=${own_group//[[:space:]]/}
-  while read -r _pid group args; do
-    [[ "$args" == *"$ZDX_TEST_SESSION_PROBE"* ]] || continue
-    [[ "$group" != "$own_group" && "$group" =~ ^[0-9]+$ ]] || continue
-    kill -KILL -- "-$group" 2>/dev/null || true
-  done < <(ps -eo pid=,pgid=,args=)
+  local REPLY="" outer_pid="" outer_row="" outer_group="" outer_session="" outer_start="" outer_state=""
+  local receipt="${ZDX_TEST_SESSION_RECEIPT:-}" record="" current="" pid="" group="" session="" start="" identities="" extra="" row="" status=0
+  _zdx_test_session_probe_self || return 1
+  outer_pid=$REPLY
+  _zdx_test_session_probe_decimal "$outer_pid" 10 && [[ "$outer_pid" != 1 ]] || return 1
+  record=$(_zdx_test_session_probe_receipt "$receipt") || return 1
+  IFS=' ' read -r pid group session start identities extra <<< "$record"
+  [[ -z "$extra" && "$pid" != "$outer_pid" ]] || return 1
+  outer_row=$(_zdx_test_session_probe_stat "$outer_pid") || return 1
+  IFS=' ' read -r current outer_group outer_session outer_start outer_state extra <<< "$outer_row"
+  [[ "$current" == "$outer_pid" && -z "$extra" && "$outer_state" == [RSDTtIWKP] ]] || return 1
+  _zdx_test_session_probe_decimal "$outer_group" 10 \
+    && _zdx_test_session_probe_decimal "$outer_session" 10 \
+    && _zdx_test_session_probe_decimal "$outer_start" 20 || return 1
+  [[ "$group" != "$outer_group" && "$session" != "$outer_session" \
+    && "$group" != "$outer_pid" && "$group" != "$outer_session" ]] || return 1
+  row=$(_zdx_test_session_probe_stat "$pid") || status=$?
+  [[ "$status" != 1 ]] || return 0
+  [[ "$status" == 0 ]] || return 1
+  case "$row" in
+    "$pid $group $session $start "[ZXx]) return 0 ;;
+    "$pid $group $session $start "[RSDTtIWKP]) ;;
+    *) return 1 ;;
+  esac
+  current=$(_zdx_test_session_probe_receipt "$receipt") || return 1
+  [[ "$current" == "$record" ]] || return 1
+  status=0
+  row=$(_zdx_test_session_probe_stat "$pid") || status=$?
+  [[ "$status" != 1 ]] || return 0
+  [[ "$status" == 0 ]] || return 1
+  case "$row" in
+    "$pid $group $session $start "[ZXx]) return 0 ;;
+    "$pid $group $session $start "[RSDTtIWKP]) ;;
+    *) return 1 ;;
+  esac
+  kill -KILL -- "-$group" 2>/dev/null || return 1
+  return 0
 }
 
 _zdx_test_parallel_session_probe() {
+  skip_on_darwin "requires Linux /proc for session ownership"
   has_util_linux_script || skip "requires util-linux script for a controlling terminal"
   command -v just >/dev/null || skip "requires just"
   command -v timeout >/dev/null || skip "requires timeout for the PTY bound"
@@ -41,9 +225,22 @@ _zdx_test_parallel_session_probe() {
   done
   export ZDX_TEST_NESTED_PATH
   export ZDX_TEST_SESSION_PROBE="$TEST_TEMP_DIR/zdx-session-probe.bats"
-  sed 's/^@probe_test@/@test/' > "$ZDX_TEST_SESSION_PROBE" <<'BATS'
-#!/usr/bin/env bats
+  export ZDX_TEST_SESSION_RECEIPT="$TEST_TEMP_DIR/session-owner/receipt"
+  mkdir -m 700 "$TEST_TEMP_DIR/session-owner" || return 1
+  {
+    printf '#!/usr/bin/env bats\nTEST_TEMP_DIR=%q\n' "$TEST_TEMP_DIR"
+    # These fixed definitions are harness code, never product/startup code.
+    declare -f file_stat file_mode file_identity file_links file_size
+    declare -f _zdx_test_session_probe_decimal _zdx_test_session_probe_self \
+      _zdx_test_session_probe_stat _zdx_test_session_probe_directory \
+      _zdx_test_session_probe_data _zdx_test_session_probe_parent \
+      _zdx_test_session_probe_publish
+    sed 's/^@probe_test@/@test/' <<'BATS'
 @probe_test@ "parallel NUL reader finishes" {
+  local REPLY="" worker_pid=""
+  _zdx_test_session_probe_self || return 1
+  worker_pid=$REPLY
+  _zdx_test_session_probe_publish "$worker_pid" || return 1
   printf 'entry\0' > "$BATS_TEST_TMPDIR/entries"
   run zsh -f -c 'emulate -R zsh
     while IFS= read -r -d "" entry; do
@@ -54,11 +251,13 @@ _zdx_test_parallel_session_probe() {
   [ "$output" = entry ]
 }
 BATS
+  } > "$ZDX_TEST_SESSION_PROBE"
   # No outer BATS_* variable reaches the nested suite. Keep the mock-bin
   # first on PATH, so this never acquires a real external service.
   cat > "$TEST_TEMP_DIR/session-runner" <<'SH'
 #!/bin/sh
 exec env -i HOME="$HOME" PATH="$ZDX_TEST_NESTED_PATH" TERM="$TERM" LANG="$LANG" TMPDIR="$TMPDIR" \
+  ZDX_TEST_SESSION_RECEIPT="$ZDX_TEST_SESSION_RECEIPT" \
   SHELL=/bin/sh BATS_JOBS=2 just --justfile "$ZDX_TEST_SESSION_JUSTFILE" \
   test --tap "$ZDX_TEST_SESSION_PROBE"
 SH

@@ -1942,6 +1942,15 @@ or a backdoor.
   paths on Linux, and a bounded controller checks signal forwarding on both
   supported host families. Without either session tool the runner warns and
   terminal runs retain the stop risk (`sandbox_isolation.bats`).
+- Linux PTY test cleanup uses a private receipt of the actual nested worker's
+  PID, process group, session and kernel start identity. Complete publication,
+  private file/directory metadata and two targeted live identity checks precede
+  a signal to that recorded group; global process-argument matching is not an
+  ownership check. Missing, replaced or ambiguous evidence fails closed, and
+  an exited worker does not authorize a recycled numeric group. Mocked unit
+  boundaries send no signals; actual PTY cases cover worker publication. The
+  final userspace identity check and kernel signal still have a race; this
+  control does not promise atomic ownership or complete descendant exit.
 - The shared test sandbox clears inherited package-manager control variables
   and every `GIT_*`, `UV_*`, and `PYTHON*` variable, so a contributor's Git
   configuration, hooks, and identity, and the uv and Python settings that a
