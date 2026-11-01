@@ -155,6 +155,19 @@ The shared fixtures are in `core_options_test_helper.bash`.
 | `core_option_boundaries.bats` | Actual cold VPN help under `KSH_ARRAYS` and `emulate sh`; identity-hook override execution outside owned preparation, preserving deliberate session and regex changes |
 | `scaffold.bats` | `just surfaces` rows for complete suites, invalid suites and options, a removed or orphaned surface with its file hint, and `--strict`; `just new-command` dry runs that write nothing, wired uniform surfaces with only the manual ones left, a generated command that runs through the suite runtime, list-style suites, and refusals of an existing command, invalid names, modules, metadata, or text, and an ambiguous or unrecognized target region |
 
+`lazy_loading.bats` also repairs an actual partial eager load and a test-owned
+core parse failure after real installed-plugin activation. Retrying preserves
+real command bodies, API constants, plugin membership and the source counter.
+Its eager/lazy controls cover unique registered module loads, unregistered and
+linked exclusions, and regular user-local `zdir`/`wsj` parity.
+`user_code_trust.bats` checks warning-and-continuation after failed trusted
+overrides, retained override definitions after lazy loading, wrapper completion
+registration, quiet successful overrides and fatal configuration failures.
+`plugins_api.bats` rejects a readonly service list folded into one element,
+while the genuine compatible API remains valid across repaired startup.
+`zdx_widgets.bats` covers the explicitly loaded eager widget backend and the
+wrapper's deferred first-use path to the same module.
+
 ### Platform portability coverage
 
 `platform_paths.bats` also checks the core capture and master picker against

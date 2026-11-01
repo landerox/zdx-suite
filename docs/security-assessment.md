@@ -1601,6 +1601,12 @@ executes arbitrary code in the user's shell.
   ownership.
 - Loader diagnostics preserve useful plugin stderr instead of hiding every
   source-time error.
+- Failed trusted overrides warn and allow startup to finish, retaining their
+  recorded function definitions for lazy reapplication. Trusted configuration
+  failure remains fatal. A repaired partial core source preserves established
+  API constants, real commands and discovered/loaded plugin records instead
+  of replaying accepted plugin entrypoints. Neither behavior rolls back prior
+  user-code shell effects; loading and user-code trust tests cover the boundary.
 - Plugin removal follows the exact-plan, revalidation, and quarantine model
   described under T3.
 - The plugin contract requires namespacing and source safety.
@@ -2166,13 +2172,17 @@ installer integrity metadata also require periodic human review.
 GitHub may disable scheduled workflows after prolonged inactivity in a public
 repository, so maintainers must also verify that each maintenance schedule
 remains enabled.
-The core loader registers the lazy `zdir` name and its `wsj` alias only when
-an ignored user-local `functions/zdir.zsh` exists. Eager loading
-(`ZDX_EAGER_LOAD=1` or `ZDX_LAZY_LOAD=0`) sources every top-level
-`functions/*.zsh` file, so any ignored local file there runs as unreviewed
-local code. Such files do not ship in the release artifact and are outside
-repository review and assurance; release documentation must not present them
-as included functionality.
+The core derives eager entrypoints from the lazy registry and sources each
+distinct file once. Eager mode also loads the shipped widget backend explicitly
+named by the wrapper's first-use loader. Selected source files must be regular,
+readable and non-symlink; a refused required file stops initialization.
+Unregistered top-level files and retired `zclean` remain excluded.
+Both modes enable `zdir` and its `wsj` alias only for a readable,
+regular, non-symlink user-local `functions/zdir.zsh`. That optional ignored
+file is unreviewed executable local code, does not ship in the release
+artifact, and remains outside repository review and assurance. Loading tests
+cover membership, unique source, link refusal and optional-command parity;
+release documentation must not present user-local code as shipped functionality.
 
 ### T14. Unbounded local diagnostic execution
 

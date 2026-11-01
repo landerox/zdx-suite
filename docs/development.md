@@ -601,12 +601,32 @@ from a new shell; `ZDX_DIRECT_COMMANDS=0` limits the stubs to the suite menus
 and the `zdx` commands. Directly sourcing a suite in a clean Zsh process MUST
 not depend on another suite having been invoked first.
 
+Eager loading MUST derive public entrypoints from the lazy registry and source
+each distinct entrypoint once. It also loads the shipped `zdx-widgets.zsh`
+backend named by the wrapper's first-use widget loader. Every selected source
+file MUST be readable, regular and non-symlink. Arbitrary top-level
+`functions/*.zsh` files and the retired `zclean` implementation are not members.
+A readable, regular, non-symlink user-local `functions/zdir.zsh` enables `zdir`
+and its `wsj` alias in either mode. Owned builtins use the isolated owned-source
+helper; user-local code keeps the transparent source boundary described above.
+
+Only completed core initialization sets `_ZDX_FUNCTIONS_SOURCED`. A repaired
+failed initialization MUST be retryable without replacing already loaded real
+commands with stubs, losing discovered or loaded plugin state, or sourcing an
+already loaded plugin again. Compatible established plugin API constants MUST
+survive reentry; incompatible API state MUST fail initialization. Completed
+initialization remains a silent no-op when sourced again.
+
 `overrides.zsh` loads after the stubs, so an override of a public command
 replaces its stub. The core records every function that `overrides.zsh`
 defines or replaces, and the lazy dispatcher applies those definitions again
 right after it loads a suite, so an override wins in a lazy shell as it does
-under eager loading. A suite file sourced outside the dispatcher is not
-covered.
+under eager loading. An ordinary failure while sourcing trusted overrides
+MUST still record those definitions, warn on stderr, and allow startup to
+complete. Its earlier shell effects remain; this is not rollback. An ordinary
+failure in trusted `config.zsh` instead aborts initialization with its source
+status and without a completed-core sentinel. A suite file sourced outside
+the dispatcher is not covered by override reapplication.
 
 ## Performance and observability
 

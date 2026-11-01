@@ -537,3 +537,276 @@ ZSH
   ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
 }
+
+# Copy only owned suite families and core entrypoints. User-local top-level
+# modules are added explicitly by the cases that exercise their registration.
+_loading_recovery_copy() {
+  LOADING_COPY="$TEST_TEMP_DIR/loading-copy"
+  export LOADING_COPY
+  mkdir -p "$LOADING_COPY/functions"
+  cp "$TEST_SUITE_ROOT/functions.zsh" "$LOADING_COPY/functions.zsh"
+  local suite core_file
+  for suite in dev env file git py sys vpn ws; do
+    cp "$TEST_SUITE_ROOT/functions/$suite-menu.zsh" \
+      "$TEST_SUITE_ROOT/functions/$suite-common.zsh" "$LOADING_COPY/functions/"
+    if [ -d "$TEST_SUITE_ROOT/functions/$suite" ]; then
+      cp -R "$TEST_SUITE_ROOT/functions/$suite" "$LOADING_COPY/functions/"
+    fi
+  done
+  for core_file in common menu plugins status doctor version widgets; do
+    cp "$TEST_SUITE_ROOT/functions/zdx-$core_file.zsh" "$LOADING_COPY/functions/"
+  done
+}
+
+@test "loading recovery: repaired partial eager load keeps already loaded commands on lazy retry" {
+  _loading_recovery_copy
+  cp "$LOADING_COPY/functions/file-menu.zsh" "$TEST_TEMP_DIR/file-menu.original"
+  printf '%s\n' 'return 7' > "$LOADING_COPY/functions/file-menu.zsh"
+  export LOADING_FILE_ORIGINAL="$TEST_TEMP_DIR/file-menu.original"
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    ZDX_EAGER_LOAD=1
+    source "$LOADING_COPY/functions.zsh" > "$HOME/first.out" 2> "$HOME/first.err"
+    first_rc=$?
+    [[ "$first_rc" == 7 && ! -n "${_ZDX_FUNCTIONS_SOURCED-}" ]] || exit 91
+    env-menu --help > /dev/null 2>&1 || exit 92
+    local loaded_body="${functions[env-menu]}"
+    command cp -- "$LOADING_FILE_ORIGINAL" "$LOADING_COPY/functions/file-menu.zsh" || exit 93
+    unset ZDX_EAGER_LOAD
+    ZDX_LAZY_LOAD=1
+    source "$LOADING_COPY/functions.zsh" > "$HOME/retry.out" 2> "$HOME/retry.err"
+    retry_rc=$?
+    print -r -- "first=$first_rc retry=$retry_rc"
+    [[ "$retry_rc" == 0 ]] || exit 94
+    [[ "${functions[env-menu]}" == "$loaded_body" ]] || exit 95
+    env-menu --help > /dev/null 2>&1 || exit 96
+    file-menu --help > /dev/null 2>&1 || exit 97
+    print -r -- preserved
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'first=7 retry=0\npreserved' ]
+}
+
+@test "loading recovery: failed overrides followed by repaired source keep loaded commands and API state" {
+  mkdir -p "$HOME/.config/zdx"
+  printf '%s\n' 'return 7' > "$HOME/.config/zdx/overrides.zsh"
+  chmod -- 600 "$HOME/.config/zdx/overrides.zsh"
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    source "$1/functions.zsh" > "$HOME/first.out" 2> "$HOME/first.err"
+    first_rc=$?
+    zdx-status --help > /dev/null 2>&1 || exit 91
+    local loaded_body="${functions[zdx-status]}"
+    local api_value="$ZDX_PLUGIN_API" services="${(j:,:)_ZDX_PLUGIN_API_SERVICES}"
+    print -r -- : > "$HOME/.config/zdx/overrides.zsh"
+    source "$1/functions.zsh" > "$HOME/retry.out" 2> "$HOME/retry.err"
+    retry_rc=$?
+    print -r -- "first=$first_rc retry=$retry_rc"
+    [[ "$retry_rc" == 0 && "${_ZDX_FUNCTIONS_SOURCED-}" == 1 ]] || exit 92
+    [[ "${functions[zdx-status]}" == "$loaded_body" ]] || exit 93
+    [[ "$ZDX_PLUGIN_API" == "$api_value" && "${(j:,:)_ZDX_PLUGIN_API_SERVICES}" == "$services" ]] || exit 94
+    zdx-status --help > /dev/null 2>&1 || exit 95
+    print -r -- preserved
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'first=0 retry=0\npreserved' ]
+}
+
+@test "loading recovery: a completed source is a silent no-op preserving real commands" {
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    source "$1/functions.zsh" || exit 91
+    zdx-status --help > /dev/null 2>&1 || exit 92
+    local loaded_body="${functions[zdx-status]}"
+    source "$1/functions.zsh" > "$HOME/repeat.out" 2> "$HOME/repeat.err" || exit 93
+    [[ ! -s "$HOME/repeat.out" && ! -s "$HOME/repeat.err" ]] || exit 94
+    [[ "${functions[zdx-status]}" == "$loaded_body" ]] || exit 95
+    zdx-status --help > /dev/null 2>&1 || exit 96
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "loading recovery: eager modes ignore unregistered top-level modules" {
+  _loading_recovery_copy
+  printf '%s\n' 'typeset -g ZDX_UNLISTED_SOURCE_RAN=1' \
+    'zextra() { print -r -- unregistered; }' \
+    > "$LOADING_COPY/functions/unregistered-extra.zsh"
+  chmod -- 666 "$LOADING_COPY/functions/unregistered-extra.zsh"
+  local mode
+  for mode in lazy eager eager-compat; do
+    run zsh -f -c '
+      emulate -R zsh
+      cd "$HOME" || exit 90
+      unset TEST_TEMP_DIR BATS_TEST_DIRNAME ZDX_EAGER_LOAD ZDX_LAZY_LOAD
+      case "$1" in
+        eager) ZDX_EAGER_LOAD=1 ;;
+        eager-compat) ZDX_LAZY_LOAD=0 ;;
+      esac
+      source "$LOADING_COPY/functions.zsh" || exit 91
+      print -r -- "ran=${ZDX_UNLISTED_SOURCE_RAN-absent} function=${+functions[zextra]}"
+    ' _ "$mode"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'ran=absent function=0' ]
+  done
+}
+
+@test "loading recovery: eager modes never execute symlinked built-in entrypoints" {
+  _loading_recovery_copy
+  printf '%s\n' 'typeset -g ZDX_LINKED_SOURCE_RAN=1' \
+    'env-menu() { print -r -- linked-body; }' > "$TEST_TEMP_DIR/linked-env.zsh"
+  mv "$LOADING_COPY/functions/env-menu.zsh" "$TEST_TEMP_DIR/env-menu.original"
+  ln -s "$TEST_TEMP_DIR/linked-env.zsh" "$LOADING_COPY/functions/env-menu.zsh"
+  local mode
+  for mode in lazy eager eager-compat; do
+    run zsh -f -c '
+      emulate -R zsh
+      cd "$HOME" || exit 90
+      unset TEST_TEMP_DIR BATS_TEST_DIRNAME ZDX_EAGER_LOAD ZDX_LAZY_LOAD
+      case "$1" in
+        eager) ZDX_EAGER_LOAD=1 ;;
+        eager-compat) ZDX_LAZY_LOAD=0 ;;
+      esac
+      source "$LOADING_COPY/functions.zsh" > "$HOME/source.out" 2> "$HOME/source.err"
+      [[ ! -n "${ZDX_LINKED_SOURCE_RAN-}" ]] || exit 91
+      [[ "${functions[env-menu]-}" != *linked-body* ]] || exit 92
+      print -r -- not-executed
+    ' _ "$mode"
+    [ "$status" -eq 0 ]
+    [ "$output" = not-executed ]
+  done
+}
+
+@test "loading recovery: user-local zdir has the same alias arguments and source options in every mode" {
+  _loading_recovery_copy
+  printf '%s\n' 'setopt glob_dots' \
+    'zdir() { printf "arg=<%s>\n" "$@"; }' > "$LOADING_COPY/functions/zdir.zsh"
+  printf '%s\n' 'zclean() { print -r -- retired; }' > "$LOADING_COPY/functions/zclean.zsh"
+  local mode
+  for mode in lazy eager eager-compat; do
+    run zsh -f -c '
+      emulate -R zsh
+      cd "$HOME" || exit 90
+      unset TEST_TEMP_DIR BATS_TEST_DIRNAME ZDX_EAGER_LOAD ZDX_LAZY_LOAD
+      case "$1" in
+        eager) ZDX_EAGER_LOAD=1 ;;
+        eager-compat) ZDX_LAZY_LOAD=0 ;;
+      esac
+      source "$LOADING_COPY/functions.zsh" || exit 91
+      [[ "${aliases[wsj]-}" == zdir ]] || exit 92
+      (( ${+_ZDX_LAZY_FILES[zdir]} && ! ${+functions[zclean]} )) || exit 93
+      zdir "one two" --literal || exit 94
+      [[ -o glob_dots ]] || exit 95
+    ' _ "$mode"
+    [ "$status" -eq 0 ]
+    [ "$output" = $'arg=<one two>\narg=<--literal>' ]
+  done
+}
+
+@test "loading recovery: a linked user-local zdir stays unavailable in every mode" {
+  _loading_recovery_copy
+  printf '%s\n' 'typeset -g ZDX_LINKED_ZDIR_RAN=1' \
+    'zdir() { print -r -- linked-zdir; }' > "$TEST_TEMP_DIR/linked-zdir.zsh"
+  ln -s "$TEST_TEMP_DIR/linked-zdir.zsh" "$LOADING_COPY/functions/zdir.zsh"
+  local mode
+  for mode in lazy eager eager-compat; do
+    run zsh -f -c '
+      emulate -R zsh
+      cd "$HOME" || exit 90
+      unset TEST_TEMP_DIR BATS_TEST_DIRNAME ZDX_EAGER_LOAD ZDX_LAZY_LOAD
+      case "$1" in
+        eager) ZDX_EAGER_LOAD=1 ;;
+        eager-compat) ZDX_LAZY_LOAD=0 ;;
+      esac
+      source "$LOADING_COPY/functions.zsh" || exit 91
+      (( ! ${+functions[zdir]} && ! ${+_ZDX_LAZY_FILES[zdir]} && ! ${+aliases[wsj]} )) || exit 92
+      [[ ! -n "${ZDX_LINKED_ZDIR_RAN-}" ]] || exit 93
+    ' _ "$mode"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+  done
+}
+
+@test "loading recovery: eager loading sources a registered suite once despite its direct command rows" {
+  _loading_recovery_copy
+  cp "$LOADING_COPY/functions/env-menu.zsh" "$TEST_TEMP_DIR/env-menu.original"
+  {
+    printf '%s\n' 'typeset -gi ZDX_ENV_SOURCE_COUNT=$(( ${ZDX_ENV_SOURCE_COUNT:-0} + 1 ))'
+    cat "$TEST_TEMP_DIR/env-menu.original"
+  } > "$LOADING_COPY/functions/env-menu.zsh"
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    ZDX_EAGER_LOAD=1
+    source "$LOADING_COPY/functions.zsh" || exit 91
+    env-menu --help > /dev/null 2>&1 || exit 92
+    env-menu --help > /dev/null 2>&1 || exit 93
+    print -r -- "sources=$ZDX_ENV_SOURCE_COUNT"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = sources=1 ]
+}
+
+@test "loading recovery: an installed plugin survives repaired pre-sentinel source parse failure" {
+  _loading_recovery_copy
+  cp "$LOADING_COPY/functions.zsh" "$TEST_TEMP_DIR/core.pristine"
+  export LOADING_PRISTINE_CORE="$TEST_TEMP_DIR/core.pristine"
+  # Fault injection only in the disposable core copy: Zsh parses this after
+  # the real runtime has activated the installed plugin, before its sentinel.
+  awk '
+    { print }
+    $0 == "_zdx_load_plugins" { print "}"; seen++ }
+    END { if (seen != 1) exit 95 }
+  ' "$LOADING_PRISTINE_CORE" > "$LOADING_COPY/functions.zsh"
+  mkdir -p "$HOME/.config/zdx/plugins/recovery"
+  chmod -- 700 "$HOME/.config" "$HOME/.config/zdx" \
+    "$HOME/.config/zdx/plugins" "$HOME/.config/zdx/plugins/recovery"
+  cat > "$HOME/.config/zdx/plugins/recovery/recovery-menu.zsh" <<'ZSH'
+# A test-only counter observes every source, including a guarded second one.
+typeset -gi RECOVERY_SOURCE_COUNT=$(( ${RECOVERY_SOURCE_COUNT:-0} + 1 ))
+if [[ -n "${_RECOVERY_MENU_SOURCED:-}" ]]; then
+  return 0
+fi
+recovery-menu() { printf "recovery:<%s>\n" "$@"; }
+setopt glob_dots
+typeset -g _RECOVERY_MENU_SOURCED=1
+ZSH
+  chmod -- 600 "$HOME/.config/zdx/plugins/recovery/recovery-menu.zsh"
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    ZDX_EAGER_LOAD=1
+    source "$LOADING_COPY/functions.zsh" > "$HOME/first.out" 2> "$HOME/first.err"
+    first_rc=$?
+    [[ "$first_rc" != 0 && -s "$HOME/first.err" && ! -n "${_ZDX_FUNCTIONS_SOURCED-}" ]] || exit 91
+    [[ "$(<"$HOME/first.err")" == *"parse error"* ]] || exit 103
+    [[ "${(j:,:)ZDX_LOADED_PLUGINS}" == recovery && "${(j:,:)ZDX_DISCOVERED_PLUGINS}" == recovery ]] || exit 92
+    [[ "$RECOVERY_SOURCE_COUNT" == 1 && -o glob_dots ]] || exit 93
+    recovery-menu before || exit 94
+    local loaded_body="${functions[recovery-menu]}"
+    local api_value="$ZDX_PLUGIN_API" services="${(j:,:)_ZDX_PLUGIN_API_SERVICES}"
+    command cp -- "$LOADING_PRISTINE_CORE" "$LOADING_COPY/functions.zsh" || exit 95
+    unset ZDX_EAGER_LOAD
+    ZDX_LAZY_LOAD=1
+    source "$LOADING_COPY/functions.zsh" > "$HOME/retry.out" 2> "$HOME/retry.err"
+    retry_rc=$?
+    print -r -- "retry=$retry_rc sources=$RECOVERY_SOURCE_COUNT loaded=${(j:,:)ZDX_LOADED_PLUGINS} discovered=${(j:,:)ZDX_DISCOVERED_PLUGINS}"
+    [[ "$retry_rc" == 0 && "${_ZDX_FUNCTIONS_SOURCED-}" == 1 ]] || exit 96
+    [[ "$RECOVERY_SOURCE_COUNT" == 1 && "${functions[recovery-menu]}" == "$loaded_body" ]] || exit 97
+    [[ "${(j:,:)ZDX_LOADED_PLUGINS}" == recovery && "${(j:,:)ZDX_DISCOVERED_PLUGINS}" == recovery ]] || exit 98
+    [[ "$ZDX_PLUGIN_API" == "$api_value" && "${(j:,:)_ZDX_PLUGIN_API_SERVICES}" == "$services" ]] || exit 99
+    (( ! ${+_ZDX_PLUGIN_STUBS[recovery-menu]} )) || exit 100
+    [[ -o glob_dots ]] || exit 101
+    recovery-menu "two words" --literal || exit 102
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'recovery:<before>\nretry=0 sources=1 loaded=recovery discovered=recovery\nrecovery:<two words>\nrecovery:<--literal>' ]
+}
