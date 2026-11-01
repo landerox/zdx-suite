@@ -1099,6 +1099,20 @@ and HUP to BATS' process group and waits for BATS to exit. Without either
 session tool, it warns and runs BATS directly; parallel terminal runs can
 still stop on those hosts. A plain `bats` invocation does not use this runner.
 
+The Linux PTY probes record the actual nested worker's PID, process group,
+session and kernel start identity before the NUL reader starts. A private,
+complete receipt and its ready directory commit that observation. Cleanup
+checks only the recorded worker, twice, before signaling its group; it rejects
+uncommitted or unsafe receipts, changed identities and the outer test's group
+or session. It never discovers cleanup targets through global process arguments.
+A gone worker grants no authority to signal a surviving numeric group, and
+these userspace checks do not eliminate the final check-to-signal race.
+`sandbox_cleanup.bats` exercises the coordinator with non-forwarding process
+and signal boundaries; the existing normal and Perl-fallback PTY cases exercise
+actual Linux worker publication. The portable unit cases do not require
+`/proc` and retain the suite-wide Bash 4.1 minimum; native process observation
+stays in the Linux-only probe.
+
 The suite is safe to run in parallel because no test shares state with
 another: each one gets its own sandbox `HOME`, `TMPDIR`, and mock directory
 from `test_helper.bash`, no test uses `setup_file` or opens a real network
