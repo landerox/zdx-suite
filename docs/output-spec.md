@@ -289,10 +289,19 @@ captured.
 | under 10 s | one decimal, `0.4s`, `9.9s` |
 | 10 s to under 60 s | whole seconds, `24s` |
 | 1 min to under 1 h | `1m 18s` |
-| 1 h or more | `1h 02m` |
+| 1 h to under 1 day | `1h 02m` |
+| 1 day or more | `1d 02h` |
 
-Rounding never produces `60s` or `60m`, and `LC_NUMERIC` cannot change the
-decimal point. Telemetry records keep their own machine format.
+Rounding may promote a value to the next display range; it never produces
+`60s`, `60m`, or `24h 00m`. Hours and minutes retain the existing rounding
+through whole seconds and then whole minutes. When those minutes reach one
+day, the day form applies, including `1d 00h` from `86369.5` seconds.
+In the day form, round the original elapsed seconds directly to the nearest
+whole hour, with halfway values rounded up, then split those hours into days
+and a zero-padded hour remainder. For example, `88199.5` seconds is `1d 00h`,
+`88200` is `1d 01h`, and `171000` is `2d 00h`.
+`LC_NUMERIC` cannot change the decimal point. Telemetry records keep their own
+machine format.
 
 ## Counted nouns
 

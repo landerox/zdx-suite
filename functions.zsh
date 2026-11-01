@@ -378,16 +378,16 @@ _zdx_step_active() {
   (( ${_ZDX_STEP_DEPTH:-0} > 0 ))
 }
 
-# REPLY: one compact duration such as 0.4s, 24s, 1m 18s, or 1h 02m. Integer
-# arithmetic keeps LC_NUMERIC from changing the decimal point. Status 2 means
-# the input is not an unsigned decimal number of seconds.
+# REPLY: one compact duration such as 0.4s, 24s, 1m 18s, 1h 02m, or 1d 02h.
+# Integer arithmetic keeps LC_NUMERIC from changing the decimal point. Status
+# 2 means the input is not an unsigned decimal number of seconds.
 _zdx_format_duration() {
   emulate -L zsh
   unsetopt force_float
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
   local value="${1-}"
-  local -i tenths=0 seconds=0 minutes=0
+  local -i tenths=0 seconds=0 minutes=0 hours=0
   REPLY=""
   [[ ${#value} -le 32 \
     && "$value" =~ '^[0-9]+([.][0-9]*)?([eE][-+]?[0-9]+)?$' ]] || return 2
@@ -406,7 +406,13 @@ _zdx_format_duration() {
     REPLY="$(( seconds / 60 ))m ${(l:2::0:)$(( seconds % 60 ))}s"
   else
     (( minutes = (seconds + 30) / 60 ))
-    REPLY="$(( minutes / 60 ))h ${(l:2::0:)$(( minutes % 60 ))}m"
+    if (( minutes < 1440 )); then
+      REPLY="$(( minutes / 60 ))h ${(l:2::0:)$(( minutes % 60 ))}m"
+    else
+      # Round the original value directly, without compounding minute rounding.
+      (( hours = value / 3600.0 + 0.5 ))
+      REPLY="$(( hours / 24 ))d ${(l:2::0:)$(( hours % 24 ))}h"
+    fi
   fi
 }
 

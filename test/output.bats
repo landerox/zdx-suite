@@ -42,16 +42,37 @@ teardown() {
     local -a cases=(
       0 0.0s 0.05 0.1s 1.7e-05 0.0s 3. 3.0s 9.94 9.9s 9.95 10s 24.3 24s
       59.4 59s 59.5 "1m 00s" 78 "1m 18s" 3599.4 "59m 59s" 3599.5 "1h 00m"
-      3630 "1h 01m" 360000 "100h 00m"
+      3630 "1h 01m" 360000 "4d 04h" 1e9 "11574d 02h"
     )
     local input expected
     for input expected in "${cases[@]}"; do
       _zdx_format_duration "$input" || { print -r -- "rc:$input"; return 1; }
       [[ "$REPLY" == "$expected" ]] || { print -r -- "bad:$input:$REPLY"; return 1; }
     done
-    for input in "" -1 1,5 abc 0x10 1.2.3 " 1" 1e400; do
+    for input in "" -1 1,5 abc 0x10 1.2.3 " 1" 1e400 1000000001; do
       _zdx_format_duration "$input" && { print -r -- "accepted:$input"; return 1; }
       [[ -z "$REPLY" ]] || return 1
+    done
+    print -r -- ok
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "output: durations promote rounded days and round day hours once" {
+  run run_zsh '
+    cd "$HOME" || return 1
+    local -a cases=(
+      86369.49 "23h 59m" 86369.5 "1d 00h" 86370 "1d 00h"
+      86399.49 "1d 00h" 86399.5 "1d 00h" 86400 "1d 00h"
+      88169.49 "1d 00h" 88169.5 "1d 00h" 88199.5 "1d 00h"
+      88200 "1d 01h" 170969.5 "1d 23h" 170999.5 "1d 23h"
+      171000 "2d 00h" 172799.5 "2d 00h" 172800 "2d 00h"
+    )
+    local input expected
+    for input expected in "${cases[@]}"; do
+      _zdx_format_duration "$input" || { print -r -- "rc:$input"; return 1; }
+      [[ "$REPLY" == "$expected" ]] || { print -r -- "bad:$input:$REPLY"; return 1; }
     done
     print -r -- ok
   '
