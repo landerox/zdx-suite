@@ -23,8 +23,8 @@ _zdx_source_builtin() {
   builtin source "$1"
 }
 
-# Classifies only shipped modules; this does not change the eager discovery
-# set. Unknown and ignored local files still use the transparent source path.
+# Classifies shipped modules for isolated loading. The optional user-local
+# zdir implementation keeps the transparent extension source path.
 _zdx_builtin_file_owned() {
   emulate -L zsh
   [[ "${1:h}" == "$_ZDX_FUNCTIONS_DIR" && ! -L "$1" ]] || return 1
@@ -1862,7 +1862,15 @@ typeset -g _ZDX_FUNCTIONS_DIR="$_zdx_core_dir/functions"
 # The release line that zdx --version and zdx status report.
 if [[ -f "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh" \
   && ! -L "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh" ]]; then
-  _zdx_source_builtin "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh"
+  _zdx_source_builtin "$_ZDX_FUNCTIONS_DIR/zdx-version.zsh" || {
+    typeset -i _zdx_source_rc=$?
+    print -u2 -r -- "zdx: failed to load zdx-version.zsh"
+    {
+      return $_zdx_source_rc 2>/dev/null || exit $_zdx_source_rc
+    } always {
+      unset _zdx_source_rc _zdx_core_dir
+    }
+  }
 fi
 
 # Every public command and the loader that defines it: each suite's menu, then
@@ -2005,6 +2013,14 @@ typeset -gA _ZDX_LAZY_FILES=(
   zdx-status zdx-status.zsh
 )
 
+# zdir is a compatibility name for an ignored user-local implementation.
+# Both modes expose it and its wsj alias only when its file can be loaded.
+if [[ -f "$_ZDX_FUNCTIONS_DIR/zdir.zsh" && ! -L "$_ZDX_FUNCTIONS_DIR/zdir.zsh" \
+  && -r "$_ZDX_FUNCTIONS_DIR/zdir.zsh" ]]; then
+  _ZDX_LAZY_FILES[zdir]=zdir.zsh
+  alias wsj='zdir'
+fi
+
 # Check if eager loading is requested or if we are in a test sandbox
 typeset -i _zdx_eager_load=0
 if [[ "${ZDX_EAGER_LOAD:-}" == "1" || "${ZDX_LAZY_LOAD:-}" == "0" || -n "${TEST_TEMP_DIR:-}" || -n "${BATS_TEST_DIRNAME:-}" ]]; then
@@ -2012,45 +2028,44 @@ if [[ "${ZDX_EAGER_LOAD:-}" == "1" || "${ZDX_LAZY_LOAD:-}" == "0" || -n "${TEST_
 fi
 
 if (( _zdx_eager_load )); then
-  # Eager Loading: Source all top-level .zsh files immediately (fallback / test mode)
-  if [[ -d "$_ZDX_FUNCTIONS_DIR" ]]; then
-    typeset _zdx_function_file
-    typeset -a _zdx_function_files=()
-    () {
-      emulate -L zsh
-      _zdx_function_files=("$_ZDX_FUNCTIONS_DIR"/*.zsh(N))
-    }
-    for _zdx_function_file in "${_zdx_function_files[@]}"; do
-      if [[ -f "$_zdx_function_file" && -r "$_zdx_function_file" ]]; then
-        if _zdx_builtin_file_owned "$_zdx_function_file"; then
-          _zdx_source_builtin "$_zdx_function_file"
-        else
-          builtin source "$_zdx_function_file"
-        fi || {
-          typeset -i _zdx_source_rc=$?
-          print -u2 -r -- \
-            "zdx: failed to load ${_zdx_function_file:t}"
-          unset _zdx_core_dir _zdx_eager_load _zdx_function_file _zdx_function_files
-          {
-            return $_zdx_source_rc 2>/dev/null || exit $_zdx_source_rc
-          } always {
-            unset _zdx_source_rc
-          }
+  # Source each registered module once; its entrypoint owns support modules.
+  typeset _zdx_function_file
+  typeset -a _zdx_function_files=()
+  () {
+    emulate -L zsh
+    local LC_ALL=C
+    # The wrapper loads the same shipped widget backend on first lazy use.
+    _zdx_function_files=("${(@v)_ZDX_LAZY_FILES}" zdx-widgets.zsh)
+    _zdx_function_files=("${(@ou)_zdx_function_files}")
+  }
+  for _zdx_function_file in "${_zdx_function_files[@]}"; do
+    _zdx_function_file="$_ZDX_FUNCTIONS_DIR/$_zdx_function_file"
+    if [[ -f "$_zdx_function_file" && ! -L "$_zdx_function_file" \
+      && -r "$_zdx_function_file" ]]; then
+      if _zdx_builtin_file_owned "$_zdx_function_file"; then
+        _zdx_source_builtin "$_zdx_function_file"
+      else
+        builtin source "$_zdx_function_file"
+      fi || {
+        typeset -i _zdx_source_rc=$?
+        print -u2 -r -- \
+          "zdx: failed to load ${_zdx_function_file:t}"
+        unset _zdx_core_dir _zdx_eager_load _zdx_function_file _zdx_function_files
+        {
+          return $_zdx_source_rc 2>/dev/null || exit $_zdx_source_rc
+        } always {
+          unset _zdx_source_rc
         }
-      fi
-    done
-    unset _zdx_function_file _zdx_function_files
-  fi
+      }
+    else
+      print -u2 -r -- "zdx: failed to load ${_zdx_function_file:t}"
+      unset _zdx_core_dir _zdx_eager_load _zdx_function_file _zdx_function_files
+      return 1 2>/dev/null || exit 1
+    fi
+  done
+  unset _zdx_function_file _zdx_function_files
 else
   # Lazy Loading: Register stubs for public commands to avoid shell startup penalties
-
-  # zdir is a compatibility name for an ignored user-local implementation.
-  # Register it, and its wsj alias below, only when that file is present, so
-  # a fresh clone exposes no command that cannot resolve.
-  if [[ -f "$_ZDX_FUNCTIONS_DIR/zdir.zsh" && ! -L "$_ZDX_FUNCTIONS_DIR/zdir.zsh" \
-    && -r "$_ZDX_FUNCTIONS_DIR/zdir.zsh" ]]; then
-    _ZDX_LAZY_FILES[zdir]=zdir.zsh
-  fi
 
   # Only preparation owns regex state and one-based shell semantics.
   _zdx_lazy_prepare() {
@@ -2103,14 +2118,11 @@ else
         && "$_zdx_lazy_name" != "${_zdx_lazy_file%.zsh}" ]]; then
         continue
       fi
-      _zdx_register_lazy_stub core "$_zdx_lazy_name"
+      # A partial startup may already have loaded this command or its stub.
+      (( ${+functions[$_zdx_lazy_name]} )) \
+        || _zdx_register_lazy_stub core "$_zdx_lazy_name"
     done
   }
-
-  # Eagerly register aliases that point to lazy-loaded functions
-  if (( ${+_ZDX_LAZY_FILES[zdir]} )); then
-    alias wsj='zdir'
-  fi
 fi
 
 # The plugin loader follows the suites: eager shells load plugins at startup.
@@ -2122,7 +2134,6 @@ unset _zdx_core_dir _zdx_eager_load
 # their entrypoint scripts safely. The loader state is global because Oh My
 # Zsh sources this file from inside its _omz_source function.
 typeset -ga ZDX_LOADED_PLUGINS
-ZDX_LOADED_PLUGINS=()
 
 # Private: REPLY is the canonical plugin root. The configured path may reach it
 # through trusted aliases (_zdx_resolve_trusted_dir), such as HOME below a
@@ -2277,30 +2288,58 @@ _zdx_plugin_namespace_verify() {
   return 1
 }
 
-# The plugin API version and its closed list of core services. A plugin that
-# needs a service checks ZDX_PLUGIN_API first; docs/plugins.md describes each
-# service, and test/plugins_api.bats keeps the list and the core in step.
-typeset -gr ZDX_PLUGIN_API=1
-typeset -gra _ZDX_PLUGIN_API_SERVICES=(
-  _zdx_ui_heading _zdx_ui_section _zdx_ui_label _zdx_ui_say _zdx_ui_table
-  _zdx_ui_step_banner _zdx_ui_step_result _zdx_ui_step_summary
-  _zdx_count_noun _zdx_format_duration
-  _zdx_run_with_timeout _zdx_run_captured
-  _zdx_picker_capture _zdx_confirm_prompt
-  _zdx_fzf_color_opts _zdx_fzf_nth_template_option _zdx_core_fzf
-  _zdx_resolve_trusted_dir _zdx_capture_parent_safe
-)
+# The read-only plugin API can already exist after a partial source failure.
+# Reuse only the exact current API; do not reassign its read-only parameters.
+() {
+  emulate -L zsh
+  unsetopt force_float
+  local -i service_index=0
+  local -a expected_services=(
+    _zdx_ui_heading _zdx_ui_section _zdx_ui_label _zdx_ui_say _zdx_ui_table
+    _zdx_ui_step_banner _zdx_ui_step_result _zdx_ui_step_summary
+    _zdx_count_noun _zdx_format_duration
+    _zdx_run_with_timeout _zdx_run_captured
+    _zdx_picker_capture _zdx_confirm_prompt
+    _zdx_fzf_color_opts _zdx_fzf_nth_template_option _zdx_core_fzf
+    _zdx_resolve_trusted_dir _zdx_capture_parent_safe
+  )
+  if (( ${+ZDX_PLUGIN_API} )); then
+    [[ "${(t)ZDX_PLUGIN_API}" == scalar* \
+      && "${(t)ZDX_PLUGIN_API}" == *readonly* \
+      && "$ZDX_PLUGIN_API" == 1 ]] || {
+      print -u2 -r -- "zdx: refusing an incompatible existing plugin API"
+      return 1
+    }
+  fi
+  if (( ${+_ZDX_PLUGIN_API_SERVICES} )); then
+    [[ "${(t)_ZDX_PLUGIN_API_SERVICES}" == array* \
+      && "${(t)_ZDX_PLUGIN_API_SERVICES}" == *readonly* ]] \
+      && (( ${#_ZDX_PLUGIN_API_SERVICES} == ${#expected_services} )) || {
+      print -u2 -r -- "zdx: refusing incompatible existing plugin API services"
+      return 1
+    }
+    for (( service_index = 1; service_index <= ${#expected_services}; ++service_index )); do
+      [[ "${_ZDX_PLUGIN_API_SERVICES[$service_index]}" \
+        == "${expected_services[$service_index]}" ]] || {
+        print -u2 -r -- "zdx: refusing incompatible existing plugin API services"
+        return 1
+      }
+    done
+  fi
+  (( ${+ZDX_PLUGIN_API} )) || typeset -gr ZDX_PLUGIN_API=1
+  (( ${+_ZDX_PLUGIN_API_SERVICES} )) \
+    || typeset -gra _ZDX_PLUGIN_API_SERVICES=("${expected_services[@]}")
+  return 0
+} || { return 1 2>/dev/null || exit 1; }
 
 # Plugins found at startup that passed the loader's name and entrypoint
 # checks, loaded or not. ZDX_LOADED_PLUGINS keeps only plugins whose
 # entrypoint was sourced successfully.
 typeset -ga ZDX_DISCOVERED_PLUGINS
-ZDX_DISCOVERED_PLUGINS=()
 # Lazy plugin stubs by function name, mapped to their plugin, and the
 # canonical plugin root they were discovered in.
 typeset -gA _ZDX_PLUGIN_STUBS
-_ZDX_PLUGIN_STUBS=()
-typeset -g _ZDX_PLUGIN_ROOT=""
+typeset -g _ZDX_PLUGIN_ROOT
 
 # Private: sources one plugin through the loader's full chain: the path and
 # ownership rule, a `zsh -n` syntax check, the path rule again immediately
@@ -2358,6 +2397,11 @@ _zdx_plugin_activation_finish() {
 _zdx_plugin_is_loaded() {
   emulate -L zsh
   (( ${ZDX_LOADED_PLUGINS[(Ie)${1-}]} ))
+}
+
+_zdx_plugin_is_discovered() {
+  emulate -L zsh
+  (( ${ZDX_DISCOVERED_PLUGINS[(Ie)${1-}]} ))
 }
 
 # Private: reply is the commands that plugin NAME declares in its optional
@@ -2527,7 +2571,8 @@ _zdx_load_plugins_prepare() {
 
 _zdx_plugin_record_discovery() {
   emulate -L zsh
-  ZDX_DISCOVERED_PLUGINS+=("$1")
+  (( ${ZDX_DISCOVERED_PLUGINS[(Ie)$1]} )) \
+    || ZDX_DISCOVERED_PLUGINS+=("$1")
 }
 
 _zdx_plugin_register_lazy() {
@@ -2561,11 +2606,16 @@ _zdx_load_plugins() {
   local -a _zdx_plugin_candidates=()
   _zdx_load_plugins_prepare || return 0
   for plugin_name in "${_zdx_plugin_candidates[@]}"; do
+    if _zdx_plugin_is_loaded "$plugin_name"; then
+      _zdx_plugin_record_discovery "$plugin_name"
+      continue
+    fi
     if (( _ZDX_EAGER_PLUGINS )); then
       _zdx_plugin_activate "$plugins_dir" "$plugin_name" \
         && _zdx_plugin_record_discovery "$plugin_name"
     else
-      _zdx_plugin_register_lazy "$plugins_dir" "$plugin_name"
+      _zdx_plugin_is_discovered "$plugin_name" \
+        || _zdx_plugin_register_lazy "$plugins_dir" "$plugin_name"
     fi
   done
   return 0
@@ -3001,7 +3051,6 @@ _timed() {
 # dispatcher applies them again after it loads a suite, so an override keeps
 # winning over the suite's own definition in a lazy shell as in an eager one.
 typeset -gA _ZDX_OVERRIDE_FUNCTIONS
-_ZDX_OVERRIDE_FUNCTIONS=()
 typeset -gA _zdx_overrides_before
 _zdx_overrides_before=()
 
@@ -3033,16 +3082,16 @@ if [[ -e "$HOME/.config/zdx/overrides.zsh" || -L "$HOME/.config/zdx/overrides.zs
   _zdx_refuse_user_file "user overrides" "$HOME/.config/zdx/overrides.zsh"
 elif [[ -f "$HOME/.config/zdx/overrides.zsh" && -r "$HOME/.config/zdx/overrides.zsh" ]]; then
   _zdx_overrides_before=("${(@kv)functions}")
-  source "$HOME/.config/zdx/overrides.zsh" || {
-    typeset -i _zdx_overrides_rc=$?
-    print -u2 -r -- "zdx: failed to load user overrides"
-    {
-      return $_zdx_overrides_rc 2>/dev/null || exit $_zdx_overrides_rc
-    } always {
-      unset _zdx_overrides_rc
-    }
+  typeset -i _zdx_overrides_rc=0
+  {
+    builtin source "$HOME/.config/zdx/overrides.zsh" || _zdx_overrides_rc=$?
+  } always {
+    _zdx_overrides_record
   }
-  _zdx_overrides_record
+  if (( _zdx_overrides_rc != 0 )); then
+    print -u2 -r -- "zdx: failed to load user overrides"
+  fi
+  unset _zdx_overrides_rc
 fi
 
 typeset -g _ZDX_FUNCTIONS_SOURCED=1

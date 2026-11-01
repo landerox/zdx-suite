@@ -2147,3 +2147,14 @@ The core **`zdx`** executable serves as the centralized orchestrator and wrapper
   module load restores its stub so the command can be retried. The master
   entrypoint loads only its adjacent, regular `zdx-common.zsh`; it has no
   current-directory or home-directory fallback.
+
+  After repairing a failed core initialization, source it again to retry.
+  Already loaded commands, plugin state and the established plugin API remain
+  intact. Eager loading uses the same declared module membership as lazy
+  loading. An optional regular user-local `functions/zdir.zsh` enables `zdir`
+  and `wsj` in both modes; arbitrary top-level modules are not loaded.
+  Trusted overrides that fail emit a warning while retaining their function
+  definitions and allowing startup to finish. A trusted configuration failure
+  stops startup with its source status. Open a fresh shell after correcting
+  overrides; completed startup is a no-op when sourced again. Earlier shell
+  effects remain.

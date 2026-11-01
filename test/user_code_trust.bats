@@ -218,3 +218,84 @@ trust_start() {
   [ "$status" -eq 0 ]
   [ "$output" = "override:git-status" ]
 }
+
+@test "trusted user code: failed overrides are recorded and startup continues after warning" {
+  printf '%s\n' \
+    'git-status() { print -r -- "override:git-status"; }' \
+    '_user_override_probe() { print -r -- "override:helper"; }' \
+    'setopt glob_dots' \
+    'false' > "$TRUST_HOME/.config/zdx/overrides.zsh"
+  chmod -- 600 "$TRUST_HOME/.config/zdx/overrides.zsh"
+  run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    source "$1/functions.zsh" > "$HOME/source.out" 2> "$HOME/source.err"
+    rc=$?
+    print -r -- "source=$rc loaded=${_ZDX_FUNCTIONS_SOURCED-absent}"
+    [[ "$rc" == 0 && ! -s "$HOME/source.out" ]] || exit 91
+    [[ "$(<"$HOME/source.err")" == *"failed to load user overrides"* ]] || exit 92
+    [[ -o glob_dots ]] || exit 93
+    git-status || exit 94
+    git-switch --help > /dev/null 2>&1 || exit 95
+    git-status || exit 96
+    _user_override_probe || exit 97
+    [[ -o glob_dots ]] || exit 98
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'source=0 loaded=1\noverride:git-status\noverride:git-status\noverride:helper' ]
+}
+
+@test "trusted user code: failed overrides do not prevent wrapper completion registration" {
+  printf '%s\n' 'return 7' > "$TRUST_HOME/.config/zdx/overrides.zsh"
+  chmod -- 600 "$TRUST_HOME/.config/zdx/overrides.zsh"
+  run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    compdef() { print -r -- "$*" >> "$HOME/completions.called"; }
+    source "$1/zdx-suite.plugin.zsh" > "$HOME/source.out" 2> "$HOME/source.err"
+    rc=$?
+    print -r -- "source=$rc wrapper=${_ZDX_PLUGIN_SOURCED-absent}"
+    [[ "$rc" == 0 && ! -s "$HOME/source.out" ]] || exit 91
+    [[ "$(<"$HOME/source.err")" == *"failed to load user overrides"* ]] || exit 92
+    [[ "$(<"$HOME/completions.called")" == *"_zdx-menu zdx zdx-menu"* ]] || exit 93
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'source=0 wrapper=1' ]
+}
+
+@test "trusted user code: a successful overrides file produces no failure warning" {
+  printf '%s\n' 'git-status() { print -r -- "override:git-status"; }' \
+    ':' > "$TRUST_HOME/.config/zdx/overrides.zsh"
+  chmod -- 600 "$TRUST_HOME/.config/zdx/overrides.zsh"
+  run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    source "$1/functions.zsh" > "$HOME/source.out" 2> "$HOME/source.err" || exit 91
+    [[ ! -s "$HOME/source.out" && ! -s "$HOME/source.err" ]] || exit 92
+    git-switch --help > /dev/null 2>&1 || exit 93
+    git-status
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'override:git-status' ]
+}
+
+@test "trusted user code: a failed configuration still returns its status without a loaded sentinel" {
+  printf '%s\n' 'return 7' > "$TRUST_HOME/.config/zdx/config.zsh"
+  chmod -- 600 "$TRUST_HOME/.config/zdx/config.zsh"
+  run env HOME="$TRUST_HOME" zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    unset TEST_TEMP_DIR BATS_TEST_DIRNAME
+    source "$1/functions.zsh" > "$HOME/source.out" 2> "$HOME/source.err"
+    rc=$?
+    print -r -- "source=$rc loaded=${_ZDX_FUNCTIONS_SOURCED-absent}"
+    [[ "$rc" == 7 && ! -s "$HOME/source.out" ]] || exit 91
+    [[ ! -n "${_ZDX_FUNCTIONS_SOURCED-}" ]] || exit 92
+    [[ "$(<"$HOME/source.err")" == *"failed to load user configuration"* ]] || exit 93
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'source=7 loaded=absent' ]
+}

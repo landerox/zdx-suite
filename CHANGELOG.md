@@ -40,6 +40,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Retry repaired partial core initialization while preserving loaded commands,
+  plugin state and API constants. Eager loading uses the same declared modules
+  as lazy loading, including optional user-local `zdir`/`wsj`. Failed trusted
+  overrides warn and retain their function definitions while startup continues;
+  trusted configuration failures still stop initialization.
 - Format long durations as days and hours, retaining the existing subday
   display and rounding day-form hours directly from the original elapsed time.
 - Keep lazy command identities literal, compile owned modules without caller

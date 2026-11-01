@@ -24,6 +24,37 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "plugin api: a folded readonly service list cannot masquerade as API v1" {
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$API_HOME" \
+    ZDX_LAZY_LOAD=1 zsh -f -c '
+      emulate -R zsh
+      source "$1/functions.zsh" || exit 90
+      print -r -- "${(j:\n:)_ZDX_PLUGIN_API_SERVICES}"
+    ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  local packed_services="$output"
+  [ -n "$packed_services" ]
+
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME HOME="$API_HOME" \
+    ZDX_LAZY_LOAD=1 zsh -f -c '
+      emulate -R zsh
+      typeset -gr ZDX_PLUGIN_API=1
+      typeset -gra _ZDX_PLUGIN_API_SERVICES=("$2")
+      [[ ${#_ZDX_PLUGIN_API_SERVICES[@]} == 1 ]] || exit 90
+      source "$1/functions.zsh" > "$HOME/source.out" 2> "$HOME/source.err"
+      rc=$?
+      print -r -- "source=$rc elements=${#_ZDX_PLUGIN_API_SERVICES[@]}"
+      [[ "$rc" != 0 && ! -n "${_ZDX_FUNCTIONS_SOURCED-}" ]] || exit 91
+      [[ "${_ZDX_PLUGIN_API_SERVICES[1]}" == "$2" ]] || exit 92
+      [[ ! -s "$HOME/source.out" && -s "$HOME/source.err" ]] || exit 93
+      if ( _ZDX_PLUGIN_API_SERVICES=() ) 2>/dev/null; then
+        exit 94
+      fi
+    ' _ "$TEST_SUITE_ROOT" "$packed_services"
+  [ "$status" -eq 0 ]
+  [[ "$output" == source=*" elements=1" ]]
+}
+
 @test "plugin api: the version is read-only and every listed service exists" {
   local documented
   documented=$(awk '/<!-- plugin-api-v1-services -->/{f=1; next} /<!-- \/plugin-api-v1-services -->/{f=0} f' \

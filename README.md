@@ -398,6 +398,12 @@ overwrite it or create avoidable merge conflicts.
 3. **Custom tools:** Build reviewed plugins under `~/.config/zdx/plugins/` and
    follow the plugin contract below.
 
+A failing trusted `overrides.zsh` emits a warning and startup continues,
+retaining the functions it already defined. A failing trusted `config.zsh`
+stops initialization with its failure status; repair it before sourcing the
+core again. Open a fresh shell after correcting overrides, because completed
+startup remains a no-op when sourced again. Earlier shell effects remain.
+
 ZDX does not run background update checks. Package, plugin, and toolchain
 updates occur only when you invoke their documented commands and authorize the
 displayed plan.
