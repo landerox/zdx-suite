@@ -734,3 +734,24 @@ MOCK
   ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
 }
+
+@test "core probes: doctor and plugin confirmations preserve the shared prompt statuses" {
+  run run_zsh '
+    cd "$HOME" || return 90
+    local -i expected=0 seen=0
+    _zdx_confirm_prompt() {
+      (( seen += 1 ))
+      [[ "${(j: :)@}" == *"--style line"* ]] || return 97
+      return "$expected"
+    }
+    for expected in 0 1 2; do
+      _zdx_doctor_confirm "Doctor fixture?"
+      [[ $? == "$expected" ]] || return 91
+      _zdx_plugins_confirm "Plugin fixture?" no
+      [[ $? == "$expected" ]] || return 92
+    done
+    _zdx_plugins_confirm "Authorized fixture?" yes || return 93
+    [[ "$seen" == 6 ]]
+  '
+  [ "$status" -eq 0 ]
+}

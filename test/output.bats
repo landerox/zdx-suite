@@ -700,3 +700,20 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = duration=1.5s ]
 }
+
+@test "core probes: a redirected spinner preserves command streams and status without frames" {
+  run run_zsh '
+    cd "$HOME" || return 90
+    _fixture_spinner_child() {
+      print -r -- data
+      print -u2 -r -- "child diagnostic"
+      return 23
+    }
+    _tk_spinner Working _fixture_spinner_child > "$HOME/out" 2> "$HOME/err"
+    local child_rc=$?
+    [[ "$child_rc" == 23 ]] || return 91
+    [[ "$(<"$HOME/out")" == data ]] || return 92
+    [[ "$(<"$HOME/err")" == "child diagnostic" ]]
+  '
+  [ "$status" -eq 0 ]
+}

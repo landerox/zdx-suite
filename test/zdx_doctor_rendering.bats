@@ -4,31 +4,34 @@
 setup() {
   load test_helper
   load core_options_test_helper
+  load core_probe_test_helper
+  load core_clt_consumer_test_helper
   unset FZF_DEFAULT_OPTS FZF_DEFAULT_OPTS_FILE FZF_DEFAULT_COMMAND
   export NO_COLOR=1
   export MOCK_DOCTOR_VERSION='0.74.3 (fixture)'
   export MOCK_DOCTOR_FZF_RC=0
-  cat > "$TEST_MOCK_BIN/fzf" <<'MOCK'
-#!/usr/bin/env bash
+  export DOCTOR_FIXTURE_BIN="$TEST_TEMP_DIR/doctor-bin"
+  export CORE_PROBE_BIN="$DOCTOR_FIXTURE_BIN" F308C_REAL_PYTHON
+  F308C_REAL_PYTHON=$(type -P python3) || return 1
+  [[ "$F308C_REAL_PYTHON" == /* && -f "$F308C_REAL_PYTHON" \
+    && -x "$F308C_REAL_PYTHON" ]] || return 1
+  mkdir -p "$DOCTOR_FIXTURE_BIN"
+  # A bounded test-only leaf runner keeps actual standalone diagnostics
+  # supported without borrowing a host timeout or auto-sourcing the core.
+  f308c_timeout_backend
+  printf '#!%s\n' "$BASH" > "$DOCTOR_FIXTURE_BIN/fzf"
+  cat >> "$DOCTOR_FIXTURE_BIN/fzf" <<'MOCK'
 [[ "$#" -eq 1 && "$1" == --version ]] || exit 97
 [[ -z "${FZF_DEFAULT_OPTS:-}${FZF_DEFAULT_OPTS_FILE:-}${FZF_DEFAULT_COMMAND:-}" ]] || exit 96
 if IFS= read -r unexpected_input; then exit 95; fi
 [[ -z "${MOCK_DOCTOR_VERSION:-}" ]] || printf '%s\n' "$MOCK_DOCTOR_VERSION"
 exit "${MOCK_DOCTOR_FZF_RC:-0}"
 MOCK
-  chmod +x "$TEST_MOCK_BIN/fzf"
+  chmod -- 755 "$DOCTOR_FIXTURE_BIN/fzf"
   cat > "$TEST_TEMP_DIR/doctor-fixture.zsh" <<'FIXTURE'
-_zdx_doctor_detect_os() { print -r -- Linux; }
-_zdx_doctor_detect_pkg_manager() { print -r -- none; }
-_zdx_doctor_timeout_command() { return 1; }
-_zdx_doctor_sha256_command() { return 1; }
-command() {
-  if [[ "${1:-}" == -v ]]; then
-    [[ "${2:-}" == fzf ]]
-  else
-    builtin command "$@"
-  fi
-}
+emulate -R zsh
+path=("$DOCTOR_FIXTURE_BIN")
+rehash
 FIXTURE
 }
 
@@ -38,6 +41,8 @@ teardown() { cleanup_sandbox; }
   run zsh -f -c '
     emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
+    path=("$DOCTOR_FIXTURE_BIN")
+    rehash
     export FZF_DEFAULT_OPTS="--header-lines=999"
     export FZF_DEFAULT_OPTS_FILE="$HOME/unreadable-options"
     export FZF_DEFAULT_COMMAND="do-not-run"
@@ -56,6 +61,8 @@ teardown() { cleanup_sandbox; }
   run zsh -f -c '
     emulate -R zsh
     source "$1/functions/zdx-doctor.zsh" || exit
+    path=("$DOCTOR_FIXTURE_BIN")
+    rehash
     local expected_rc=0
     for expected_rc in 19 130 143; do
       export MOCK_DOCTOR_FZF_RC="$expected_rc"
@@ -88,12 +95,10 @@ teardown() { cleanup_sandbox; }
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR"
   [ "$status" -eq 0 ]
   [ ! -s "$HOME/stdout" ]
-  grep -Fq 'fzf - Installed' "$HOME/valid-report"
-  grep -Fq 'v0.74.3' "$HOME/valid-report"
-  grep -Fq 'fzf - VERSION CHECK FAILED' "$HOME/failed-report"
-  grep -Fq 'status 19' "$HOME/failed-report"
+  grep -Eq '^  fzf:[[:space:]]+Installed \(.*, v0[.]74[.]3\)$' "$HOME/valid-report"
+  grep -Eq '^  fzf:[[:space:]]+Unknown \(version check failed, status 19; ' "$HOME/failed-report"
   grep -Fq 'Optional Suite-Specific Dependencies' "$HOME/failed-report"
-  run grep -Fq 'fzf - Installed' "$HOME/failed-report"
+  run grep -Eq '^  fzf:[[:space:]]+Installed ' "$HOME/failed-report"
   [ "$status" -eq 1 ]
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
@@ -108,7 +113,8 @@ teardown() { cleanup_sandbox; }
       zdx-doctor >"$HOME/stdout"
     ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR"
     [ "$status" -eq "$expected_rc" ]
-    [[ "$output" == *"fzf - VERSION CHECK FAILED"* ]]
+    [[ "$output" =~ (^|$'\n')'▸ Core Dependencies'($|$'\n') ]]
+    [[ ! "$output" =~ (^|$'\n')'  fzf:'[[:space:]]+'Installed ' ]]
     [[ "$output" != *"Optional Suite-Specific Dependencies"* ]]
     [ ! -s "$HOME/stdout" ]
   done
@@ -132,12 +138,12 @@ teardown() { cleanup_sandbox; }
   ' _ "$copied_dir/zdx-doctor.zsh"
   [ "$status" -eq 0 ]
   [ ! -s "$HOME/stdout" ]
-  grep -Fq 'colors: disabled by NO_COLOR' "$HOME/display-report"
-  grep -Fq 'custom theme: configured' "$HOME/display-report"
-  grep -Fq 'options=set; file=set' "$HOME/display-report"
+  grep -Eq '^  Colors:[[:space:]]+disabled by NO_COLOR$' "$HOME/display-report"
+  grep -Eq '^  Custom theme:[[:space:]]+configured$' "$HOME/display-report"
+  grep -Eq '^  fzf defaults:[[:space:]]+options=set; file=set \(isolated by suite menus\)$' "$HOME/display-report"
   grep -Fq 'Doctor source:' "$HOME/display-report"
   grep -Fq 'open a new shell' "$HOME/display-report"
-  [ "$(wc -l < "$HOME/display-report")" -eq 3 ]
+  [ "$(wc -l < "$HOME/display-report")" -eq 5 ]
   run grep -Eq $'PRIVATE_|\033' "$HOME/display-report"
   [ "$status" -eq 1 ]
 }
@@ -151,8 +157,8 @@ teardown() { cleanup_sandbox; }
     _zdx_doctor_visual_diagnostics
   ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"colors: disabled by ZDX_FZF_PLAIN"* ]]
-  [[ "$output" == *"custom theme: configured"* ]]
+  [[ "$output" =~ (^|$'\n')'  Colors:'[[:space:]]+'disabled by ZDX_FZF_PLAIN'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Custom theme:'[[:space:]]+'configured'($|$'\n') ]]
   [[ "$output" != *"PRIVATE_THEME_VALUE"* ]]
 }
 
@@ -236,28 +242,33 @@ _doctor_fixture_macos_tools() {
 
 @test "doctor rendering: a healthy macOS host passes with platform rows not applicable" {
   _doctor_fixture_macos_tools
+  # This existing advisory scenario deliberately uses the actual core
+  # watchdog, with no native runner on its private executable-only PATH.
+  rm -- "$DOCTOR_FIXTURE_BIN/timeout"
+  make_core_probe_path
   run zsh -f -c '
     emulate -R zsh
-    source "$1/functions/zdx-doctor.zsh" || exit
+    source "$1/functions.zsh" || exit
     OSTYPE=darwin23.0
-    PATH="$2"
-    zdx-doctor >"$3/stdout"
-  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin" "$TEST_TEMP_DIR"
+    path=("$2" "$3")
+    rehash
+    zdx-doctor >"$4/stdout"
+  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin" "$CORE_PROBE_BIN" "$TEST_TEMP_DIR"
 
   [ "$status" -eq 0 ]
   [ ! -s "$TEST_TEMP_DIR/stdout" ]
-  [[ "$output" == *"Platform:      macOS"* ]]
-  [[ "$output" == *"Pkg Manager:   brew"* ]]
-  [[ "$output" == *"⊘ ip - Not applicable on macOS"* ]]
+  [[ "$output" =~ (^|$'\n')'  Platform:'[[:space:]]+'macOS'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Package manager:'[[:space:]]+'brew'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  ip:'[[:space:]]+'Not applicable on macOS (iproute2 route lookups run on Linux and WSL) [VPN]'($|$'\n') ]]
   [[ "$output" != *"findmnt"* ]]
-  [[ "$output" == *"GNU tar - Available ($TEST_TEMP_DIR/doctor-bin/gtar, tar (GNU tar) 1.35)"* ]]
-  [[ "$output" == *"timeout/gtimeout - Not found"*"slower Zsh watchdog"* ]]
-  [[ "$output" == *"brew install coreutils provides the faster gtimeout"* ]]
-  [[ "$output" == *"git - Installed ($TEST_TEMP_DIR/doctor-bin/git, v2.39.3)"* ]]
-  [[ "$output" == *"python3 - Installed ($TEST_TEMP_DIR/doctor-bin/python3, v3.12.3)"* ]]
-  [[ "$output" == *"curl - Installed ($TEST_TEMP_DIR/doctor-bin/curl, v8.7.1)"* ]]
-  [[ "$output" == *"wg-quick - Installed ($TEST_TEMP_DIR/doctor-bin/wg-quick, v1.0.20210914)"* ]]
-  [[ "$output" == *"No issues found"* ]]
+  [[ "$output" =~ (^|$'\n')'  GNU tar:'[[:space:]]+"Available ($TEST_TEMP_DIR/doctor-bin/gtar, tar (GNU tar) 1.35) [File & Archive Utilities]"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  timeout/gtimeout:'[[:space:]]+'Not found (bounded inventories, probes, and remote lookups use the slower Zsh watchdog) [System, Python & VPN]'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Optional backend:'[[:space:]]+'brew install coreutils provides the faster gtimeout'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  git:'[[:space:]]+"Installed ($TEST_TEMP_DIR/doctor-bin/git, v2.39.3)"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  python3:'[[:space:]]+"Installed ($TEST_TEMP_DIR/doctor-bin/python3, v3.12.3) [Developer & Python]"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  curl:'[[:space:]]+"Installed ($TEST_TEMP_DIR/doctor-bin/curl, v8.7.1) [VPN & Python]"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  wg-quick:'[[:space:]]+"Installed ($TEST_TEMP_DIR/doctor-bin/wg-quick, v1.0.20210914) [WireGuard VPN]"($|$'\n') ]]
+  [[ "$output" == *"Diagnosis completed: no issues found."* ]]
   [[ "$output" != *"vinstalled"* && "$output" != *", v)"* ]]
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
@@ -273,6 +284,8 @@ _doctor_fixture_macos_tools() {
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
   [ "$status" -eq 0 ]
   [[ "$output" != *"Command Names"* ]]
+  [[ "$output" =~ (^|$'\n')'  timeout/gtimeout:'[[:space:]]+"Available ($DOCTOR_FIXTURE_BIN/timeout) [System, Python & VPN]"($|$'\n') ]]
+  [[ "$output" != *"Optional backend:"* ]]
 
   run zsh -f -c '
     emulate -R zsh
@@ -283,8 +296,9 @@ _doctor_fixture_macos_tools() {
     zdx-doctor
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Command Names"*"No executable on PATH shares a ZDX command name"* ]]
-  [[ "$output" == *"No issues found"* ]]
+  [[ "$output" =~ (^|$'\n')'▸ Command Names'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Command names:'[[:space:]]+'No executable on PATH shares a ZDX command name'($|$'\n') ]]
+  [[ "$output" == *"Diagnosis completed: no issues found."* ]]
 
   _doctor_fixture_command git-status 'shadowed fixture'
   _doctor_fixture_command sys-info 'shadowed fixture'
@@ -297,9 +311,9 @@ _doctor_fixture_macos_tools() {
     zdx-doctor
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"take precedence over these executables on PATH: git-status, sys-info"* ]]
+  [[ "$output" =~ (^|$'\n')'  PATH names:'[[:space:]]+'ZDX commands take precedence over git-status, sys-info'($|$'\n') ]]
   [[ "$output" == *"Run 'command NAME' to reach the executable."* ]]
-  [[ "$output" == *"No issues found"* ]]
+  [[ "$output" == *"Diagnosis completed: no issues found."* ]]
 }
 
 @test "doctor rendering: a BSD-only tar stays incompatible and names gtar" {
@@ -314,65 +328,81 @@ _doctor_fixture_macos_tools() {
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"GNU tar - INCOMPATIBLE ($TEST_TEMP_DIR/doctor-bin/tar, bsdtar 3.5.3"* ]]
+  [[ "$output" =~ (^|$'\n')'  GNU tar:'[[:space:]]+"INCOMPATIBLE ($TEST_TEMP_DIR/doctor-bin/tar, bsdtar 3.5.3 - libarchive 3.7.4) [File & Archive Utilities]"($|$'\n') ]]
   [[ "$output" == *"requires GNU tar, found as either tar or gtar"* ]]
   [[ "$output" == *"brew install gnu-tar"* ]]
-  [[ "$output" == *"1 dependency or capability issue"* ]]
+  [[ "$output" =~ (^|$'\n')'  Issues:'[[:space:]]+'1 dependency or capability issue'($|$'\n') ]]
 }
 
 @test "doctor rendering: Apple placeholders are reported missing instead of being run" {
-  _doctor_fixture_command xcode-select 'xcode-select: error: no developer tools' 2
-  run zsh -f -c '
-    emulate -R zsh
-    source "$1/functions/zdx-doctor.zsh" || exit
-    PATH="$2:$PATH"
+  # Retain the actual classifier with private Apple identities and executable
+  # secondaries. No host shim is exposed even if a guard regresses.
+  f308c_setup
+  _doctor_fixture_command git-alternate 'git version 2.43.0'
+  export F308C_XCODE_RC=2
+  run run_f308c_standalone '
     OSTYPE=darwin23.0
-    _zdx_doctor_clt_placeholder git /usr/bin/git && print -r -- "git=placeholder"
-    _zdx_doctor_clt_placeholder python3 /usr/bin/python3 \
-      && print -r -- "python3=placeholder"
-    _zdx_doctor_clt_placeholder curl /usr/bin/curl || print -r -- "curl=system"
-    _zdx_doctor_clt_placeholder git /opt/homebrew/bin/git \
-      || print -r -- "homebrew=real"
-  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
+    local -i classifier_rc=0
+    _zdx_doctor_clt_placeholder git "$F308C_BIN/git" || classifier_rc=$?
+    (( classifier_rc == 0 )) || exit 31
+    print -r -- git=placeholder
+    classifier_rc=0
+    _zdx_doctor_clt_placeholder python3 "$F308C_BIN/python3" || classifier_rc=$?
+    (( classifier_rc == 0 )) || exit 32
+    print -r -- python3=placeholder
+    classifier_rc=0
+    _zdx_doctor_clt_placeholder curl "$F308C_BIN/curl" || classifier_rc=$?
+    (( classifier_rc == 1 )) || exit 33
+    print -r -- curl=system
+    classifier_rc=0
+    _zdx_doctor_clt_placeholder git "$F308C_BIN/git-alternate" || classifier_rc=$?
+    (( classifier_rc == 1 )) || exit 34
+    print -r -- homebrew=real
+  '
   [ "$status" -eq 0 ]
   [ "$output" = $'git=placeholder\npython3=placeholder\ncurl=system\nhomebrew=real' ]
 
-  mkdir -p "$TEST_TEMP_DIR/CommandLineTools"
-  _doctor_fixture_command xcode-select "$TEST_TEMP_DIR/CommandLineTools"
-  run zsh -f -c '
-    emulate -R zsh
-    source "$1/functions/zdx-doctor.zsh" || exit
-    PATH="$2:$PATH"
+  export F308C_XCODE_RC=0
+  run run_f308c_standalone '
     OSTYPE=darwin23.0
-    _zdx_doctor_clt_placeholder git /usr/bin/git || print -r -- "installed=real"
+    local -i classifier_rc=0
+    _zdx_doctor_clt_placeholder git "$F308C_BIN/git" || classifier_rc=$?
+    (( classifier_rc == 1 )) || exit 31
+    print -r -- installed=real
     OSTYPE=linux-gnu
-    _zdx_doctor_clt_placeholder git /usr/bin/git || print -r -- "linux=real"
-  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
+    classifier_rc=0
+    _zdx_doctor_clt_placeholder git "$F308C_BIN/git" || classifier_rc=$?
+    (( classifier_rc == 1 )) || exit 32
+    print -r -- linux=real
+  '
   [ "$status" -eq 0 ]
   [ "$output" = $'installed=real\nlinux=real' ]
 }
 
 @test "doctor rendering: a placeholder row never probes the Apple shim" {
-  [[ -x /usr/bin/git && -x /usr/bin/python3 ]] \
-    || skip "this host has no /usr/bin/git and /usr/bin/python3 to stand in for the shims"
-  _doctor_fixture_macos_tools
-  rm "$TEST_TEMP_DIR/doctor-bin/git" "$TEST_TEMP_DIR/doctor-bin/python3"
-  _doctor_fixture_command xcode-select 'xcode-select: error: no developer tools' 2
-  run zsh -f -c '
-    emulate -R zsh
-    source "$1/functions/zdx-doctor.zsh" || exit
+  load core_probe_test_helper
+  load core_clt_consumer_test_helper
+  make_core_probe_path
+  f308c_setup
+  f308c_complete_tools
+  f308c_timeout_backend
+  export F308C_XCODE_RC=2
+  run run_f308c_standalone '
     OSTYPE=darwin23.0
-    PATH="$2:/usr/bin"
-    zdx-doctor
-  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
+    zdx-doctor || F308C_STANDALONE_RETURN=$?
+  '
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"git - MISSING"* ]]
-  [[ "$output" == *"/usr/bin/git is an Apple Command Line Tools placeholder"* ]]
-  [[ "$output" == *"python3 - MISSING"* ]]
-  [[ "$output" == *"/usr/bin/python3 is an Apple Command Line Tools placeholder"* ]]
-  [[ "$output" == *"Suggested Command: brew install git"* ]]
-  [[ "$output" != *"git - Installed"* && "$output" != *"python3 - Installed"* ]]
+  [[ "$output" =~ (^|$'\n')'  git:'[[:space:]]+'MISSING (' ]]
+  [[ "$output" == *"$F308C_BIN/git is an Apple Command Line Tools placeholder"* ]]
+  [[ "$output" =~ (^|$'\n')'  python3:'[[:space:]]+'MISSING (' ]]
+  [[ "$output" == *"$F308C_BIN/python3 is an Apple Command Line Tools placeholder"* ]]
+  [[ "$output" =~ (^|$'\n')'  Suggested command:'[[:space:]]+'brew install git' ]]
+  [[ ! "$output" =~ (^|$'\n')'  git:'[[:space:]]+'Installed (' ]]
+  [[ ! "$output" =~ (^|$'\n')'  python3:'[[:space:]]+'Installed (' ]]
+  [ -s "$HOME/clt.argv" ]
+  run grep -Eq -- "/(git|python3)( |$)" "$HOME/standalone-probes.calls"
+  [ "$status" -eq 1 ]
 }
 
 @test "doctor rendering: failed or unrecognized version probes are never installed" {
@@ -389,33 +419,39 @@ _doctor_fixture_macos_tools() {
   ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"git - VERSION CHECK FAILED ($TEST_TEMP_DIR/doctor-bin/git, status 3)"* ]]
-  [[ "$output" == *"python3 - VERSION CHECK FAILED ($TEST_TEMP_DIR/doctor-bin/python3, status 1)"*"[Developer & Python]"* ]]
-  [[ "$output" == *"wg-quick - Installed ($TEST_TEMP_DIR/doctor-bin/wg-quick) [WireGuard VPN]"* ]]
-  [[ "$output" != *"git - Installed"* && "$output" != *"python3 - Installed"* ]]
+  [[ "$output" =~ (^|$'\n')'  git:'[[:space:]]+"Unknown (version check failed, status 3; $TEST_TEMP_DIR/doctor-bin/git)"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  python3:'[[:space:]]+"Unknown (version check failed, status 1; $TEST_TEMP_DIR/doctor-bin/python3) [Developer & Python]"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  wg-quick:'[[:space:]]+"Unknown (version check failed, status 127; $TEST_TEMP_DIR/doctor-bin/wg-quick) [WireGuard VPN]"($|$'\n') ]]
+  [[ ! "$output" =~ (^|$'\n')'  git:'[[:space:]]+'Installed ' ]]
+  [[ ! "$output" =~ (^|$'\n')'  python3:'[[:space:]]+'Installed ' ]]
+  [[ ! "$output" =~ (^|$'\n')'  wg-quick:'[[:space:]]+'Installed ' ]]
   [[ "$output" != *"vinstalled"* && "$output" != *", v)"* ]]
-  [[ "$output" == *"2 dependency or capability issue"* ]]
+  [[ "$output" =~ (^|$'\n')'  Issues:'[[:space:]]+'3 dependency or capability issues'($|$'\n') ]]
 }
 
 @test "doctor rendering: Linux keeps ip as a counted capability" {
   _doctor_fixture_macos_tools
   _doctor_fixture_command tar 'tar (GNU tar) 1.35'
+  rm -- "$DOCTOR_FIXTURE_BIN/timeout"
+  make_core_probe_path
   run zsh -f -c '
     emulate -R zsh
-    source "$1/functions/zdx-doctor.zsh" || exit
+    source "$1/functions.zsh" || exit
     unset WSL_DISTRO_NAME WSL_INTEROP
     OSTYPE=linux-gnu
     _zdx_doctor_is_wsl() { return 1; }
-    PATH="$2"
+    path=("$2" "$3")
+    rehash
     zdx-doctor
-  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
+  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin" "$CORE_PROBE_BIN"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Platform:      Linux"* ]]
-  [[ "$output" == *"ip - MISSING (route lookups in VPN diagnostics) [VPN]"* ]]
+  [[ "$output" =~ (^|$'\n')'  Platform:'[[:space:]]+'Linux'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  ip:'[[:space:]]+'MISSING (route lookups in VPN diagnostics) [VPN]'($|$'\n') ]]
   [[ "$output" != *"findmnt"* ]]
-  [[ "$output" == *"GNU coreutils provides the faster timeout command"* ]]
-  [[ "$output" == *"1 dependency or capability issue"* ]]
+  [[ "$output" =~ (^|$'\n')'  timeout/gtimeout:'[[:space:]]+'Not found (bounded inventories, probes, and remote lookups use the slower Zsh watchdog) [System, Python & VPN]'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Optional backend:'[[:space:]]+'GNU coreutils provides the faster timeout command.'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Issues:'[[:space:]]+'1 dependency or capability issue'($|$'\n') ]]
   [[ "$output" != *"Not applicable"* ]]
 }
 
@@ -447,25 +483,18 @@ _doctor_fixture_macos_tools() {
   f304_mock_local_probes
   run run_zsh '
     builtin cd -- "$HOME" || exit 80
-    _zdx_doctor_detect_os() { print -r -- Linux; }
-    _zdx_doctor_detect_pkg_manager() { print -r -- none; }
-    _zdx_doctor_timeout_command() { return 1; }
-    _zdx_doctor_sha256_command() { return 1; }
-    command() {
-      if [[ "${1:-}" == -v ]]; then
-        [[ "${2:-}" == fzf ]]
-      else
-        builtin command "$@"
-      fi
-    }
+    local saved_path="$PATH"
+    source "$TEST_TEMP_DIR/doctor-fixture.zsh" || exit 81
     setopt ksh_arrays sh_word_split force_float pipe_fail
     zdx-doctor > "$HOME/doctor.data" 2> "$HOME/doctor.ui"
     local call_rc=$? kept="${options[ksharrays]}:${options[shwordsplit]}:${options[forcefloat]}:${options[pipefail]}"
     unsetopt ksh_arrays sh_word_split force_float pipe_fail
     [[ $call_rc == 1 && "$kept" == on:on:on:on ]] || exit 31
     [[ ! -s "$HOME/doctor.data" ]] || exit 32
-    command grep -Fq "fzf - Installed" "$HOME/doctor.ui" || exit 33
-    command grep -Fq "v0.74.3" "$HOME/doctor.ui"
+    PATH="$saved_path"
+    rehash
+    command grep -Eq "^  fzf:[[:space:]]+Installed " "$HOME/doctor.ui" || exit 33
+    command grep -Eq "^  fzf:[[:space:]]+Installed .*, v0[.]74[.]3" "$HOME/doctor.ui"
   '
   [ "$status" -eq 0 ]
 }
@@ -611,4 +640,122 @@ ZSH
 
 @test "F3-04 module regex: actual doctor confirmation preserves unset caller state" {
   f304_module_confirm_state unset
+}
+
+@test "core probes: doctor resolves primary and alternative tools despite functions and aliases" {
+  _doctor_fixture_macos_tools
+  _doctor_fixture_command timeout 'timeout fixture'
+  _doctor_fixture_command fd 'fd fixture'
+  _doctor_fixture_command sha256sum 'sha256 fixture'
+  run zsh -f -c '
+    emulate -R zsh
+    source "$1/functions.zsh" || exit 90
+    cd "$HOME" || exit 91
+    path=("$2")
+    rehash
+    python3() { print -r -- function-intercepted; }
+    timeout() { return 97; }
+    fd() { return 97; }
+    sha256sum() { return 97; }
+    alias fdfind=fd
+    local -a missing_cmds=() missing_pkgs=()
+    local -i issues_count=0 capability_issues_count=0
+    local pm=none REPLY=""
+    _zdx_doctor_report_dependency "python3|Fixture|optional|https://example.invalid|python3|python|python3|python|Fixture" \
+      > "$HOME/stdout" 2> "$HOME/report" || exit 92
+    [[ "$(<"$HOME/report")" == *"$2/python3"* && ! -s "$HOME/stdout" ]] || exit 93
+    _zdx_doctor_timeout_command && [[ "$REPLY" == "$2/timeout" ]] || exit 94
+    _zdx_doctor_fd_command && [[ "$REPLY" == "$2/fd" ]] || exit 95
+    _zdx_doctor_sha256_command && [[ "$REPLY" == "$2/sha256sum" ]] || exit 96
+  ' _ "$TEST_SUITE_ROOT" "$TEST_TEMP_DIR/doctor-bin"
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: doctor stops a hung version probe without native timeout" {
+  load core_probe_test_helper
+  make_core_probe_path
+  export CORE_PROBE_SLEEP
+  CORE_PROBE_SLEEP=$(command -v sleep)
+  core_probe_program pipx <<'MOCK'
+"$CORE_PROBE_SLEEP" 8
+: > "$HOME/version-probe-completed"
+printf '1.4.3\n'
+MOCK
+  run run_core_probe_zsh '
+    _zdx_doctor_get_version pipx > "$HOME/version"
+    local probe_rc=$?
+    [[ "$probe_rc" == 124 && ! -s "$HOME/version" && ! -e "$HOME/version-probe-completed" ]]
+  '
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/version-probe-completed" ]
+}
+
+@test "core probes: doctor step results remain visible with a decimal comma" {
+  local locale_dir="$TEST_TEMP_DIR/locales"
+  command -v localedef >/dev/null 2>&1 || skip "localedef is unavailable"
+  mkdir -p "$locale_dir"
+  localedef -i de_DE -f UTF-8 "$locale_dir/de_DE.UTF-8" >/dev/null 2>&1 \
+    || skip "a decimal-comma locale cannot be built"
+  export CORE_PROBE_LOCALE_DIR="$locale_dir"
+  run run_zsh '
+    cd "$HOME" || return 90
+    export LOCPATH="$CORE_PROBE_LOCALE_DIR" LC_ALL=de_DE.UTF-8
+    local probe=""
+    printf -v probe "%.1f" 1.5
+    [[ "$probe" == "1,5" ]] || return 42
+    _zdx_doctor_step_result 1 2 install 0 "$EPOCHREALTIME" > "$HOME/stdout" 2> "$HOME/success"
+    _zdx_doctor_step_result 2 2 install 7 "$EPOCHREALTIME" >> "$HOME/stdout" 2> "$HOME/failure"
+    [[ ! -s "$HOME/stdout" && "$(<"$HOME/success")" == *"done (0.0s)"* \
+      && "$(<"$HOME/failure")" == *"failed: exit 7 (0.0s)"* ]]
+  '
+  [ "$status" -ne 42 ] || skip "the built locale does not use a decimal comma"
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: public doctor decline succeeds even when manual issues remain" {
+  printf '#!%s\n: > "$HOME/package-manager-ran"\nexit 97\n' "$BASH" > "$TEST_MOCK_BIN/apt-get"
+  chmod -- 755 "$TEST_MOCK_BIN/apt-get"
+  run run_zsh '
+    cd "$HOME" || return 90
+    _zdx_doctor_detect_os() { print -r -- Linux; }
+    _zdx_doctor_detect_pkg_manager() { print -r -- apt; }
+    _zdx_doctor_report_dependency() {
+      if [[ "$1" == jq\|* ]]; then
+        missing_cmds+=(jq)
+        missing_pkgs+=(jq)
+        (( issues_count += 1 ))
+      fi
+      return 0
+    }
+    _zdx_doctor_timeout_command() { REPLY=fixture; return 0; }
+    _zdx_doctor_fd_command() { REPLY=fixture; return 0; }
+    _zdx_doctor_sha256_command() { return 1; }
+    _zdx_doctor_gnu_tar() { reply=(fixture "GNU tar fixture"); return 0; }
+    _zdx_doctor_program_trusted() { [[ "$1" == "$TEST_MOCK_BIN"/* && -f "$1" && -x "$1" ]]; }
+    functions[_fixture_real_confirm]="${functions[_zdx_confirm_prompt]}"
+    _zdx_confirm_prompt() { print -r -- used > "$HOME/shared-confirm-used"; return 1; }
+    zdx-doctor > "$HOME/stdout" 2> "$HOME/decline-report"
+    local public_rc=$?
+    [[ "$public_rc" == 0 && -f "$HOME/shared-confirm-used" && ! -s "$HOME/stdout" ]] || return 91
+    [[ "$(<"$HOME/decline-report")" != *"All packages installed"* ]] || return 92
+    functions[_zdx_confirm_prompt]="${functions[_fixture_real_confirm]}"
+    zdx-doctor </dev/null > "$HOME/stdout" 2> "$HOME/headless-report"
+    [[ $? == 1 && ! -s "$HOME/stdout" && ! -e "$HOME/package-manager-ran" ]]
+  '
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/package-manager-ran" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "core probes: doctor headers and sections obey aggregate output scope" {
+  run run_zsh '
+    cd "$HOME" || return 90
+    NO_COLOR=1
+    _zdx_doctor_section Fixture > "$HOME/stdout" 2> "$HOME/section"
+    local -i _ZDX_STEP_DEPTH=1
+    _zdx_doctor_header Hidden >> "$HOME/stdout" 2> "$HOME/heading"
+    [[ ! -s "$HOME/stdout" && ! -s "$HOME/heading" \
+      && "$(<"$HOME/section")" == *"▸ Fixture" ]]
+  '
+  [ "$status" -eq 0 ]
 }

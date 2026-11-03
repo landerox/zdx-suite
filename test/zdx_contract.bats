@@ -616,7 +616,11 @@ doctor_install_prelude() {
   cat <<'ZSH'
     emulate -R zsh
     source "$ZDX_ROOT/functions/zdx-doctor.zsh" || exit 90
-    _zdx_doctor_program_trusted() { [[ "$1" == /* && -x "$1" ]]; }
+    local fixture_real_doctor_confirm="${functions[_zdx_doctor_confirm]}"
+    _zdx_doctor_program_trusted() {
+      [[ $# == 2 && "$1" == "$TEST_TEMP_DIR"/* && "${1:A}" == "$TEST_TEMP_DIR"/* \
+        && -f "$1" && -x "$1" && ! -L "$1" ]]
+    }
     _zdx_doctor_confirm() { return 0; }
 ZSH
 }
@@ -640,7 +644,8 @@ ZSH
 
   run zsh -f -c "$(doctor_install_prelude)"'
     local -a missing=(one two)
-    _zdx_doctor_run_install 0 apt missing pkg.one pkg-two
+    _zdx_doctor_run_install 0 apt missing pkg.one pkg-two || exit 91
+    [[ "$REPLY" == installed ]] || exit 92
   '
   [ "$status" -eq 0 ]
   [ "$(cat "$MOCK_APT_LOG")" = $'apt-get <update>\napt-get <install> <-y> <pkg.one> <pkg-two>' ]
@@ -662,7 +667,8 @@ ZSH
     print -r -- "brew-sudo=[$REPLY]"
     print -rl -- "${reply[@]}"
     local -a missing=(zdx-absent-tool)
-    _zdx_doctor_run_install 1 apt missing jq
+    _zdx_doctor_run_install 1 apt missing jq || exit 93
+    [[ "$REPLY" == planned ]] || exit 94
   '
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "sudo=$TEST_MOCK_BIN/sudo" ]
@@ -670,6 +676,9 @@ ZSH
   [ "${lines[2]}" = "$TEST_MOCK_BIN/sudo -n $TEST_MOCK_BIN/apt-get install -y jq" ]
   [ "${lines[3]}" = "brew-sudo=[]" ]
   [ "${lines[4]}" = "$TEST_MOCK_BIN/brew install jq" ]
+  [[ "$output" == *"▸ Install Plan"* ]]
+  [[ "$output" == *"Command 1:"*"$TEST_MOCK_BIN/sudo -n $TEST_MOCK_BIN/apt-get update"* ]]
+  [[ "$output" == *"Command 2:"*"$TEST_MOCK_BIN/sudo -n $TEST_MOCK_BIN/apt-get install -y jq"* ]]
   [[ "$output" == *"Dry run: 2 commands planned; nothing was installed."* ]]
   [ ! -s "$MOCK_APT_LOG" ]
   [ ! -s "$MOCK_SUDO_LOG" ]
@@ -728,7 +737,7 @@ ZSH
     _zdx_doctor_run_install 0 apt missing jq
   '
   [ "$status" -eq 1 ]
-  [[ "$output" == *"sudo no longer accepts the authentication without a prompt"* ]]
+  [[ "$output" == *"sudo no longer accepts authentication without a prompt."* ]]
   [[ "$output" == *"$TEST_MOCK_BIN/sudo -n $TEST_MOCK_BIN/apt-get update"* ]]
   [[ "$output" == *"$TEST_MOCK_BIN/sudo -n $TEST_MOCK_BIN/apt-get install -y jq"* ]]
   [ ! -s "$MOCK_APT_LOG" ]
@@ -753,15 +762,59 @@ ZSH
   run zsh -f -c "$(doctor_install_prelude)"'
     _zdx_doctor_confirm() { return 1; }
     local -a missing=(zdx-absent-tool)
-    _zdx_doctor_run_install 0 apt missing jq; print -r -- "declined=$?"
-    unfunction _zdx_doctor_confirm
-    source "$ZDX_ROOT/functions/zdx-doctor.zsh"
-    _zdx_doctor_run_install 0 apt missing jq </dev/null; print -r -- "headless=$?"
+    local -i call_rc=0
+    _zdx_doctor_run_install 0 apt missing jq || call_rc=$?
+    [[ $call_rc == 0 && "$REPLY" == declined ]] || exit 91
+    print -r -- "declined=$call_rc"
+    # A guarded source is intentionally a no-op. Restore the actual saved
+    # wrapper body so headless assertions exercise canonical confirmation.
+    functions[_zdx_doctor_confirm]="$fixture_real_doctor_confirm"
+    [[ -n "$fixture_real_doctor_confirm" \
+      && "${functions[_zdx_doctor_confirm]}" == "$fixture_real_doctor_confirm" ]] || exit 92
+    call_rc=0
+    _zdx_doctor_run_install 0 apt missing jq </dev/null || call_rc=$?
+    [[ $call_rc == 1 && "$REPLY" == failed ]] || exit 93
+    print -r -- "headless=$call_rc"
+
+    # Stable diagnostic facts feed the real public coordinator and real
+    # reviewed installer. One package and one manual issue remain, so a
+    # deliberate public decline must dominate the residual issue status.
+    _zdx_doctor_detect_os() { print -r -- Linux; }
+    _zdx_doctor_detect_pkg_manager() { print -r -- apt; }
+    _zdx_doctor_report_dependency() {
+      if [[ "$1" == jq\|* ]]; then
+        missing_cmds+=(zdx-absent-tool)
+        missing_pkgs+=(jq)
+        (( issues_count += 1 ))
+      fi
+      return 0
+    }
+    _zdx_doctor_timeout_command() { REPLY=fixture; return 0; }
+    _zdx_doctor_fd_command() { REPLY=fixture; return 0; }
+    _zdx_doctor_sha256_command() { return 1; }
+    _zdx_doctor_gnu_tar() { reply=(fixture "GNU tar fixture"); return 0; }
+    _zdx_doctor_confirm() { return 1; }
+    call_rc=0
+    zdx-doctor > "$HOME/public-decline.stdout" 2> "$HOME/public-decline.stderr" || call_rc=$?
+    [[ $call_rc == 0 && ! -s "$HOME/public-decline.stdout" ]] || exit 94
+    local report="$(<"$HOME/public-decline.stderr")"
+    [[ "$report" == *"Installation cancelled: nothing was installed."* \
+      && "$report" != *"Installation commands completed"* && "$report" != *"All packages installed"* ]] || exit 95
+    print -r -- "public-declined=$call_rc"
+    functions[_zdx_doctor_confirm]="$fixture_real_doctor_confirm"
+    call_rc=0
+    zdx-doctor </dev/null > "$HOME/public-headless.stdout" 2> "$HOME/public-headless.stderr" || call_rc=$?
+    [[ $call_rc == 1 && ! -s "$HOME/public-headless.stdout" ]] || exit 96
+    report="$(<"$HOME/public-headless.stderr")"
+    [[ "$report" == *"Installation unavailable: confirmation could not be completed."* ]] || exit 97
+    print -r -- "public-headless=$call_rc"
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"declined=1"* ]]
-  [[ "$output" == *"confirmation needs a terminal"* ]]
+  [[ "$output" == *"declined=0"* ]]
+  [[ "$output" == *"Installation unavailable: confirmation could not be completed."* ]]
   [[ "$output" == *"headless=1"* ]]
+  [[ "$output" == *"public-declined=0"* ]]
+  [[ "$output" == *"public-headless=1"* ]]
   [ ! -s "$MOCK_APT_LOG" ]
   [ ! -s "$MOCK_SUDO_LOG" ]
 }

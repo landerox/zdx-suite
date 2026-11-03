@@ -392,13 +392,15 @@ status_zsh() {
 
 # Match a complete recorded word, including the final word of a probe.
 status_network_probe_seen() {
-  grep -Eq '(^| )(fetch|pull|ls-remote|sudo|curl|gh)( |$)' "$1"
+  grep -Eq "(^|[ /])(fetch|pull|ls-remote|sudo|curl|gh)([[:space:]'\"]|$)" "$1"
 }
 
 @test "zdx status: the network recorder detects every forbidden probe word" {
   local probe
   for probe in '3 git fetch' '5 git pull' '5 git ls-remote' \
-    '3 sudo -n' '3 curl' '3 gh api'; do
+    '3 sudo -n' '3 curl' '3 gh api' \
+    '3 /private/fixture/git fetch' '3 /private/fixture/sudo -n' \
+    "3 env '/private/fixture with spaces/gh' api"; do
     printf '%s\n' "$probe" > "$STATUS_PROBE_LOG"
     run status_network_probe_seen "$STATUS_PROBE_LOG"
     [ "$status" -eq 0 ]
@@ -414,15 +416,26 @@ status_network_probe_seen() {
   make_status_repo "$repo"
 
   run status_zsh '
+    print -r -- "Caller status input remains unread." > "$HOME/status-probe.stdin"
+    exec < "$HOME/status-probe.stdin" || exit 92
     _zdx_run_with_timeout() {
-      print -r -- "$1 $2 $3" >> "$STATUS_PROBE_LOG"
-      if [[ "$2 $3 $4" == "git --no-optional-locks status" ]]; then
+      local seconds="$1" program="$2" inherited=""
+      shift 2
+      local -a readable=("$seconds" "${program:t}" "$@")
+      print -r -- "${(j: :)${(@q-)readable}}" >> "$STATUS_PROBE_LOG"
+      printf "%s\0" "$seconds" "$program" "$#" "$@" >> "$STATUS_PROBE_LOG.argv"
+      if IFS= read -r inherited; then return 98; fi
+      if [[ "${program:t}" == git && $# == 7 \
+        && "$1" == --no-optional-locks && "$2" == -c && "$3" == core.fsmonitor=false \
+        && "$4" == status && "$5" == --porcelain=v2 && "$6" == --branch && "$7" == -z ]]; then
         return 124
       fi
-      shift
-      "$@"
+      "$program" "$@"
     }
-    zdx-status --json
+    zdx-status --json || exit 93
+    local unread=""
+    IFS= read -r unread || exit 94
+    [[ "$unread" == "Caller status input remains unread." ]] || exit 95
   ' "$repo"
   [ "$status" -eq 0 ]
   [[ "$output" == *"git status timed out after 5s"* ]]
@@ -430,10 +443,55 @@ status_network_probe_seen() {
     .repository.root != null and .repository.branch == null
     and .repository.staged == null and .repository.ahead == null
     and .repository.user_email == "jane@example.com"'
-  grep -Eq '^[1-9][0-9]* git rev-parse$' "$STATUS_PROBE_LOG"
-  grep -Eq '^[1-9][0-9]* git --no-optional-locks$' "$STATUS_PROBE_LOG"
-  grep -Eq '^[1-9][0-9]* git config$' "$STATUS_PROBE_LOG"
-  grep -Eq '^[1-9][0-9]* df -P$' "$STATUS_PROBE_LOG"
+  grep -Fxq '3 git rev-parse --show-toplevel --absolute-git-dir' "$STATUS_PROBE_LOG"
+  grep -Fxq '5 git --no-optional-locks -c core.fsmonitor=false status --porcelain=v2 --branch -z' "$STATUS_PROBE_LOG"
+  grep -Fxq '3 git config --get user.email' "$STATUS_PROBE_LOG"
+  local real_python real_git real_df real_env
+  real_python=$(type -P python3)
+  real_git=$(type -P git)
+  real_df=$(type -P df)
+  real_env=$(type -P env)
+  [[ "$real_python" == /* && -f "$real_python" && -x "$real_python" ]]
+  run "$real_python" -B -I - "$STATUS_PROBE_LOG.argv" "$real_git" "$real_df" "$real_env" "$HOME" "$TEST_SUITE_ROOT" <<'PYARGV'
+from pathlib import Path
+import os, sys
+raw = Path(sys.argv[1]).read_bytes()
+assert raw and raw.endswith(b'\0')
+words = raw[:-1].decode().split('\0')
+records, index = [], 0
+while index < len(words):
+    seconds, program, count = words[index:index + 3]
+    assert seconds.isdecimal() and 1 <= int(seconds) <= 600
+    assert Path(program).is_absolute() and Path(program).is_file() and os.access(program, os.X_OK)
+    assert count.isdecimal()
+    size = int(count)
+    args = tuple(words[index + 3:index + 3 + size])
+    assert len(args) == size
+    records.append((seconds, program, args))
+    index += 3 + size
+assert index == len(words)
+git, df, env, home, root = sys.argv[2:]
+required = [
+    ('3', git, ('rev-parse', '--show-toplevel', '--absolute-git-dir')),
+    ('5', git, ('--no-optional-locks', '-c', 'core.fsmonitor=false', 'status', '--porcelain=v2', '--branch', '-z')),
+    ('3', git, ('config', '--get', 'user.email')),
+    ('3', df, ('-P', '-k', '--', home)),
+]
+assert all(records.count(row) == 1 for row in required)
+# Current-directory repository probes use Git directly. Optional exact-root
+# checkout metadata alone uses the frozen env + sanitized Git prefix.
+checkout = {
+    ('3', ('rev-parse', '--show-toplevel')),
+    ('3', ('rev-parse', '--short=7', '--verify', 'HEAD^{commit}')),
+    ('5', ('-c', 'core.fsmonitor=false', 'status', '--porcelain', '--untracked-files=no')),
+}
+for seconds, program, args in records:
+    if Path(program).name == 'env':
+        assert program == env
+        assert args[:10] == ('-u', 'GIT_DIR', '-u', 'GIT_WORK_TREE', '-u', 'GIT_INDEX_FILE', 'GIT_OPTIONAL_LOCKS=0', git, '-C', root)
+        assert (seconds, args[10:]) in checkout
+PYARGV
+  [ "$status" -eq 0 ]
   # Nothing reaches the network or asks for privilege.
   run status_network_probe_seen "$STATUS_PROBE_LOG"
   [ "$status" -eq 1 ]
@@ -860,6 +918,115 @@ MOCK
     unsetopt ksh_arrays sh_word_split force_float pipe_fail
     [[ $call_rc == 0 && "$kept" == on:on:on:on ]] || exit 32
     command jq -e ".schema == \"zdx.status.v1\"" "$HOME/status.data" >/dev/null
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: status needs a repository segment before reporting workspace identity" {
+  run run_zsh '
+    cd "$HOME" || return 90
+    local -A zdx_status_facts=()
+    local REPLY="" fixture_root="" fixture_git="$HOME/git-metadata"
+    mkdir -p "$fixture_git" || return 91
+    _zdx_status_probe() {
+      case "${3-}" in
+        rev-parse) REPLY="$fixture_root"${(#):-10}"$fixture_git" ;;
+        config) REPLY="fixture@example.invalid" ;;
+        *) REPLY="" ;;
+      esac
+      return 0
+    }
+    _zdx_status_git_usable() { return 0; }
+    WS_BASE_DIR="$HOME/workspaces"
+    fixture_root="$WS_BASE_DIR/github/repository"
+    _zdx_status_repository || return 92
+    [[ -z "${zdx_status_facts[ws_platform]-}${zdx_status_facts[ws_identity]-}" ]] || return 93
+    zdx_status_facts=()
+    fixture_root="$WS_BASE_DIR/github/personal/repository"
+    _zdx_status_repository || return 94
+    [[ "${zdx_status_facts[ws_platform]-}" == github \
+      && "${zdx_status_facts[ws_identity]-}" == personal ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: status project markers must be regular files" {
+  mkdir -p "$HOME/marker-project/Makefile"
+  mkfifo "$HOME/marker-project/pyproject.toml"
+  run run_zsh '
+    cd "$HOME/marker-project" || return 90
+    local -A zdx_status_facts=()
+    local -a zdx_status_files=()
+    _zdx_status_project "" || return 91
+    [[ -z "${zdx_status_facts[project_dir]-}" && ${#zdx_status_files} == 0 ]] || return 92
+    rmdir -- "$HOME/marker-project/Makefile" || return 93
+    : > "$HOME/marker-project/Makefile"
+    _zdx_status_project "" || return 94
+    [[ "${zdx_status_facts[project_dir]-}" == "$HOME/marker-project" \
+      && "${(j: :)zdx_status_files}" == Makefile ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: status executes the external Git instead of a same-named function" {
+  load core_probe_test_helper
+  make_core_probe_path
+  core_probe_program git <<'MOCK'
+printf 'external\n'
+MOCK
+  run run_core_probe_zsh '
+    git() { print -r -- function-intercepted; }
+    _zdx_status_probe 3 git --version || return 91
+    [[ "$REPLY" == external ]]
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "core probes: status disables fsmonitor before requesting porcelain" {
+  load core_probe_test_helper
+  make_core_probe_path
+  export CORE_PROBE_REPO="$HOME/workspaces/github/personal/repository"
+  mkdir -p "$CORE_PROBE_REPO" "$HOME/git-metadata"
+  core_probe_program git <<'MOCK'
+for argument in "$@"; do
+  case "$argument" in
+    rev-parse) printf '%s\n%s\n' "$CORE_PROBE_REPO" "$HOME/git-metadata"; exit 0 ;;
+    status)
+      [[ "$*" == *'-c core.fsmonitor=false'* ]] || : > "$HOME/fsmonitor-triggered"
+      printf '# branch.head main\0'
+      exit 0
+      ;;
+    config) printf 'fixture@example.invalid\n'; exit 0 ;;
+  esac
+done
+exit 97
+MOCK
+  run run_core_probe_zsh '
+    local -A zdx_status_facts=()
+    _zdx_status_repository || return 91
+    [[ "${zdx_status_facts[branch]-}" == main && ! -e "$HOME/fsmonitor-triggered" ]]
+  '
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/fsmonitor-triggered" ]
+}
+
+@test "core probes: checkout version uses an external env wrapper in the watchdog fallback" {
+  load core_probe_test_helper
+  make_core_probe_path
+  export CORE_PROBE_REPO="$HOME/checkout"
+  mkdir -p "$CORE_PROBE_REPO/.git"
+  core_probe_program git <<'MOCK'
+case "$*" in
+  *'rev-parse --show-toplevel'*) printf '%s\n' "$CORE_PROBE_REPO" ;;
+  *'rev-parse --short=7 --verify'*) printf 'abcdef0\n' ;;
+  *'status --porcelain --untracked-files=no'*) ;;
+  *) exit 97 ;;
+esac
+MOCK
+  run run_core_probe_zsh '
+    env() { print -r -- function-intercepted; }
+    _zdx_release_checkout "$CORE_PROBE_REPO" || return 91
+    [[ "${reply[1]-}" == abcdef0 && -z "${reply[2]-}" ]]
   '
   [ "$status" -eq 0 ]
 }

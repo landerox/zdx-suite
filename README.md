@@ -119,7 +119,8 @@ and a dependency doctor, organized into four domains.
   project, VPN, host, and ZDX state on one read-only screen, or as one
   `zdx.status.v1` JSON document with `--json`.
 - **Dependency Diagnostics (`zdx doctor` / `zdx-doctor`)**: Run OS-aware
-  capability checks, review the exact install plan (`--dry-run` only prints
+  bounded capability checks that distinguish missing tools from unknown probe
+  results, review the exact install plan (`--dry-run` only prints
   it), and opt in explicitly before any supported dependency installation,
   which runs root-owned tools through one `sudo -v` and then `sudo -n`.
 - **Plugin Manager CLI (`zdx-plugins`)**: Discover and manage structurally
@@ -175,9 +176,11 @@ Per platform:
   `brew install wireguard-tools bash`, because wg-quick needs Bash 4 or newer;
   `file-extract` needs `brew install gnu-tar`, which adds `gtar`; `tar.zst`
   archives also need Homebrew `zstd`; and 7z creation needs Homebrew
-  `sevenzip`. `timeout` is optional: a built-in
-  watchdog bounds probes without it, and the suites prefer `gtimeout` when
-  Homebrew `coreutils` is installed.
+  `sevenzip`. With the core loaded, its built-in watchdog bounds probes
+  without `timeout`; the suites also accept Homebrew `coreutils`' `gtimeout`.
+  A standalone doctor needs a native `timeout` or `gtimeout` for external
+  probes; without either it reports unknown results instead of running them
+  without a bound.
 - **Linux and WSL2**: install the same tools from your distribution, with
   `wireguard-tools` for the VPN suite; GNU `tar` and `timeout` are usually
   already present. Ubuntu 20.04's Git 2.25 is too old for `git-menu`. On WSL,
@@ -188,14 +191,17 @@ Per platform:
   `python3.11`, a uv-managed Python, and the project's `.venv`, so an older
   default `python3`, such as 3.9 on macOS or 3.10 on Ubuntu 22.04, can stay.
 
-Run `zdx doctor` after installation. In addition to command presence, it checks
+Run `zdx doctor` after installation. It resolves executable paths instead of
+counting shell functions or aliases as installed tools, and bounds version and
+Command Line Tools checks before showing a verified version. In addition, it checks
 the alternative `timeout`/`gtimeout` and `sha256sum`/`shasum` capabilities,
 the optional `fd` or `fdfind` for workspace discovery, `ip` for VPN routes,
 and GNU `tar` as `tar` or `gtar`, showing rows
 that do not apply on the platform as not applicable; suite-specific
 capabilities are reported but never bootstrapped implicitly. It also reports terminal settings, fzf version
 probe failures, and the loaded doctor's source path without printing theme or
-fzf option values.
+fzf option values. An inconclusive probe never supplies an inferred install
+target; other independently verified missing tools can still form a plan.
 
 ### ⚡ Installation
 

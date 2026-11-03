@@ -185,13 +185,14 @@ trust_start() {
   chmod -- 755 "$TEST_MOCK_BIN/gh"
   run -1 env HOME="$TRUST_HOME" zsh -f -c '
     emulate -R zsh
-    source "$1/functions.zsh" 2>/dev/null
+    source "$1/functions.zsh" 2>/dev/null || exit 90
+    [[ "${ZDX_TRUST_PROBE:-unset}" == unset ]] || exit 91
     source "$1/functions/zdx-doctor.zsh"
     _zdx_doctor_detect_pkg_manager() { print -r -- none; }
     zdx-doctor </dev/null 2>&1
   ' _ "$TEST_SUITE_ROOT"
-  [[ "$output" == *"[User Files]"* ]]
-  [[ "$output" == *"Refused at startup: $TRUST_HOME/.config/zdx/config.zsh"* ]]
+  [[ "$output" =~ (^|$'\n')'▸ User Files'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Refused at startup:'[[:space:]]+"$TRUST_HOME/.config/zdx/config.zsh (owner, link count, or group/other write permission)"($|$'\n') ]]
 }
 
 @test "trusted user code: overrides keep winning after a lazy suite load" {

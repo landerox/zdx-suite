@@ -147,14 +147,16 @@ lazy_shell() {
       demo-status one two
       print -r -- "first-call: rc=$? loaded=[${(j:,:)ZDX_LOADED_PLUGINS}]"
       zdx demo three
-      zdx-plugins --list 2>&1 | grep -E "^demo "
+      zdx-plugins --list >"$HOME/plugin-list.data" 2>"$HOME/plugin-list.ui" || exit 91
+      [[ ! -s "$HOME/plugin-list.data" ]] || exit 92
+      grep -E "^  demo[[:space:]]+Active[[:space:]]+Local$" "$HOME/plugin-list.ui"
     ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "after-source: set=1 loaded=[]" ]
   [ "${lines[1]}" = "demo status: one two" ]
   [ "${lines[2]}" = "first-call: rc=0 loaded=[demo]" ]
   [ "${lines[3]}" = "demo menu: three" ]
-  [[ "${lines[4]}" =~ ^demo\ +Active\ +Local$ ]]
+  [[ "${lines[4]}" =~ ^\ \ demo[[:space:]]+Active[[:space:]]+Local$ ]]
   [ "$(grep -c '^demo sourced$' "$LAZY_LOG")" -eq 1 ]
 }
 

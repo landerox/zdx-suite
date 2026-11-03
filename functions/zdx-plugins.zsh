@@ -95,6 +95,19 @@ _zdx_plugins_label() {
   printf '  %-18s %s\n' "${(V)${1%:}}:" "${(V)2-}" >&2
 }
 
+# Core-aligned tables, with plain records for standalone listing.
+_zdx_plugins_table() {
+  emulate -L zsh
+  if (( ${+functions[_zdx_ui_table]} )); then
+    _zdx_ui_table "$@"
+    return
+  fi
+  local row=""
+  for row in "$@"; do
+    _zdx_plugins_dim "${row//$'\t'/  }"
+  done
+}
+
 # REPLY: "<count> <noun>". Usage: _zdx_plugins_count_noun <count> <singular> [plural]
 _zdx_plugins_count_noun() {
   emulate -L zsh
@@ -239,19 +252,21 @@ _zdx_plugins_terminal() {
   [[ -t 0 && -t 2 ]]
 }
 
-# Status 0 accepted, 1 declined, 2 no terminal for the prompt.
+# The manager's existing terminal boundary remains an owned availability hook.
+_zdx_plugins_confirm_ask() {
+  emulate -L zsh
+  (( ${+functions[_zdx_confirm_prompt]} )) || return 3
+  _zdx_confirm_prompt --style line --error _zdx_plugins_error \
+    --available _zdx_plugins_terminal -- "${1:-Proceed?}"
+}
+
+# Status 0 accepted, 1 declined, 2 unavailable, 3 protocol failure; returned
+# 130/143 remain interruptions. The caller alone supplies the --yes choice.
 _zdx_plugins_confirm() {
   emulate -L zsh
-  local prompt="${1:-Proceed?}" auto_yes="${2:-no}" answer=""
+  local prompt="${1:-Proceed?}" auto_yes="${2:-no}"
   [[ "$auto_yes" == yes ]] && return 0
-  _zdx_plugins_terminal || return 2
-  if _zdx_plugins_color_enabled; then
-    printf '\033[1;33m? %s [y/N]: \033[0m' "${(V)prompt}" >&2
-  else
-    printf '? %s [y/N]: ' "${(V)prompt}" >&2
-  fi
-  read -r answer || return 2
-  [[ "$answer" == [Yy] ]]
+  _zdx_plugins_confirm_ask "$prompt"
 }
 
 # Refuses a change that could neither prompt nor rely on --yes, before any
@@ -347,7 +362,7 @@ _zdx_plugins_require_runtime() {
     _zdx_plugin_entrypoint_safe _zdx_capture_parent_safe _zdx_run_captured \
     _zdx_run_with_timeout _zdx_ui_label _zdx_ui_table _zdx_ui_step_banner \
     _zdx_ui_step_result _zdx_ui_step_summary _zdx_step_exec _zdx_step_report \
-    _zdx_count_noun; do
+    _zdx_count_noun _zdx_confirm_prompt; do
     (( ${+functions[$service]} )) && continue
     _zdx_plugins_error "zdx-plugins needs the ZDX core runtime; load it through zdx-suite.plugin.zsh or functions.zsh."
     return 1
@@ -361,13 +376,28 @@ _zdx_plugins_require_runtime() {
 _zdx_plugins_require_git() {
   emulate -L zsh
   local git_path=""
-  git_path=$(whence -p git 2>/dev/null) || git_path=""
-  if [[ -n "$git_path" && "${OSTYPE:-}" == darwin* \
-    && "$git_path" == /usr/bin/git ]] \
-    && ! command xcode-select -p >/dev/null 2>&1; then
-    git_path=""
+  local -i probe_rc=0
+  REPLY=""
+  if (( ${+functions[_zdx_probe_resolve]} && ${+functions[_zdx_probe_clt_placeholder]} )) \
+    && _zdx_probe_resolve git; then
+    git_path="$REPLY"
+    REPLY=""
+    _zdx_probe_clt_placeholder git "$git_path" || probe_rc=$?
+    case "$probe_rc" in
+      1) REPLY="$git_path"; return 0 ;;
+      130|143) return $probe_rc ;;
+      124|125)
+        _zdx_plugins_error "git availability could not be verified (status $probe_rc); run zdx doctor, then retry."
+        return 1
+        ;;
+      0) ;;
+      *)
+        _zdx_plugins_error "git availability is unknown; run zdx doctor, then retry."
+        return 1
+        ;;
+    esac
   fi
-  [[ -n "$git_path" ]] && return 0
+  REPLY=""
   _zdx_plugins_error "git is required to install or update plugins; install Git, then retry."
   return 1
 }
@@ -380,22 +410,22 @@ _zdx_plugins_require_git() {
 _zdx_plugins_git() {
   emulate -L zsh
   local -i seconds=0
+  local git_path="${_zdx_plugins_git_path:-}"
   if [[ "${1-}" == --timeout ]]; then
     seconds="${2:-0}"
     shift 2
   fi
+  [[ "$git_path" == /* && -f "$git_path" && -x "$git_path" ]] || return 127
   (
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
       GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
     export GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0
-    if (( seconds > 0 )) && (( ${+functions[_zdx_run_with_timeout]} )); then
-      # The bounded form must exec the Git binary itself, not a function.
-      local git_path=""
-      git_path=$(whence -p git 2>/dev/null) || exit 127
+    if (( seconds > 0 )); then
+      (( ${+functions[_zdx_run_with_timeout]} )) || exit 125
       _zdx_run_with_timeout "$seconds" "$git_path" "$@"
     else
-      command git "$@"
+      command "$git_path" "$@"
     fi
   )
 }
@@ -406,6 +436,8 @@ _zdx_plugins_git() {
 # Credentials must come from a credential helper or an SSH agent.
 _zdx_plugins_git_network() {
   emulate -L zsh
+  local git_path="${_zdx_plugins_git_path:-}"
+  [[ "$git_path" == /* && -f "$git_path" && -x "$git_path" ]] || return 127
   (
     # The loader refuses plugin files that group or other users can write,
     # so clones never inherit a permissive caller umask.
@@ -416,15 +448,52 @@ _zdx_plugins_git_network() {
     export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS='' GIT_OPTIONAL_LOCKS=0
     export GIT_ALLOW_PROTOCOL='file:git:http:https:ssh'
     if [[ -z "${GIT_SSH_COMMAND:-}" && -z "${GIT_SSH:-}" ]] \
-      && ! command git config --get core.sshCommand >/dev/null 2>&1; then
+      && ! command "$git_path" config --get core.sshCommand >/dev/null 2>&1; then
       export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
     fi
     # Git aborts a transfer that stays below 1 KiB/s for 60 seconds.
     export GIT_CONFIG_COUNT=2
     export GIT_CONFIG_KEY_0=http.lowSpeedLimit GIT_CONFIG_VALUE_0=1024
     export GIT_CONFIG_KEY_1=http.lowSpeedTime GIT_CONFIG_VALUE_1=60
-    command git "$@"
+    command "$git_path" "$@"
   )
+}
+
+# REPLY: successful optional Git metadata only. Listing and removal use this
+# bounded read path independently of lifecycle Git and never require metadata
+# to be available. Returned interruptions stop their public consumers.
+# Usage: _zdx_plugins_metadata_probe REPOSITORY <git arguments...>
+_zdx_plugins_metadata_probe() {
+  emulate -L zsh
+  local repository="${1-}" git_path="" env_path="" metadata=""
+  local -i probe_rc=0
+  REPLY=""
+  (( $# >= 2 )) || return 2
+  shift
+  (( ${+functions[_zdx_probe_resolve]} && ${+functions[_zdx_probe_tool]} \
+    && ${+functions[_zdx_probe_clt_placeholder]} )) || return 125
+  _zdx_probe_resolve git || return 1
+  git_path="$REPLY"
+  REPLY=""
+  _zdx_probe_clt_placeholder git "$git_path" || probe_rc=$?
+  case "$probe_rc" in
+    1) ;;
+    0) return 1 ;;
+    124|125|130|143) return $probe_rc ;;
+    *) return 125 ;;
+  esac
+  _zdx_probe_resolve env || return 125
+  env_path="$REPLY"
+  REPLY=""
+  probe_rc=0
+  metadata=$(_zdx_probe_tool 3 "$env_path" \
+    -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
+    -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+    GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 "$git_path" -C "$repository" "$@") \
+    || probe_rc=$?
+  (( probe_rc == 0 )) && REPLY="$metadata"
+  return $probe_rc
 }
 
 # REPLY: the full commit object ID at HEAD of one exact repository.
@@ -1171,6 +1240,7 @@ _zdx_plugins_review() {
 
 _zdx_plugins_install_check() {
   emulate -L zsh
+  local REPLY=""
   if [[ -z "$url" ]]; then
     _zdx_plugins_error "Git repository URL is required."
     return 2
@@ -1194,13 +1264,16 @@ _zdx_plugins_install_check() {
     _zdx_plugins_dim "Pass another name after the URL, such as: zdx-plugins --install <url> my-plugin"
     return 2
   fi
-  _zdx_plugins_require_git || return 1
+  _zdx_plugins_require_runtime || return 1
+  _zdx_plugins_require_git || return $?
+  _zdx_plugins_git_path="$REPLY"
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
 }
 
 _zdx_plugins_install() {
   local url="${1-}" plugin_name="${2-}" dry_run="${3:-no}" auto_yes="${4:-no}"
+  local _zdx_plugins_git_path=""
   _zdx_plugins_install_check || return $?
   local -A _zdx_plugins_session=() _zdx_plugins_tx=()
   local -i install_rc=0
@@ -1212,7 +1285,9 @@ _zdx_plugins_install() {
       install_rc=1
     fi
   } always {
-    _zdx_plugins_tx_close || install_rc=1
+    _zdx_plugins_tx_close || {
+      (( install_rc == 130 || install_rc == 143 )) || install_rc=1
+    }
     _zdx_plugins_unlock
   }
   return $install_rc
@@ -1263,6 +1338,7 @@ _zdx_plugins_install_prepare() {
     "$auto_yes" || confirm_rc=$?
   case "$confirm_rc" in
     0) [[ "$auto_yes" == yes ]] && _zdx_plugins_info "Trusted with --yes." ;;
+    130|143) return $confirm_rc ;;
     1)
       _zdx_plugins_info "Cancelled: nothing was installed."
       return 0
@@ -1457,6 +1533,7 @@ _zdx_plugins_update_prepare() {
     || confirm_rc=$?
   case "$confirm_rc" in
     0) [[ "$auto_yes" == yes ]] && _zdx_plugins_info "Trusted with --yes." ;;
+    130|143) return $confirm_rc ;;
     1)
       _zdx_plugins_report_result skipped "declined" info \
         "Cancelled: '$plugin_name' was not updated."
@@ -1512,6 +1589,7 @@ _zdx_plugins_update_success() {
 
 _zdx_plugins_update_check() {
   emulate -L zsh
+  local REPLY=""
   if ! _zdx_plugins_name_valid "$plugin_name"; then
     _zdx_plugins_error "Invalid plugin name: '$plugin_name'."
     return 2
@@ -1521,13 +1599,16 @@ _zdx_plugins_update_check() {
     _zdx_plugins_error "Plugin '$plugin_name' is not installed."
     return 1
   fi
-  _zdx_plugins_require_git || return 1
+  _zdx_plugins_require_runtime || return 1
+  _zdx_plugins_require_git || return $?
+  _zdx_plugins_git_path="$REPLY"
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
 }
 
 _zdx_plugins_update() {
   local plugin_name="${1-}" dry_run="${2:-no}" auto_yes="${3:-no}"
+  local _zdx_plugins_git_path=""
   _zdx_plugins_update_check || return $?
   local -A _zdx_plugins_session=() _zdx_plugins_tx=()
   local -i update_rc=0
@@ -1539,7 +1620,9 @@ _zdx_plugins_update() {
       update_rc=1
     fi
   } always {
-    _zdx_plugins_tx_close || update_rc=1
+    _zdx_plugins_tx_close || {
+      (( update_rc == 130 || update_rc == 143 )) || update_rc=1
+    }
     _zdx_plugins_unlock
   }
   return $update_rc
@@ -1559,12 +1642,15 @@ _zdx_plugins_names() {
 
 _zdx_plugins_update_all_check() {
   emulate -L zsh
+  local REPLY=""
   local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
   if [[ ! -e "$plugins_dir" && ! -L "$plugins_dir" ]]; then
     _zdx_plugins_info "No plugins are installed."
     return 0
   fi
-  _zdx_plugins_require_git || return 1
+  _zdx_plugins_require_runtime || return 1
+  _zdx_plugins_require_git || return $?
+  _zdx_plugins_git_path="$REPLY"
   _zdx_plugins_require_authorization "$dry_run" "$auto_yes" || return 1
 
   _zdx_plugins_update_all_ready=1
@@ -1573,6 +1659,7 @@ _zdx_plugins_update_all_check() {
 
 _zdx_plugins_update_all() {
   local dry_run="${1:-no}" auto_yes="${2:-no}"
+  local _zdx_plugins_git_path=""
   local -i _zdx_plugins_update_all_ready=0
   _zdx_plugins_update_all_check || return $?
   (( _zdx_plugins_update_all_ready )) || return 0
@@ -1585,7 +1672,9 @@ _zdx_plugins_update_all() {
       update_rc=1
     fi
   } always {
-    _zdx_plugins_tx_close || update_rc=1
+    _zdx_plugins_tx_close || {
+      (( update_rc == 130 || update_rc == 143 )) || update_rc=1
+    }
     _zdx_plugins_unlock
   }
   return $update_rc
@@ -1742,7 +1831,9 @@ _zdx_plugins_remove() {
       remove_rc=1
     fi
   } always {
-    _zdx_plugins_tx_close || remove_rc=1
+    _zdx_plugins_tx_close || {
+      (( remove_rc == 130 || remove_rc == 143 )) || remove_rc=1
+    }
     _zdx_plugins_unlock
   }
   return $remove_rc
@@ -1766,16 +1857,27 @@ _zdx_plugins_remove_locked() {
   _zdx_plugins_header "Remove Plugin"
   _zdx_plugins_label "Plugin" "$plugin_name"
   _zdx_plugins_label "Path" "$target_display"
-  if [[ -d "$target/.git" && ! -L "$target/.git" ]] \
-    && command -v git >/dev/null 2>&1; then
-    local origin=""
-    origin=$(_zdx_plugins_git -C "$target" config --get remote.origin.url \
-      2>/dev/null) || origin=""
-    if [[ -n "$origin" ]]; then
-      _zdx_plugins_redact_url "$origin"
+  if [[ -d "$target/.git" && ! -L "$target/.git" ]]; then
+    local -i metadata_rc=0
+    _zdx_plugins_metadata_probe "$target" config --get remote.origin.url \
+      || metadata_rc=$?
+    (( metadata_rc == 130 || metadata_rc == 143 )) && return $metadata_rc
+    if (( metadata_rc == 0 )) && [[ -n "$REPLY" ]]; then
+      _zdx_plugins_redact_url "$REPLY"
       _zdx_plugins_label "Origin" "$REPLY"
+    else
+      _zdx_plugins_label "Origin" "Unknown"
     fi
-    _zdx_plugins_head "$target" && _zdx_plugins_label "Commit" "${REPLY[1,7]}"
+    metadata_rc=0
+    _zdx_plugins_metadata_probe "$target" rev-parse --verify --quiet 'HEAD^{commit}' \
+      || metadata_rc=$?
+    (( metadata_rc == 130 || metadata_rc == 143 )) && return $metadata_rc
+    if (( metadata_rc == 0 )) && [[ "$REPLY" != *[^0-9a-f]* \
+      && ( ${#REPLY} == 40 || ${#REPLY} == 64 ) ]]; then
+      _zdx_plugins_label "Commit" "${REPLY[1,7]}"
+    else
+      _zdx_plugins_label "Commit" "Unknown"
+    fi
   fi
   if _zdx_plugins_loaded "$plugin_name"; then
     _zdx_plugins_label "Loaded" "yes; its other functions stay defined until a new shell"
@@ -1790,6 +1892,7 @@ _zdx_plugins_remove_locked() {
     || confirm_rc=$?
   case "$confirm_rc" in
     0) ;;
+    130|143) return $confirm_rc ;;
     1)
       _zdx_plugins_info "Cancelled: nothing was removed."
       return 0
@@ -1857,18 +1960,12 @@ _zdx_plugins_list() {
 
   local -a subdirs=("$plugins_dir"/*(N/))
   local -a stale=("$plugins_dir"/.zdx-staging.*(DN))
+  local -a rows=()
   if (( ${#subdirs} == 0 )); then
     print -u2 -r -- "No plugins installed."
   else
-    if _zdx_plugins_color_enabled; then
-      printf '\033[1;34m%-20s %-10s %s\033[0m\n' "Plugin Name" "Status" "Git Remote Origin" >&2
-    else
-      printf '%-20s %-10s %s\n' "Plugin Name" "Status" "Git Remote Origin" >&2
-    fi
-    printf '%s\n' "────────────────────────────────────────────────────────────────────────────────" >&2
-
-    local subdir="" plugin_name="" plugin_status="" origin="" git_origin=""
-    local status_color=""
+    local subdir="" plugin_name="" plugin_status="" origin=""
+    local -i metadata_rc=0
     for subdir in "${subdirs[@]}"; do
       plugin_name="${subdir:t}"
       plugin_status="Invalid"
@@ -1879,28 +1976,22 @@ _zdx_plugins_list() {
         plugin_status="Inactive"
         _zdx_plugins_loaded "$plugin_name" && plugin_status="Active"
       fi
-      if [[ -d "$subdir/.git" && ! -L "$subdir/.git" ]] \
-        && command -v git >/dev/null 2>&1; then
-        git_origin=$(_zdx_plugins_git -C "$subdir" config --get \
-          remote.origin.url 2>/dev/null) || git_origin=""
-        if [[ -n "$git_origin" ]]; then
-          _zdx_plugins_redact_url "$git_origin"
+      if [[ -d "$subdir/.git" && ! -L "$subdir/.git" ]]; then
+        origin=Unknown
+        metadata_rc=0
+        _zdx_plugins_metadata_probe "$subdir" config --get remote.origin.url \
+          || metadata_rc=$?
+        (( metadata_rc == 130 || metadata_rc == 143 )) && return $metadata_rc
+        if (( metadata_rc == 0 )) && [[ -n "$REPLY" ]]; then
+          _zdx_plugins_redact_url "$REPLY"
           origin="$REPLY"
         fi
       fi
-      if _zdx_plugins_color_enabled; then
-        case "$plugin_status" in
-          Active)   status_color=$'\e[1;32m' ;;
-          Inactive) status_color=$'\e[1;33m' ;;
-          *)        status_color=$'\e[1;31m' ;;
-        esac
-        printf '%-20s %s%-10s\033[0m %s\n' "${(V)plugin_name}" \
-          "$status_color" "$plugin_status" "${(V)origin}" >&2
-      else
-        printf '%-20s %-10s %s\n' "${(V)plugin_name}" "$plugin_status" \
-          "${(V)origin}" >&2
-      fi
+      # Escape data before adding the trusted TAB delimiters, so even an
+      # invalid directory name or a remote with controls remains one row.
+      rows+=("${(V)plugin_name}"$'\t'"$plugin_status"$'\t'"${(V)origin}")
     done
+    _zdx_plugins_table $'Plugin Name\tStatus\tGit Remote Origin' "${rows[@]}" || return $?
   fi
   if (( ${#stale} > 0 )); then
     _zdx_plugins_warn "An interrupted plugin transaction left staging in the plugin root; the next install, update, or remove recovers it."
@@ -1985,26 +2076,30 @@ _zdx_plugins_menu_pause() {
 _zdx_plugins_menu() {
   local plugins_dir="${ZDX_PLUGINS_DIR:-$HOME/.config/zdx/plugins}"
   local _zdx_plugins_menu_action="" _zdx_plugins_menu_url="" _zdx_plugins_menu_name=""
+  local -i action_rc=0
   while true; do
     _zdx_plugins_select_action || return $?
+    action_rc=0
     case "$_zdx_plugins_menu_action" in
       "") return 0 ;;
       :) continue ;;
       list)
         _zdx_plugins_header "Installed Plugins"
-        _zdx_plugins_list
+        _zdx_plugins_list || action_rc=$?
         ;;
       install)
         _zdx_plugins_menu_install_prompt
         if [[ -n "$_zdx_plugins_menu_url" ]]; then
-          _zdx_plugins_install "$_zdx_plugins_menu_url" "$_zdx_plugins_menu_name" no no
+          _zdx_plugins_install "$_zdx_plugins_menu_url" "$_zdx_plugins_menu_name" no no \
+            || action_rc=$?
         else
           _zdx_plugins_warn "No URL entered. Installation canceled."
         fi
         ;;
-      update) _zdx_plugins_update_all no no ;;
-      remove) _zdx_plugins_menu_remove "$plugins_dir" ;;
+      update) _zdx_plugins_update_all no no || action_rc=$? ;;
+      remove) _zdx_plugins_menu_remove "$plugins_dir" || action_rc=$? ;;
     esac
+    (( action_rc == 130 || action_rc == 143 )) && return $action_rc
     _zdx_plugins_menu_pause
   done
 }

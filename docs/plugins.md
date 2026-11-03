@@ -163,6 +163,12 @@ The earlier `_tk_fzf_color_opts`, `_tk_fzf_nth_template_option`, `_tk_fzf`,
 and `_tk_spinner` names remain as wrappers for older plugins and are not part
 of API v1.
 
+The confirmation helper preserves returned `130`/`143` from line and key
+reads; EOF and other read failures return `2`. A public command maps an
+explicit decline to `0` and a required but unavailable terminal to `1`, as
+defined in `development.md`. Picker cancellation retains its separate contract.
+The private `_zdx_probe_*` adapters are not additional API v1 services.
+
 The picker follows the terminal-color, plain-mode, and invocation-local fzf
 environment rules in `menu-spec.md`. These rules apply to custom plugin code
 through this contract and template; the loader cannot enforce rendering inside
@@ -432,6 +438,15 @@ keep their identities, renames the directory into staging so it leaves the
 root atomically, unregisters the plugin and its menu function, and deletes
 the quarantined tree by identity. A partial deletion is reported with the
 remaining path.
+
+Listing reads optional origin metadata; removal also reads the commit. These
+reads use resolved native Git and `env` paths, with a three-second bound and closed
+stdin. The macOS placeholder check has its own three-second bound. Missing or
+failed metadata, including an unavailable probe backend, is shown as `Unknown`
+without making Git a prerequisite for listing or removal. Returned `130` or
+`143` stops before a removal prompt or quarantine. Loaded-core listings use
+the shared table layout; standalone output retains a plain fallback. Install
+and update retain their separate required Git and trust checks.
 
 Unregistration removes the exact name from both discovered and loaded lists
 and forgets all of its stub records even if it was never loaded. Only stubs

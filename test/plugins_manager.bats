@@ -452,3 +452,17 @@ MOCK
   run f304_regex_probe 'plugin-head' unset
   [ "$status" -eq 0 ]
 }
+
+@test "core probes: plugin listing sends its records through the shared table service" {
+  mkdir -p "$HOME/.config/zdx/plugins/broken" "$HOME/.config/zdx/plugins/other"
+  chmod -- 700 "$HOME/.config" "$HOME/.config/zdx" "$HOME/.config/zdx/plugins"
+  run run_zsh '
+    cd "$HOME" || return 90
+    _zdx_ui_table() { printf "%s\n" "$@" > "$HOME/table-records"; }
+    zdx-plugins --list > "$HOME/stdout" 2> "$HOME/stderr" || return 91
+    [[ ! -s "$HOME/stdout" && -s "$HOME/table-records" ]] || return 92
+    local rows="$(<"$HOME/table-records")"
+    [[ "$rows" == *broken*Invalid* && "$rows" == *other*Invalid* ]]
+  '
+  [ "$status" -eq 0 ]
+}

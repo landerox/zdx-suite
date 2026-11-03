@@ -1,13 +1,13 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# Primitive sync: copies canonical core primitives into the suite common files
+# Primitive sync: copies canonical core primitives into their standalone owners
 # =============================================================================
 #
 # functions.zsh owns one canonical copy of each shared primitive between
-# `# >>> zdx-primitive NAME` and `# <<< zdx-primitive NAME` markers. Each suite
-# common file keeps a generated copy between the same markers, renamed to its
-# own prefix, so the suite still works when it is sourced without the core.
-# The suite wrappers call the core copy when it is loaded.
+# `# >>> zdx-primitive NAME` and `# <<< zdx-primitive NAME` markers. Standalone
+# owners keep generated copies between the same markers, renamed to their
+# prefixes, so they still work when sourced without the core. Their wrappers
+# call the core copy when it is loaded.
 #
 # Usage: zsh -f scripts/sync-primitives.zsh [--check]
 #   --check  report generated copies that differ and exit 1; change nothing
@@ -36,7 +36,7 @@ typeset -A canonical_functions=(
 )
 typeset -A primitive_targets=(
   picker-capture "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/zdx-common.zsh:_zdx_menu"
-  confirm-prompt "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/vpn-common.zsh:_vpn"
+  confirm-prompt "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/vpn-common.zsh:_vpn functions/zdx-doctor.zsh:_zdx_doctor"
 )
 
 # REPLY: the text between the markers of PRIMITIVE in FILE, markers included.

@@ -497,9 +497,12 @@ EOF
   export WIDGET_FZF_MATCH=':631'
   run widget_zsh '
     _zdx_run_with_timeout() {
-      print -r -- "$1 $2" >> "$WIDGET_PROBE_LOG"
-      shift
-      "$@"
+      local seconds="$1" program="$2"
+      shift 2
+      local -a readable=("$seconds" "${program:t}" "$@")
+      print -r -- "${(j: :)${(@q-)readable}}" >> "$WIDGET_PROBE_LOG"
+      printf "%s\0" "$seconds" "$program" "$#" "$@" >> "$WIDGET_PROBE_LOG.argv"
+      "$program" "$@"
     }
     OSTYPE=linux-gnu
     NO_COLOR=1
@@ -509,8 +512,36 @@ EOF
   ' "$repo"
   [ "$status" -eq 0 ]
   [[ "$output" == *"LBUFFER=[9main]"* ]]
-  grep -Fxq '5 ss' "$WIDGET_PROBE_LOG"
-  grep -Fxq '5 git' "$WIDGET_PROBE_LOG"
+  grep -Fxq '5 ss -l -t -n -p' "$WIDGET_PROBE_LOG"
+  grep -Fq '5 git for-each-ref --sort=-committerdate ' "$WIDGET_PROBE_LOG"
+  local real_python real_git
+  real_python=$(type -P python3)
+  real_git=$(type -P git)
+  [[ "$real_python" == /* && -f "$real_python" && -x "$real_python" ]]
+  run "$real_python" -B -I - "$WIDGET_PROBE_LOG.argv" "$TEST_MOCK_BIN/ss" "$real_git" <<'PYARGV'
+from pathlib import Path
+import os, sys
+raw = Path(sys.argv[1]).read_bytes()
+assert raw and raw.endswith(b'\0')
+words = raw[:-1].decode().split('\0')
+records, index = [], 0
+while index < len(words):
+    seconds, program, count = words[index:index + 3]
+    assert seconds == '5'
+    assert Path(program).is_absolute() and Path(program).is_file() and os.access(program, os.X_OK)
+    assert count.isdecimal()
+    size = int(count)
+    args = tuple(words[index + 3:index + 3 + size])
+    assert len(args) == size
+    records.append((seconds, program, args))
+    index += 3 + size
+assert index == len(words)
+assert records == [
+    ('5', sys.argv[2], ('-l', '-t', '-n', '-p')),
+    ('5', sys.argv[3], ('for-each-ref', '--sort=-committerdate', '--format=%(HEAD)%09%(refname)%09%(refname:short)%09%(symref)', 'refs/heads', 'refs/remotes')),
+]
+PYARGV
+  [ "$status" -eq 0 ]
   grep -Fxq -- '--no-color' "$WIDGET_FZF_ARGS"
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
@@ -748,4 +779,19 @@ MOCK
 
 @test "F3-04 module regex: widget ss parsing preserves unset caller state" {
   f304_module_widget_state ss unset
+}
+
+@test "core probes: branch widget executes the external Git in the watchdog fallback" {
+  load core_probe_test_helper
+  make_core_probe_path
+  core_probe_program git <<'MOCK'
+printf '*\trefs/heads/main\tmain\t\n'
+MOCK
+  run run_core_probe_zsh '
+    local -a widget_values=() widget_alternates=() widget_labels=()
+    git() { print -r -- function-intercepted; }
+    _zdx_widget_branch_candidates || return 91
+    [[ ${#widget_values} == 1 && "${widget_values[1]}" == main ]]
+  '
+  [ "$status" -eq 0 ]
 }

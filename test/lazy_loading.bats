@@ -336,13 +336,15 @@ EOF
     }
     _omz_source "$1/zdx-suite.plugin.zsh" || exit 90
     print -r -- "after-source: set=${+ZDX_LOADED_PLUGINS} loaded=[${(j:,:)ZDX_LOADED_PLUGINS}]"
-    zdx-plugins --list 2>&1 | grep -E "^probe "
+    zdx-plugins --list >"$HOME/plugin-list.data" 2>"$HOME/plugin-list.ui" || exit 92
+    [[ ! -s "$HOME/plugin-list.data" ]] || exit 93
+    grep -E "^  probe[[:space:]]+Active[[:space:]]+Local$" "$HOME/plugin-list.ui"
     cd "$HOME" || exit 91
     zdx-status 2>&1 | grep -E "^  Plugins:"
   ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "after-source: set=1 loaded=[probe]" ]
-  [[ "${lines[1]}" =~ ^probe\ +Active\ +Local$ ]]
+  [[ "${lines[1]}" =~ ^\ \ probe[[:space:]]+Active[[:space:]]+Local$ ]]
   [[ "${lines[2]}" =~ ^\ \ Plugins:\ +1\ custom\ plugin\ loaded$ ]]
 }
 

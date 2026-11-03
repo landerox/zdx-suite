@@ -262,6 +262,12 @@ snippet and executes unintended code.
 **Current controls.**
 
 - Top-level Git and System dispatchers use explicit `case` arms.
+- Owned core probe adapters resolve executable files with `whence -p`, freeze
+  their absolute paths, and exclude WSL Windows programs using Linux/WSL
+  evidence. Functions and aliases do not prove a binary is installed. Doctor,
+  status, widget, version, and plugin-manager consumers use these paths with
+  literal argument vectors. This binds the selected path, not its inode against
+  replacement by its owner between validation and execution.
 - The Git command menu additionally requires the complete selected row to
   match its current snapshot. Every suite except VPN captures pickers through
   the core `_zdx_picker_capture` (or its generated copy in a shell without the
@@ -1093,6 +1099,12 @@ through `sudo`, or a keepalive outlives its operation.
   `timestamp_timeout=0`, it prints the remaining commands instead of
   prompting again; a failed step stops the plan. Without a terminal it
   installs nothing.
+- The doctor keeps unknown probe results separate from verified missing
+  commands. An uncertain version or secondary check never contributes an
+  inferred package. Independent verified missing commands may still form a
+  safe plan; dry runs retain a nonzero diagnostic verdict while unknown facts
+  remain. Explicit declines remain successful public outcomes. Returned
+  `130`/`143` from confirmation, privilege, or install execution is preserved.
 
 **Residual gaps.**
 
@@ -1437,9 +1449,11 @@ in a compromised release channel and then installed, potentially as root.
   `ip`, and GNU `tar` (as `tar` or `gtar`) as semantic capabilities; none of
   these capabilities is silently added to the batch installer. Rows that
   cannot apply on the host, such as `ip` on macOS, are shown as not
-  applicable, and Apple's Command Line Tools
-  placeholders for `git` and `python3` are reported missing without being
-  run. The optional `fd`, or Debian's `fdfind`, is reported for faster
+  applicable. A resolved, bounded `xcode-select` check must explicitly clear
+  Apple's possible Command Line Tools placeholders for `git` and `python3`
+  before their version probes run. A classifier timeout or missing backend
+  leaves the result unknown and the primary program unexecuted. The optional
+  `fd`, or Debian's `fdfind`, is reported for faster
   workspace discovery but never counted as an issue or installed.
 - `ws-clone` contacts only the host of a validated `https://`, `ssh://`, or
   scp-like URL; local paths, `file://`, `ext::` transport helpers, and other
@@ -2490,14 +2504,16 @@ memory or CPU during inspection.
   example file above 1 MiB, by its inspected size and again while reading, or
   above 10,000 lines before reporting, and bounds each Git probe at 10
   seconds with closed stdin; a timed-out probe leaves its facts unknown.
-- `zdx status` runs every external probe through `_zdx_run_with_timeout`
-  with closed stdin and hidden stderr: `git rev-parse`, `git config`, and
+- `zdx status` runs its external probes through the private bounded probe
+  adapters, with closed stdin and hidden stderr: `git rev-parse`, `git config`, and
   `df` for 3 seconds and `git status` for 5, plus `sysctl` on macOS and `ip`
   only on a Linux host without sysfs. Other facts are Zsh file tests and
-  `/proc` or sysfs reads. `git status` runs with `--no-optional-locks`, so the
-  probe does not rewrite the index. A timed-out probe leaves its facts `null`
-  with a warning; nothing is fetched, written, or elevated, and no suite
-  module is loaded. When `kubectl` is installed, one
+  `/proc` or sysfs reads. `git status` runs with `--no-optional-locks` and
+  `-c core.fsmonitor=false`, preventing an optional index write or configured
+  filesystem-monitor hook. A timed-out probe leaves its facts `null`
+  with a warning; nothing is fetched or elevated, no repository or
+  configuration is changed, and no suite module is loaded. The watchdog may
+  use private temporary markers. When `kubectl` is installed, one
   `kubectl config view --minify` call (3 seconds) selects only the current
   context and its namespace through a fixed JSONPath; it contacts no cluster,
   runs no exec credential plugin, and the kubeconfig contents, which can hold
@@ -2506,6 +2522,13 @@ memory or CPU during inspection.
   bounded Git calls run with optional locks off, `GIT_DIR`, `GIT_WORK_TREE`,
   and `GIT_INDEX_FILE` removed, and only when the ZDX directory is exactly a
   work-tree top level.
+- Status resolves and validates its serializer before collection, bounds
+  serialization to five seconds, and emits no partial JSON on failure.
+  Malformed load-average data is unknown in text as well as JSON. Returned
+  `130`/`143` stops collection or optional checkout probes without publishing
+  a partial document. Workspace identity requires all three layout segments;
+  project detection separately requires regular marker files. These facts do
+  not choose an identity for a suite.
 - The insert widgets bound `git for-each-ref` (5 s), `ss` (5 s), `lsof`
   (10 s), `gh pr list` (15 s, at most 200 records), and the `jq` decode (5 s),
   and offer at most 2,000 candidates; virtual-environment discovery walks at
@@ -2516,6 +2539,29 @@ memory or CPU during inspection.
   line, so the menu runs outside the line editor, with the terminal as standard
   input, under the same confirmations as when it is typed; anywhere else, such
   as in `vared`, the chord does nothing.
+- Plugin listing and removal bound optional origin/commit reads independently
+  at three seconds using native Git and `env` paths. Ordinary failures leave
+  local `Unknown` metadata without adding a Git prerequisite. Listing retains
+  its standalone fallback; removal keeps its existing core runtime requirement.
+  Returned `130`/`143` stops before a removal decision or
+  quarantine. Install and update keep their required Git and trust boundary.
+- Owned core probes validate positive textual budgets before choosing either
+  timeout route. They qualify the selected native backend, reusing the existing
+  complete core watchdog when that selection is shadowed or non-native. The
+  generic plugin API timeout service retains its callback and zero-budget
+  semantics. A standalone doctor reuses an older loaded core timeout service
+  or a native backend; if neither is available it reports unknown facts without
+  an unbounded retry, core autosource, or implicit installation. Version reads
+  use five seconds and Command Line Tools classification three, per probe;
+  this is not a single deadline for a complete diagnostic. The legacy negative
+  classifier result does not prove physical absence or that a child ran.
+  Explicit backend absence and an unavailable classifier can return `125`;
+  that status alone cannot distinguish infrastructure failure from a child
+  returning the same status.
+- A drawing spinner checks its owned job while it remains unreaped, waits
+  once during cleanup, and never queries or signals its PID after that wait.
+  Missing job-state infrastructure uses the transparent foreground callback.
+  These checks do not eliminate every asynchronous PID or signal race.
 - Workspace discovery runs under a 30-second deadline with an 8 MiB output
   ceiling and fails closed above 2,000 repositories. Each `ws-status` probe and
   each SSH alias or Git configuration probe is bounded through the core timeout

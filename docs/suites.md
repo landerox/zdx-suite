@@ -85,7 +85,7 @@ apply on the host as not applicable.
 | Master router | `zdx`, `zdx-menu` | Loads adjacent `zdx-common.zsh`, maps fixed suite names to entrypoints, and renders the master menu |
 | Plugin manager | `zdx-plugins` | Installs, validates, updates, lists, and removes user plugins |
 | Status dashboard | `zdx status`, `zdx-status` | Read-only summary of the repository, project, VPN, host, and ZDX settings from bounded local probes, with a `zdx.status.v1` JSON form; it loads no suite and reports facts that suites own, such as workspace identity, without deciding them |
-| Dependency doctor | `zdx-doctor` | Reports command capabilities, version-probe failures, and passive display/source diagnostics; installation is always opt-in |
+| Dependency doctor | `zdx-doctor` | Reports native executable capabilities, bounded version and secondary-probe results, and passive display/source diagnostics; installation is always opt-in |
 | Insert widgets | ZLE widgets `zdx-insert-branch`, `zdx-insert-pr`, `zdx-insert-port`, `zdx-insert-venv` | Registered by the plugin wrapper in interactive shells and bound only to free chords; their bodies in `functions/zdx-widgets.zsh` load on first use and only insert a quoted value into the command line |
 | Optional local registration | `zdir`, alias `wsj` | Registered only when an ignored user-local `functions/zdir.zsh` exists; no implementation ships in the release artifact |
 
@@ -210,6 +210,10 @@ suite-owned and are mapped by their consumer.
 Suites own capability checks for their workflows. `zdx-doctor` owns the
 cross-suite dependency report and installation assistant. A suite may explain
 how to install a missing dependency, but it must not silently install it.
+The doctor can run standalone: it reuses a loaded core timeout service or a
+native `timeout`/`gtimeout`, and otherwise leaves external probe results unknown.
+An indeterminate capability never supplies an inferred package, while an
+independent verified missing tool can still belong to an opt-in plan.
 
 ## Allowed dependency graph
 
