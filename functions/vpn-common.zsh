@@ -260,6 +260,7 @@ _vpn_confirm_ask() {
 # Asks one yes/no question on the terminal and returns 0 for yes, 1 for a
 # decline or a cancelled picker, 2 when no terminal can answer (stdin or
 # stderr is not a terminal, or input ended), and 3 when the picker failed.
+# Line/key reads preserve returned interruption statuses 130 and 143.
 # Only an exact Yes, or y or Y, confirms. --style picker offers No and Yes in
 # an fzf picker through the given capture function when fzf is installed and
 # otherwise asks for a line; --style line asks `? PROMPT [y/N]:` and reads a
@@ -334,14 +335,21 @@ _vpn_confirm_prompt() {
     printf '? %s [y/N]: ' "${(V)zcp_prompt}" >&2
   fi
   local zcp_reply=""
+  local -i zcp_read_rc=0
   if [[ "$zcp_style" == key ]]; then
-    read -r -k 1 -u 0 zcp_reply || {
+    read -r -k 1 -u 0 zcp_reply || zcp_read_rc=$?
+    if (( zcp_read_rc != 0 )); then
       print -u2 -r -- ""
+      (( zcp_read_rc == 130 || zcp_read_rc == 143 )) && return $zcp_read_rc
       return 2
-    }
+    fi
     print -u2 -r -- ""
   else
-    IFS= read -r zcp_reply || return 2
+    IFS= read -r zcp_reply || zcp_read_rc=$?
+    if (( zcp_read_rc != 0 )); then
+      (( zcp_read_rc == 130 || zcp_read_rc == 143 )) && return $zcp_read_rc
+      return 2
+    fi
   fi
   [[ "$zcp_reply" == [Yy] ]]
 }

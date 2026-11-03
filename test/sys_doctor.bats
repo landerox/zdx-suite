@@ -1,7 +1,33 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016
 
 setup() {
   load test_helper
+  load core_probe_test_helper
+}
+
+# Executable presence is real and private. Only fzf/git/jq are installed
+# dependencies; package-manager and sudo recorders must never execute.
+_sys_doctor_tools() {
+  make_core_probe_path
+  local tool
+  for tool in fzf git jq; do
+    core_probe_program "$tool" <<'MOCK'
+[[ "$#" -eq 1 && "$1" == --version ]] || exit 97
+if IFS= read -r unexpected; then exit 98; fi
+case "${0##*/}" in
+  fzf) printf '0.74.3 (fixture)\n' ;;
+  git) printf 'git version 2.43.0\n' ;;
+  jq) printf 'jq-1.7.1\n' ;;
+esac
+MOCK
+  done
+  for tool in apt-get brew sudo; do
+    core_probe_program "$tool" <<'MOCK'
+printf '%s\n' "$0 $*" >> "$HOME/sys-doctor-mutator-ran"
+exit 97
+MOCK
+  done
 }
 
 teardown() {
@@ -15,80 +41,52 @@ teardown() {
 }
 
 @test "sys-doctor: diagnostic scan identifies installed vs missing packages" {
-  cat > "$TEST_MOCK_BIN/fzf" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "$#" -eq 1 && "$1" == --version ]]; then
-  printf '0.74.3 (fixture)\n'
-  exit 0
-fi
-exit 97
-MOCK
-  chmod +x "$TEST_MOCK_BIN/fzf"
-  # A package manager for each platform, so the install offer appears on Linux
-  # (apt-get) and on macOS (brew); answering n never runs either one.
-  local manager
-  for manager in apt-get brew; do
-    printf '#!/bin/sh\nexit 97\n' > "$TEST_MOCK_BIN/$manager"
-    chmod +x "$TEST_MOCK_BIN/$manager"
-  done
-  # Mock system binaries by ensuring fzf, git, and jq are present, but pipx and wg-quick are missing
-  run zsh -f -c "
+  _sys_doctor_tools
+  run zsh -f -c '
     emulate -R zsh
-    unset TEST_TEMP_DIR
-    unset BATS_TEST_DIRNAME
-    export ZSH_CUSTOM='$TEST_SUITE_ROOT'
-    export HOME='$HOME'
-    export PATH='$TEST_MOCK_BIN:/usr/bin:/bin'
-
-    # Mock command command to simulate missing wg-quick and pipx
-    command() {
-      if [[ \"\$1\" == \"wg-quick\" || \"\$1\" == \"pipx\" ]]; then
-        return 1
-      fi
-      builtin command \"\$@\"
+    source "$1/functions.zsh" || exit 90
+    path=("$CORE_PROBE_BIN")
+    rehash
+    # Only these private inert tools satisfy the install-plan trust boundary.
+    _zdx_doctor_program_trusted() {
+      [[ "$1" == "$CORE_PROBE_BIN"/(apt-get|brew|sudo) && -f "$1" && -x "$1" ]]
     }
-
-    source \$ZSH_CUSTOM/functions.zsh
-    source \$ZSH_CUSTOM/functions/zdx-doctor.zsh
-    # The mock package managers belong to the test user, not root.
-    _zdx_doctor_program_trusted() { [[ \"\$1\" == /* && -x \"\$1\" ]]; }
-
-    # Run zdx-doctor with pre-defined response (Skip installation)
-    echo 'n' | zdx-doctor
-  "
-  [ "$status" -eq 1 ] # Exits with 1 because there are missing packages and user skipped installation
+    # A pipe supplies no terminal: this is headless refusal, not a user decline.
+    print -r -- n | zdx-doctor
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 1 ] # Missing packages remain and confirmation has no terminal.
   [[ "$output" == *"ZDX Dependency Doctor Checkup"* ]]
-  [[ "$output" == *"fzf - Installed"* ]]
-  [[ "$output" == *"pipx - MISSING"* ]]
-  [[ "$output" == *"Skipping installation"* ]]
-  [[ "$output" == *"[Install Plan]"* ]]
+  [[ "$output" =~ (^|$'\n')'  fzf:'[[:space:]]+"Installed ($CORE_PROBE_BIN/fzf, v0.74.3)"($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  pipx:'[[:space:]]+'MISSING (Alternative Python global tools) [Python & Virtualenvs]'($|$'\n') ]]
+  [[ "$output" == *"Installation unavailable: confirmation could not be completed."* ]]
+  [[ "$output" =~ (^|$'\n')'▸ Install Plan'($|$'\n') ]]
+  [[ "$output" =~ (^|$'\n')'  Official link:'[[:space:]]+'https://github.com/pypa/pipx'($|$'\n') ]]
+  [ ! -e "$HOME/sys-doctor-mutator-ran" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
 }
 
 @test "sys-doctor: OS and Pkg Manager detection is accurate" {
-  run zsh -f -c "
+  _sys_doctor_tools
+  run zsh -f -c '
     emulate -R zsh
-    unset TEST_TEMP_DIR
-    unset BATS_TEST_DIRNAME
-    export ZSH_CUSTOM='$TEST_SUITE_ROOT'
-    export HOME='$HOME'
-    export PATH='$TEST_MOCK_BIN:/usr/bin:/bin'
-
-    source \$ZSH_CUSTOM/functions.zsh
+    source "$1/functions.zsh" || exit 90
 
     # Trigger loading of zdx-doctor
     zdx-doctor --help >/dev/null
+    path=("$CORE_PROBE_BIN")
+    rehash
 
     # Test helpers directly
-    os_name=\$(_zdx_doctor_detect_os)
-    pm_name=\$(_zdx_doctor_detect_pkg_manager)
+    os_name=$(_zdx_doctor_detect_os)
+    pm_name=$(_zdx_doctor_detect_pkg_manager)
 
-    if [[ -z \"\$os_name\" || -z \"\$pm_name\" ]]; then
-      echo 'FAIL: OS or package manager detection returned empty'
+    if [[ -z "$os_name" || -z "$pm_name" ]]; then
+      print -r -- "FAIL: OS or package manager detection returned empty"
       exit 1
     fi
 
-    echo \"SUCCESS: Detected OS=\$os_name, PM=\$pm_name\"
-  "
+    print -r -- "SUCCESS: Detected OS=$os_name, PM=$pm_name"
+  ' _ "$TEST_SUITE_ROOT"
   [ "$status" -eq 0 ]
   [[ "$output" == *"SUCCESS: Detected OS="* ]]
 }
@@ -97,7 +95,7 @@ MOCK
   local doctor_file="$TEST_SUITE_ROOT/functions/zdx-doctor.zsh"
 
   [ "$(grep -cF '[System, Python & VPN]' "$doctor_file")" -eq 2 ]
-  [ "$(grep -cF 'sha256sum/shasum - ' "$doctor_file")" -eq 2 ]
+  [ "$(grep -cF "_zdx_doctor_label 'sha256sum/shasum'" "$doctor_file")" -eq 2 ]
   [ "$(grep -cF '[File]' "$doctor_file")" -eq 2 ]
   grep -Fq 'bounded inventories, probes, and remote lookups' "$doctor_file"
   grep -Fq 'MISSING (archive identity checks) [File]' "$doctor_file"

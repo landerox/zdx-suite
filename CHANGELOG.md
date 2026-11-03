@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Bind core diagnostic probes, status collection, insert-widget tool calls,
+  and plugin-manager Git calls to resolved native executable paths. Bound
+  secondary Command Line Tools checks before running a possible placeholder;
+  timed-out or indeterminate checks leave the capability unknown. Read-only Git
+  status disables filesystem-monitor hooks as well as optional index locks.
 - Refuse every custom plugin whose public or normalized private namespace
   overlaps another filesystem or registered owner. Renew complete bounded
   inventories before activation and managed publication; unreadable or failed
@@ -47,6 +52,14 @@ verification, and remaining limitations.
 - Bind Linux PTY test cleanup to the recorded worker's process, group, session
   and start identity instead of a global argument-pattern search. Missing or
   changed ownership evidence cannot authorize a group signal.
+- Keep doctor version failures and unavailable timeout infrastructure distinct
+  from missing dependencies, including standalone diagnostics. Preserve
+  independent safe install plans and explicit declines, use the shared report
+  layout, and retain returned interruption statuses through probes and prompts.
+  Status JSON is emitted only after successful serialization; optional plugin
+  origin and commit metadata remain unknown locally when their probes fail.
+  Drawing spinners check their owned job before waiting and perform no PID
+  query or signal after reaping it.
 - Remove discovery and owned stub records after successful plugin quarantine,
   including never-loaded plugins, while preserving replacements of those stubs.
   Master rows distinguish available plugins from loaded plugins, and the

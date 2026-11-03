@@ -105,9 +105,14 @@ _zdx_show_version() {
   fi
   local checkout_text=""
   local -a reply=()
-  if (( ${+functions[_zdx_release_checkout]} )) \
-    && _zdx_release_checkout "${${_ZDX_FUNCTIONS_DIR:-$_ZDX_MENU_SOURCE_DIR}:h}"; then
-    checkout_text=" (${reply[1]}${reply[2]:+, ${reply[2]}})"
+  local -i checkout_rc=0
+  if (( ${+functions[_zdx_release_checkout]} )); then
+    _zdx_release_checkout "${${_ZDX_FUNCTIONS_DIR:-$_ZDX_MENU_SOURCE_DIR}:h}" \
+      || checkout_rc=$?
+    case "$checkout_rc" in
+      0) checkout_text=" (${reply[1]}${reply[2]:+, ${reply[2]}})" ;;
+      130|143) return $checkout_rc ;;
+    esac
   fi
   printf 'ZDX (Zsh Developer Experience) v%s%s\n' \
     "${_ZDX_RELEASE_VERSION:-unknown}" "$checkout_text"

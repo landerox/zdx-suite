@@ -328,8 +328,12 @@ probe-free. A suite MAY centralize the check in a dispatch-scoped gate that
 the command reaches after parsing, as Developer's `_dev_require_command`
 does.
 
-`command -v` proves only that a binary exists. When relevant, also check the
-service, socket, authentication state, API access, or minimum version.
+For an external probe, resolve the program with `whence -p -- NAME` and require
+an absolute executable regular file. A function or alias returned by
+`command -v` is not an external-program path. Use the same frozen candidate
+for platform checks, the reported path, and execution; qualify secondary
+programs inside its argument array too. When relevant, also check the service,
+socket, authentication state, API access, or minimum version.
 
 Optional dependencies SHOULD disable or annotate only the affected menu entry.
 They MUST NOT prevent unrelated commands from loading. The direct command path
@@ -387,6 +391,10 @@ platform matrix and what only mocks verify.
   placeholders that open an installation dialog while `xcode-select -p`
   reports no developer directory. Report them as missing with installation
   advice and never run them.
+  The secondary check is itself a resolved, bounded external probe. Only an
+  explicit cleared result permits the primary candidate; timeout,
+  unavailable infrastructure, interruption, or an invalid check result does
+  not. Keep uncertain checks out of the inferred installable-package set.
 - An unsupported capability returns a clear no-op or failure according to the
   public contract; it does not hang, request unnecessary `sudo`, or emit a
   cascade of command-not-found messages.
@@ -499,6 +507,23 @@ moving them into their destination.
   File, Environment, VPN, Python, and Workspace suites resolve the program to an absolute path and,
   without the core, require `timeout` or `gtimeout` and fail closed without
   either.
+- Owned core external probes use `_zdx_probe_resolve`, `_zdx_probe_tool`, and
+  `_zdx_probe_clt_placeholder`. These are private helpers, not plugin API v1
+  services. Their runner requires a positive interval, a frozen native
+  absolute executable, closed stdin, and hidden child stderr. Consume captured
+  stdout only after success. The PR widget's `jq` parser retains its intentional
+  JSON input through the existing timeout service with a frozen `jq` path.
+  The owned probe path qualifies native timeout infrastructure and reuses the
+  existing watchdog when the generic selector would choose an unsafe backend;
+  it does not alter arbitrary-command timeout semantics or the child `PATH`.
+  Budgets apply to individual probes, not the entire diagnostic.
+- The doctor remains usable without the core: its own adapters prefer the
+  available core service and otherwise require a resolved native `timeout` or
+  `gtimeout`. With no safe bounded backend, report the affected observations
+  as unknown, continue independent safe facts, and never retry those probes
+  unbounded or infer missing packages from them. Do not auto-source the core
+  or install a backend. Package transactions keep their separate reviewed,
+  explicitly authorized execution policy.
 - Register cleanup before the first fallible operation.
 - Use a Zsh `always` block when cleanup must happen after return or interrupt.
 - Store background PIDs or ownership-preserving runtime handles in local or
@@ -519,7 +544,7 @@ forms, and the tests named here keep the copies honest.
 | Primitive | Form | Copies | Guard |
 | --- | --- | --- | --- |
 | `_zdx_picker_capture` | Canonical in `functions.zsh`; each suite's `_<prefix>_fzf_capture` calls it and falls back to a generated `_<prefix>_picker_capture` | Git, System, Developer, Python, Workspace, Environment, File, and the master menu; the plugin manager calls the core only | `just primitives-check` (part of `just check`), `test/primitive_sync.bats` |
-| `_zdx_confirm_prompt` | Canonical in `functions.zsh`; each suite's `_<prefix>_confirm_ask` calls it and falls back to a generated `_<prefix>_confirm_prompt` | Git, System, Developer, Python, Workspace, Environment, File, and VPN | Same |
+| `_zdx_confirm_prompt` | Canonical in `functions.zsh`; `_<prefix>_confirm_ask` delegates or uses a generated copy when standalone | Git, System, Developer, Python, Workspace, Environment, File, VPN, and the doctor; the plugin manager delegates to the core only | Same |
 | `_<prefix>_resolve_trusted_dir` | Identical copy of the core resolver | Every suite | `test/primitive_drift.bats` |
 | `_zdx_ancestors_trusted` | Canonical core helper with an identical guarded standalone copy | Master common file | `test/platform_paths.bats` |
 | `_<prefix>_count_noun` | Identical copies; Git keeps its own body | System, Developer, Python, Workspace, Environment, File, and VPN | Text equality, and output parity with `_zdx_count_noun` for every suite |
@@ -531,6 +556,13 @@ Edit a canonical primitive in `functions.zsh` and run `just sync-primitives`
 to rewrite the generated blocks between the `# >>> zdx-primitive NAME` and
 `# <<< zdx-primitive NAME` markers; never edit a generated block by hand.
 An identical copy changes in every suite at once, in the same change.
+
+Canonical line/key confirmation retains returned `130`/`143`; EOF and other
+input failures remain private `2`. Picker cancellation retains its separate
+decline protocol. Public callers map the helper protocol to their documented
+statuses; an injected read status is not native terminal-signal evidence.
+The doctor's narrow standalone probe adapters have their own behavioral
+parity checks; they are not another generated watchdog.
 
 Other suite helpers stay suite-owned on purpose: captured child-tool output
 (`_<prefix>_run_captured`), the temporary-root validators

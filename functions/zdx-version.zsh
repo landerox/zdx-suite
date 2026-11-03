@@ -21,39 +21,46 @@ typeset -g _ZDX_RELEASE_VERSION="0.1.0" # ZDX (Zsh Developer Experience)
 # from a release archive, or a copy inside another repository, reports
 # nothing. Git runs through the core timeout service with optional locks off,
 # untracked files ignored, and GIT_DIR, GIT_WORK_TREE, and GIT_INDEX_FILE
-# removed; status 1 when any of that is unavailable or fails.
+# removed. Unavailable metadata may be omitted; returned interruption statuses
+# must reach the public consumer before it prints a successful report.
 # Usage: _zdx_release_checkout ROOT
 _zdx_release_checkout() {
   emulate -L zsh
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
-  local root="${1:-}" git_path="" toplevel="" commit="" changes=""
+  local root="${1:-}" git_path="" env_path="" toplevel="" commit="" changes="" REPLY=""
+  local -i probe_rc=0
   reply=()
   [[ "$root" == /* && ( -d "$root/.git" || -f "$root/.git" ) ]] \
-    && (( ${+functions[_zdx_run_with_timeout]} )) || return 1
-  git_path=$(whence -p git 2>/dev/null) || return 1
-  if [[ "${OSTYPE:-}" == darwin* && "$git_path" == /usr/bin/git ]]; then
-    # Apple's placeholder opens an installation dialog without a developer
-    # directory.
-    local developer_dir=""
-    developer_dir=$(_zdx_run_with_timeout 3 xcode-select -p \
-      </dev/null 2>/dev/null) || return 1
-    [[ -d "${developer_dir%%$'\n'*}" ]] || return 1
-  fi
+    && (( ${+functions[_zdx_probe_resolve]} && ${+functions[_zdx_probe_tool]} \
+      && ${+functions[_zdx_probe_clt_placeholder]} )) || return 1
+  _zdx_probe_resolve git || return 1
+  git_path="$REPLY"
+  _zdx_probe_clt_placeholder git "$git_path" || probe_rc=$?
+  case "$probe_rc" in
+    1) ;;
+    0) return 1 ;;
+    124|125|130|143) return $probe_rc ;;
+    *) return 125 ;;
+  esac
+  _zdx_probe_resolve env || return 1
+  env_path="$REPLY"
   local -a git_run=(
-    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE GIT_OPTIONAL_LOCKS=0
+    "$env_path" -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE GIT_OPTIONAL_LOCKS=0
     "$git_path" -C "$root"
   )
-  toplevel=$(_zdx_run_with_timeout 3 "${git_run[@]}" \
-    rev-parse --show-toplevel </dev/null 2>/dev/null) || return 1
+  probe_rc=0
+  toplevel=$(_zdx_probe_tool 3 "${git_run[@]}" rev-parse --show-toplevel) \
+    || probe_rc=$?
+  (( probe_rc == 0 )) || return $probe_rc
   [[ -n "$toplevel" && "${toplevel:A}" == "${root:A}" ]] || return 1
-  commit=$(_zdx_run_with_timeout 3 "${git_run[@]}" \
-    rev-parse --short=7 --verify 'HEAD^{commit}' </dev/null 2>/dev/null) \
-    || return 1
+  commit=$(_zdx_probe_tool 3 "${git_run[@]}" \
+    rev-parse --short=7 --verify 'HEAD^{commit}') || probe_rc=$?
+  (( probe_rc == 0 )) || return $probe_rc
   [[ "$commit" =~ '^[0-9a-f]{7,40}$' ]] || return 1
-  changes=$(_zdx_run_with_timeout 5 "${git_run[@]}" \
-    status --porcelain --untracked-files=no </dev/null 2>/dev/null) \
-    || return 1
+  changes=$(_zdx_probe_tool 5 "${git_run[@]}" -c core.fsmonitor=false \
+    status --porcelain --untracked-files=no) || probe_rc=$?
+  (( probe_rc == 0 )) || return $probe_rc
   reply=("$commit" "${changes:+modified}")
 }
 

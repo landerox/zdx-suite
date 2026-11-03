@@ -27,6 +27,7 @@ f304_regex_probe() {
     : > "$HOME/project/dbt_project.yml"
     local _zdx_cap_display=probe _zdx_cap_max=4096 _zdx_cap_lines=0
     local -i expected_rc=0
+    local f304_json_jq=""
     case "$F304_SERVICE" in
       status-wireguard)
         OSTYPE=linux-gnu
@@ -40,6 +41,8 @@ f304_regex_probe() {
         _zdx_status_probe() { REPLY=$'\''fixture\tdefault'\''; }
         ;;
       status-json)
+        _zdx_probe_resolve jq || exit 81
+        f304_json_jq="$REPLY"
         _zdx_status_collect() {
           local fact
           for fact in detached ahead behind staged unstaged untracked conflicted \
@@ -97,7 +100,7 @@ f304_regex_probe() {
       doctor-version) _zdx_doctor_get_version fzf ;;
       doctor-package) _zdx_doctor_package_name_valid package-name ;;
       status-kubernetes) _zdx_status_kubernetes ;;
-      status-json) _zdx_status_render_json ;;
+      status-json) _zdx_status_render_json "$f304_json_jq" ;;
       plugin-name) _zdx_plugins_name_valid demo ;;
       plugin-head) _zdx_plugins_head "$HOME" ;;
       release-checkout) _zdx_release_checkout "$HOME/version" ;;

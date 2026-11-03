@@ -1905,14 +1905,15 @@ dependencies; each PyPI response is limited to 20 MiB.
 ## ── Status Dashboard (`zdx status` / `zdx-status`) ──
 
 `zdx status` prints a read-only, one-screen summary of the current directory
-and host on stderr. Every fact comes from a local probe bounded by a timeout:
-it never fetches, uses the network, asks for `sudo`, writes a file, or loads
-a suite. From the master menu, choose **Show Status Dashboard (status)**.
+and host on stderr. External probes are bounded; other facts come from local
+file and metadata checks. It never fetches, uses the network, asks for `sudo`,
+changes repository or configuration files, or loads a suite. From the master menu, choose
+**Show Status Dashboard (status)**.
 
 | Section | Facts |
 | --- | --- |
-| Repository | Root; branch or detached commit; upstream with ahead/behind counts from local refs (nothing is fetched); staged, unstaged, untracked, and conflicted counts; a merge, rebase, cherry-pick, revert, bisect, or `git am` in progress; the effective `user.email`; and the workspace platform and identity when the repository is below `$WS_BASE_DIR/<platform>/<identity>` (`~/workspaces` by default) |
-| Project | The nearest directory, from the current one up to the repository root, that holds `pyproject.toml`, `uv.lock`, `package.json`, `Cargo.toml`, `go.mod`, `dbt_project.yml`, `Justfile`/`justfile`, or `Makefile`; whether a virtual environment is active and whether it is that project's `.venv`; whether `uv.lock` is older than `pyproject.toml`; and, in a dbt project, the `DBT_TARGET` name when it is a plain name (letters, digits, `_`, `.`, `-`) |
+| Repository | Root; branch or detached commit; upstream with ahead/behind counts from local refs (nothing is fetched); staged, unstaged, untracked, and conflicted counts; a merge, rebase, cherry-pick, revert, bisect, or `git am` in progress; the effective `user.email`; and the workspace platform and identity under the complete `$WS_BASE_DIR/<platform>/<identity>/<repository>` layout (`~/workspaces` by default) |
+| Project | The nearest directory, from the current one up to the repository root, that holds a regular `pyproject.toml`, `uv.lock`, `package.json`, `Cargo.toml`, `go.mod`, `dbt_project.yml`, `Justfile`/`justfile`, or `Makefile` file; whether a virtual environment is active and whether it is that project's `.venv`; whether `uv.lock` is older than `pyproject.toml`; and, in a dbt project, the `DBT_TARGET` name when it is a plain name (letters, digits, `_`, `.`, `-`) |
 | Kubernetes | Shown only when `kubectl` is installed: the current context and its namespace from one local `kubectl config view --minify` call, which contacts no cluster and runs no credential plugin, and whether the first `KUBECONFIG` file (or `~/.kube/config`) is private to you |
 | VPN | Kernel WireGuard interfaces on Linux and WSL, read from sysfs without privilege; unknown on macOS, where `utun` devices are not attributed to WireGuard |
 | Host | Linux, WSL1, WSL2, or macOS; whether a reboot is required (the Debian-family `/var/run/reboot-required` flag, unknown elsewhere); usage of the filesystem holding `HOME`; load average |
@@ -1921,6 +1922,9 @@ a suite. From the master menu, choose **Show Status Dashboard (status)**.
 The status shows facts only. Whether a repository's identity matches its
 workspace is the Git suite's decision, and a stale lockfile is updated with
 the Developer or Python suites.
+Git status probes disable filesystem-monitor hooks and optional index writes.
+Repository facts retain the current shell's Git context; the ZDX checkout
+metadata below has its own exact-root and environment boundary.
 
 `zdx status --json` prints one `zdx.status.v1` document on stdout instead,
 following the [JSON output convention](output-spec.md#json-output). The
@@ -1977,7 +1981,10 @@ document carries no environment values other than a validated `DBT_TARGET`
 name; the active virtual environment is reported only as booleans, and the
 kubeconfig contents never leave `kubectl`. Both modes return `0`, `1`
 when the core runtime or, for `--json`, `jq` is missing, and `2` for invalid
-arguments.
+arguments. Returned interruptions `130`/`143` stop collection before rendering
+a successful report or a partial JSON document. An ordinary unavailable or
+timed-out optional checkout probe can omit its metadata while retaining the
+known release version.
 
 ---
 
@@ -1994,25 +2001,38 @@ When you run the doctor, it groups system requirements into three categories:
 - **Optional Suite Requirements**: Specialized tools associated with advanced suites (e.g., `gh`, `wg-quick`, `uv`, `pipx`).
 - **Operational Capabilities**: Alternative or semantic requirements that are
   not one package token: `timeout` or `gtimeout`, `sha256sum` or `shasum`,
-  `ip`, and GNU `tar` as `tar` or `gtar`. Without `timeout` and `gtimeout`,
-  a slower Zsh watchdog enforces the same bounds, so that row is advisory.
+  `ip`, and GNU `tar` as `tar` or `gtar`. With the core loaded, a slower Zsh
+  watchdog replaces missing `timeout`/`gtimeout`, so that row is advisory.
   Rows that cannot apply on the platform, such as `ip` on macOS, are shown as
   not applicable and are not counted.
 
 For each tool, the doctor displays:
 
-- Its presence (Installed with version vs. Missing). On macOS, Apple's
+- Its verified presence and version, missing state, or an indeterminate
+  version/check result. On macOS, Apple's
   Command Line Tools placeholders for `git` and `python3` are reported as
   missing rather than run, because running them opens an installation
   dialog.
-- Its installation path (if present).
+- Its resolved external executable path (if present). Shell functions,
+  aliases, and Windows-drive programs on WSL do not count as native tools.
 - The associated ZDX suite that relies on it (if missing).
 
 Its rendering diagnostics report the terminal, color/plain mode, whether a
 theme or inherited fzf options are configured, and the loaded doctor's source
 path. Theme and fzf option values are not printed, and option files are not
-read. The fzf version probe isolates inherited fzf defaults; failed or malformed probes are
-reported as version-check failures, and interruptions stop later diagnostics.
+read. Version probes isolate inherited fzf defaults where relevant and have
+five-second budgets; the separate Command Line Tools check has three seconds.
+Each external check uses its resolved executable with closed stdin. Failed,
+malformed, timed-out, or unavailable checks are reported without claiming an
+installed version or inferring a package from that uncertainty. Independent
+rows continue after ordinary failures; returned `130`/`143` stops diagnostics.
+
+Full scans also work when only the doctor module is sourced. Without the core
+watchdog, external probes require native `timeout` or `gtimeout`. If neither
+is available, the affected rows remain unknown, independent safe facts still
+appear, and the unresolved scan returns `1`. The doctor never loads the core
+or installs a timeout backend on its own. Help and invalid arguments are
+handled before any operational probe.
 
 ### 🛠️ Platform-Aware Interactive Installer
 
@@ -2033,7 +2053,21 @@ If missing dependencies are detected, the doctor identifies your active Operatin
 - **Manual capabilities**: Missing operational capabilities are reported for
   you to resolve manually; the doctor never adds them to the batch package
   transaction.
-- **Safety First**: It never runs commands in the background without explicit verification.
+- **Cancellation and uncertainty**: Declining the one confirmation returns
+  `0` and installs nothing, even when diagnostic issues remain. A headless
+  invocation without a usable confirmation returns `1`. Unknown probes never
+  enter the install batch; other established missing packages may still form
+  a reviewed plan. Completing that plan does not verify the remaining facts;
+  run the diagnostics again.
+
+| Result | Status |
+| --- | --- |
+| Complete healthy diagnosis, deliberate decline, or successful requested installation without unresolved issues | `0` |
+| Valid dry-run plan with established facts | `0` |
+| Unresolved diagnosis, indeterminate probe (including during dry-run), failed operation, or unavailable confirmation | `1` |
+| Help | `0` |
+| Invalid arguments | `2` |
+| Returned interruption | `130` or `143` |
 
 ### ⚡ Quick Reference Commands
 
@@ -2132,6 +2166,11 @@ appearing conflict.
   install, update, or removal while one is running. If a run is interrupted,
   the next one restores a plugin left between versions and removes leftover
   staging; it never deletes a previous version on its own.
+
+Listing and removal keep working when optional Git metadata cannot be read:
+the affected origin or commit is `Unknown`. Each read has a three-second
+bound. An interruption stops before a removal decision or quarantine;
+install and update still require Git and their full trust checks.
 
 ---
 

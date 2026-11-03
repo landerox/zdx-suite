@@ -121,6 +121,12 @@ test/
 ├── zdx_widgets.bats       ZLE insert widgets, quoting, and key binding rules
 ├── zdx_contract.bats      zdx launcher loader and routing, and release metadata
 ├── zdx_doctor_rendering.bats zdx doctor probes, fzf version report, and rendering
+├── core_secondary_probes.bats native executable and secondary-probe bounds
+├── core_clt_consumers.bats bounded placeholder checks across core consumers
+├── doctor_standalone_probes.bats standalone scans, bounded backends, and unknowns
+├── core_probe_gaps.bats   generated prompt parity and optional Git metadata
+├── core_probe_runtime_controls.bats real watchdog leaf and drawing cleanup
+├── core_wsl_status.bats   public status and private Windows-like Git on WSL
 ├── ws_contract.bats       frozen Workspace public-surface parity
 ├── ws_jump.bats           Workspace discovery, navigation, and preview
 ├── ws_status.bats         Workspace status, JSON, and bounded fetch
@@ -206,6 +212,32 @@ startup, two-plugin aggregate updates, and failed-activation rollback cover
 option-changing plugins and their later bookkeeping. Doctor/status and widget
 regressions cover owned parsing; doctor confirmation uses a private terminal
 fixture to reach its actual regex branch.
+
+Core probe fixtures use private executable files and complete argument
+records, including absolute paths and exact individual budgets. A shell
+`command` override alone is not installed-binary evidence. They cover
+function-only and WSL Windows candidates, failing or hung `xcode-select`
+classification before a primary probe, returned interruptions, closed stdin,
+status serialization without partial output, widget decoding with its intended
+JSON stdin, and optional plugin origin/commit failures before removal.
+Standalone doctor cases retain complete scans with a private bounded backend
+and unknown/no-execution behavior without a backend. Other doctor fixtures
+exercise reviewed install plans; mixed known-missing and indeterminate facts
+must not infer new install targets.
+
+`core_wsl_status.bats` checks real public status resolution with a private
+regular executable whose canonical target ends in `.exe`, under modeled WSL.
+It pairs refusal before execution with an ordinary private Git fixture control,
+independent JSON facts, and one plain canonical timing footer. It does not
+cover literal `/mnt/<drive>` paths or native Windows ABI/interop.
+
+`core_probe_gaps.bats` checks line/key read results against the canonical
+confirmation helper and every generated copy. The runtime-control cohort
+also observes a real private child past its original watchdog deadline and
+uses a private PTY to reach drawing cleanup, with intercepted signals and an
+actual wait. Its stale-PID assertion rejects any query or signal after reap.
+These finite controls do not prove perpetual PID ownership, every native
+signal race, or a monotonic deadline for the existing realtime watchdog.
 
 These files reproduce macOS and WSL path and tool differences through mocks
 and fixtures, so they pass on any host; the macOS workflow also runs them on an

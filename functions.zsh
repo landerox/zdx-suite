@@ -311,39 +311,49 @@ _zdx_core_fzf() {
 # --- Native Zsh Spinner ------------------------------------------------------
 
 _zdx_spinner() {
+  (( $# >= 2 )) || return 2
   local msg="$1"
   shift
+  # The plain branch is a transparent foreground call, including shell
+  # options and changes made by a function callback in the current shell.
+  if [[ ! -t 2 || -n "${NO_COLOR:-}${ZDX_FZF_PLAIN:-}" \
+    || "${TERM:-}" == dumb ]]; then
+    "$@"
+    return $?
+  fi
+  # The shared predicate is conservative without jobstates. Require its
+  # ownership capability before spawning or changing drawing-only options.
+  if (( ! ${+functions[_zdx_timeout_job_running]} )) \
+    || ! zmodload -F zsh/parameter p:jobstates 2>/dev/null; then
+    "$@"
+    return $?
+  fi
 
-  # Hide cursor using ANSI escape
-  printf "\e[?25l" >&2
-
-  # Run the command in the background
-  "$@" &
-  local pid=$!
-
+  setopt localoptions no_monitor no_notify
+  local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local -i first=1 index=1 last=10 spinner_rc=0 pid=0
+  if [[ -o ksharrays ]]; then first=0; index=0; last=9; fi
   {
-    local delay=0.1
-    local -a frames
-    frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local frame_count=${#frames[@]}
-    local i=1
-
-    while kill -0 $pid 2>/dev/null; do
-      printf "\r\033[0;36m%s\033[0m %s" "${frames[i]}" "$msg" >&2
-      i=$(( (i % frame_count) + 1 ))
-      sleep $delay
+    printf '\033[?25l' >&2
+    "$@" &
+    pid=$!
+    while _zdx_timeout_job_running "$pid"; do
+      printf '\r\033[0;36m%s\033[0m %s' "${frames[index]}" "${(V)msg}" >&2
+      if (( index == last )); then index=$first; else (( ++index )); fi
+      sleep 0.1
     done
   } always {
-    # Ensure background process is terminated if interrupted/completed
-    if kill -0 $pid 2>/dev/null; then
-      kill -TERM $pid 2>/dev/null
+    # Query ownership only before the sole wait. Once wait reaps the child,
+    # its numeric PID is never inspected or signaled by this invocation.
+    if (( pid > 0 )); then
+      if _zdx_timeout_job_running "$pid"; then
+        kill -TERM "$pid" 2>/dev/null
+      fi
+      wait "$pid" 2>/dev/null || spinner_rc=$?
     fi
-    # Restore cursor and clear the spinner line
-    printf "\r\e[?25h\033[K" >&2
+    printf '\r\033[?25h\033[K' >&2
   }
-
-  wait $pid 2>/dev/null
-  return $?
+  return $spinner_rc
 }
 
 
@@ -1219,6 +1229,7 @@ _zdx_picker_capture() {
 # Asks one yes/no question on the terminal and returns 0 for yes, 1 for a
 # decline or a cancelled picker, 2 when no terminal can answer (stdin or
 # stderr is not a terminal, or input ended), and 3 when the picker failed.
+# Line/key reads preserve returned interruption statuses 130 and 143.
 # Only an exact Yes, or y or Y, confirms. --style picker offers No and Yes in
 # an fzf picker through the given capture function when fzf is installed and
 # otherwise asks for a line; --style line asks `? PROMPT [y/N]:` and reads a
@@ -1293,14 +1304,21 @@ _zdx_confirm_prompt() {
     printf '? %s [y/N]: ' "${(V)zcp_prompt}" >&2
   fi
   local zcp_reply=""
+  local -i zcp_read_rc=0
   if [[ "$zcp_style" == key ]]; then
-    read -r -k 1 -u 0 zcp_reply || {
+    read -r -k 1 -u 0 zcp_reply || zcp_read_rc=$?
+    if (( zcp_read_rc != 0 )); then
       print -u2 -r -- ""
+      (( zcp_read_rc == 130 || zcp_read_rc == 143 )) && return $zcp_read_rc
       return 2
-    }
+    fi
     print -u2 -r -- ""
   else
-    IFS= read -r zcp_reply || return 2
+    IFS= read -r zcp_reply || zcp_read_rc=$?
+    if (( zcp_read_rc != 0 )); then
+      (( zcp_read_rc == 130 || zcp_read_rc == 143 )) && return $zcp_read_rc
+      return 2
+    fi
   fi
   [[ "$zcp_reply" == [Yy] ]]
 }
@@ -1850,6 +1868,105 @@ _zdx_run_with_timeout() {
   else
     _zdx_timeout_watchdog "$seconds" "$@"
   fi
+}
+
+# REPLY: one frozen absolute native executable. Discovery never executes it.
+# Status: 0 available, 1 unavailable, 2 invalid private request.
+_zdx_probe_resolve() {
+  emulate -L zsh
+  REPLY=""
+  (( $# == 1 )) || return 2
+  local token="$1" resolved="" canonical="" kernel=""
+  [[ -n "$token" && "$token" != *$'\0'* ]] || return 2
+  if [[ "$token" == /* ]]; then
+    resolved="$token"
+  else
+    [[ "$token" != */* ]] || return 2
+    resolved=$(whence -p -- "$token" 2>/dev/null) || return 1
+  fi
+  [[ "$resolved" == /* && -f "$resolved" && -x "$resolved" ]] || return 1
+  canonical="${resolved:A}"
+  if [[ "${OSTYPE:-}" == linux* ]]; then
+    if [[ -r /proc/sys/kernel/osrelease ]]; then
+      IFS= read -r kernel < /proc/sys/kernel/osrelease || kernel=""
+    fi
+    if [[ -n "${WSL_DISTRO_NAME-}${WSL_INTEROP-}" || "${kernel:l}" == *microsoft* \
+      || -e /proc/sys/fs/binfmt_misc/WSLInterop \
+      || -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]]; then
+      [[ "$canonical" != /mnt/[a-zA-Z]/* && "${canonical:l}" != *.exe ]] || return 1
+    fi
+  fi
+  REPLY="$resolved"
+}
+
+# Owned external read-only probes: raw stdout, closed stdin, hidden stderr.
+# A returned 125 means unavailable infrastructure or an indistinguishable
+# child125. Other service/child statuses, including 124/130/143, stay exact.
+_zdx_probe_tool() {
+  emulate -L zsh
+  (( $# >= 2 )) || return 2
+  local seconds="$1" program="$2" backend="" REPLY=""
+  [[ -n "$seconds" && "$seconds" != 0* && "$seconds" != *[^0-9]* \
+    && ${#seconds} -le 6 && "$program" == /* ]] || return 2
+  _zdx_probe_resolve "$program" || return 127
+  (( ${+functions[_zdx_run_with_timeout]} )) || return 125
+  shift 2
+  # Leave the generic callback service unchanged. Its raw selector can see
+  # a Windows executable or a function-only name; that narrow mismatch uses
+  # the existing owned watchdog rather than executing an unqualified backend.
+  if command -v timeout >/dev/null 2>&1; then
+    backend=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    backend=gtimeout
+  fi
+  if [[ -n "$backend" ]]; then
+    if ! _zdx_probe_resolve "$backend"; then
+      if (( ${+functions[_zdx_timeout_watchdog]} )); then
+        _zdx_timeout_watchdog "$seconds" "$program" "$@" </dev/null 2>/dev/null
+        return $?
+      fi
+      for backend in timeout gtimeout; do
+        _zdx_probe_resolve "$backend" || continue
+        command "$REPLY" -k 2s "${seconds}s" "$program" "$@" </dev/null 2>/dev/null
+        return $?
+      done
+      return 125
+    fi
+  elif (( ! ${+functions[_zdx_timeout_watchdog]} )); then
+    return 125
+  fi
+  _zdx_run_with_timeout "$seconds" "$program" "$@" </dev/null 2>/dev/null
+}
+
+# Only explicit 1 clears an already resolved candidate. A legacy negative
+# CLT check is 0; 124 timeout, 125 unavailable, 130/143 interruption, 2 bad call.
+# Service1 can also be a watchdog setup failure, so 0 is not physical proof
+# that Apple's tools are absent. No primary executable runs in this classifier.
+_zdx_probe_clt_placeholder() {
+  emulate -L zsh
+  (( $# == 2 )) || return 2
+  local cmd="$1" resolved="$2" developer_dir="" secondary="" REPLY=""
+  local -i probe_rc=0
+  [[ -n "$cmd" && "$cmd" != */* && "$cmd" != *$'\0'* \
+    && "$resolved" == /* ]] || return 2
+  _zdx_probe_resolve "$resolved" || return 2
+  case "$cmd" in git|python3) ;; *) return 1 ;; esac
+  [[ "${OSTYPE:-}" == darwin* \
+    && ( "$resolved" == "/usr/bin/$cmd" || "${resolved:A}" == "/usr/bin/$cmd" ) ]] \
+    || return 1
+  _zdx_probe_resolve xcode-select || return 0
+  secondary="$REPLY"
+  developer_dir=$(_zdx_probe_tool 3 "$secondary" -p) || probe_rc=$?
+  case "$probe_rc" in
+    0)
+      developer_dir="${developer_dir%%$'\n'*}"
+      [[ -n "$developer_dir" && -d "$developer_dir" ]] && return 1
+      return 0
+      ;;
+    124|130|143) return $probe_rc ;;
+    125|127) return 125 ;;
+    *) return 0 ;;
+  esac
 }
 
 # --- Optimized Lazy Loading (Autoloading Diferido) ---------------------------

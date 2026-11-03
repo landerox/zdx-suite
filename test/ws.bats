@@ -293,7 +293,7 @@ EOF
   # A missing fd is information, never a counted issue.
   sed -n '/_zdx_doctor_fd_command; then/,/^  fi$/p' \
     "$TEST_SUITE_ROOT/functions/zdx-doctor.zsh" > "$TEST_TEMP_DIR/fd-row"
-  grep -Fq 'fd/fdfind - Not found (workspace discovery uses find) [Workspaces]' \
+  grep -Fq "_zdx_doctor_label 'fd/fdfind' 'Not found (workspace discovery uses find) [Workspaces]'" \
     "$TEST_TEMP_DIR/fd-row"
   ! grep -q 'issues_count' "$TEST_TEMP_DIR/fd-row" || false
 }

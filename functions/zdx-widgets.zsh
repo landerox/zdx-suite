@@ -24,19 +24,22 @@ _zdx_widget_message() {
   zle -M "zdx: ${(V)1-}"
 }
 
-# True when git can run without side effects. On macOS, /usr/bin/git is a
-# Command Line Tools placeholder that opens an installation dialog while
-# xcode-select reports no developer directory, so it counts as missing.
+# REPLY: one resolved native Git candidate after explicit CLT clearance.
 _zdx_widget_git_usable() {
   emulate -L zsh
-  local git_path="${commands[git]-}" developer_dir=""
-  [[ -n "$git_path" ]] || return 1
-  [[ "${OSTYPE:-}" == darwin* && "$git_path" == /usr/bin/git ]] || return 0
-  (( ${+commands[xcode-select]} )) || return 1
-  developer_dir=$(_zdx_run_with_timeout 3 xcode-select -p \
-    </dev/null 2>/dev/null) || return 1
-  developer_dir="${developer_dir%%$'\n'*}"
-  [[ -n "$developer_dir" && -d "$developer_dir" ]]
+  local git_path=""
+  local -i probe_rc=0
+  REPLY=""
+  _zdx_probe_resolve git || return 1
+  git_path="$REPLY"
+  REPLY=""
+  _zdx_probe_clt_placeholder git "$git_path" || probe_rc=$?
+  case "$probe_rc" in
+    1) REPLY="$git_path"; return 0 ;;
+    0) return 1 ;;
+    124|125|130|143) return $probe_rc ;;
+    *) return 125 ;;
+  esac
 }
 
 # Adds one candidate to the caller's arrays. The value is what Enter inserts,
@@ -56,19 +59,24 @@ _zdx_widget_add() {
 _zdx_widget_branch_candidates() {
   emulate -L zsh
   REPLY=""
-  _zdx_widget_git_usable || {
-    REPLY="git is not installed"
-    return 1
-  }
-  local output="" line="" mark=""
+  local output="" line="" mark="" git_path=""
   local -i probe_rc=0
+  _zdx_widget_git_usable || probe_rc=$?
+  case "$probe_rc" in
+    0) git_path="$REPLY" ;;
+    130|143) return $probe_rc ;;
+    124) REPLY="git availability timed out"; return 1 ;;
+    125) REPLY="git availability is unknown; run zdx doctor"; return 1 ;;
+    *) REPLY="git is not installed"; return 1 ;;
+  esac
   local -a fields=() remote_values=() remote_labels=()
-  output=$(_zdx_run_with_timeout 5 git for-each-ref \
+  output=$(_zdx_probe_tool 5 "$git_path" for-each-ref \
     --sort=-committerdate \
     '--format=%(HEAD)%09%(refname)%09%(refname:short)%09%(symref)' \
-    refs/heads refs/remotes </dev/null 2>/dev/null) || probe_rc=$?
+    refs/heads refs/remotes) || probe_rc=$?
   case $probe_rc in
     0) ;;
+    130|143) return $probe_rc ;;
     124) REPLY="git timed out while listing branches"; return 1 ;;
     *) REPLY="not inside a Git repository"; return 1 ;;
   esac
@@ -106,23 +114,33 @@ _zdx_widget_pr_candidates() {
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
   REPLY=""
-  (( ${+commands[gh]} )) || {
+  local gh_path="" jq_path="" env_path=""
+  _zdx_probe_resolve gh || {
     REPLY="gh is not installed; install GitHub CLI to list pull requests"
     return 1
   }
-  (( ${+commands[jq]} )) || {
+  gh_path="$REPLY"
+  _zdx_probe_resolve jq || {
     REPLY="jq is required to read pull requests; run zdx doctor"
     return 1
   }
+  jq_path="$REPLY"
+  _zdx_probe_resolve env || {
+    REPLY="env is required to run the GitHub CLI probe"
+    return 1
+  }
+  env_path="$REPLY"
+  REPLY=""
   zle -R "zdx: loading open pull requests..."
   local output="" rows="" line=""
   local -i probe_rc=0
   local -a fields=()
-  output=$(_zdx_run_with_timeout 15 env GH_PROMPT_DISABLED=1 \
-    GH_NO_UPDATE_NOTIFIER=1 gh pr list --state open --limit 200 \
-    --json number,title,headRefName </dev/null 2>/dev/null) || probe_rc=$?
+  output=$(_zdx_probe_tool 15 "$env_path" GH_PROMPT_DISABLED=1 \
+    GH_NO_UPDATE_NOTIFIER=1 "$gh_path" pr list --state open --limit 200 \
+    --json number,title,headRefName) || probe_rc=$?
   case $probe_rc in
     0) ;;
+    130|143) return $probe_rc ;;
     4) REPLY="gh is not authenticated; run gh auth login"; return 1 ;;
     124) REPLY="gh timed out after 15s"; return 1 ;;
     *)
@@ -131,12 +149,16 @@ _zdx_widget_pr_candidates() {
       ;;
   esac
   # @tsv escapes tabs and newlines inside titles, so each record is a line.
-  rows=$(print -r -- "$output" | _zdx_run_with_timeout 5 jq -r \
+  # jq intentionally consumes the captured JSON on stdin; the generic
+  # timeout service preserves that data pipe, unlike the probe adapter.
+  rows=$(print -r -- "$output" | _zdx_run_with_timeout 5 "$jq_path" -r \
     '.[] | [(.number | tostring), (.headRefName // ""), (.title // "")] | @tsv' \
-    2>/dev/null) || {
+    2>/dev/null) || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  if (( probe_rc != 0 )); then
     REPLY="gh returned unreadable pull request data"
     return 1
-  }
+  fi
   for line in "${(@f)rows}"; do
     fields=("${(@ps:\t:)line}")
     (( ${#fields} == 3 )) && [[ "${fields[1]}" =~ '^[1-9][0-9]{0,9}$' ]] \
@@ -170,20 +192,25 @@ _zdx_widget_port_candidates() {
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
   REPLY=""
-  local backend="" output="" line="" address="" pid="" name="" record=""
+  local backend="" backend_path="" output="" line="" address="" pid="" name="" record=""
   local -i probe_rc=0
   local -a fields=() listener_records=()
   local -A seen_listeners=()
   case "${OSTYPE:-}" in
     linux*)
-      if (( ${+commands[ss]} )); then
+      if _zdx_probe_resolve ss; then
         backend=ss
-      elif (( ${+commands[lsof]} )); then
+        backend_path="$REPLY"
+      elif _zdx_probe_resolve lsof; then
         backend=lsof
+        backend_path="$REPLY"
       fi
       ;;
     darwin*)
-      (( ${+commands[lsof]} )) && backend=lsof
+      if _zdx_probe_resolve lsof; then
+        backend=lsof
+        backend_path="$REPLY"
+      fi
       ;;
   esac
   [[ -n "$backend" ]] || {
@@ -194,8 +221,8 @@ _zdx_widget_port_candidates() {
   }
 
   if [[ "$backend" == ss ]]; then
-    output=$(_zdx_run_with_timeout 5 ss -l -t -n -p \
-      </dev/null 2>/dev/null) || probe_rc=$?
+    output=$(_zdx_probe_tool 5 "$backend_path" -l -t -n -p) || probe_rc=$?
+    (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
     (( probe_rc == 124 )) && { REPLY="ss timed out after 5s"; return 1; }
     (( probe_rc == 0 )) || { REPLY="ss failed (status $probe_rc)"; return 1; }
     for line in "${(@f)output}"; do
@@ -209,14 +236,15 @@ _zdx_widget_port_candidates() {
       _zdx_widget_port_record "${address##*:}" "$pid" "$name" "$address"
     done
   else
-    output=$(_zdx_run_with_timeout 10 lsof -nP -iTCP -sTCP:LISTEN -Fpcn \
-      </dev/null 2>/dev/null) || probe_rc=$?
+    output=$(_zdx_probe_tool 10 "$backend_path" -nP -iTCP -sTCP:LISTEN -Fpcn) || probe_rc=$?
+    (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
     (( probe_rc == 124 )) && { REPLY="lsof timed out after 10s"; return 1; }
     # lsof also returns 1 when nothing matches.
     (( probe_rc == 0 || probe_rc == 1 )) || {
       REPLY="lsof failed (status $probe_rc)"
       return 1
     }
+    (( probe_rc == 1 )) && output=""
     for line in "${(@f)output}"; do
       case "$line" in
         p*) pid="${line#p}"; name="" ;;
@@ -368,7 +396,9 @@ _zdx_widget_insert() {
   local -a widget_values=() widget_alternates=() widget_labels=() reply=()
   local -i collect_rc=0 pick_rc=0 index=0
 
-  (( ${+functions[_zdx_core_fzf]} && ${+functions[_zdx_run_with_timeout]} )) || {
+  (( ${+functions[_zdx_core_fzf]} && ${+functions[_zdx_run_with_timeout]} \
+    && ${+functions[_zdx_probe_resolve]} && ${+functions[_zdx_probe_tool]} \
+    && ${+functions[_zdx_probe_clt_placeholder]} )) || {
     _zdx_widget_message "the ZDX core runtime is not loaded"
     return 1
   }
@@ -404,6 +434,7 @@ _zdx_widget_insert() {
       return 1
       ;;
   esac
+  (( collect_rc == 130 || collect_rc == 143 )) && return $collect_rc
   if (( collect_rc != 0 )); then
     _zdx_widget_message "$REPLY"
     return 1

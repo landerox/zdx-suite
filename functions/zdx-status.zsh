@@ -59,7 +59,8 @@ _zdx_status_error() {
 _zdx_status_core_ready() {
   emulate -L zsh
   local service=""
-  for service in _zdx_run_with_timeout _zdx_ui_say _zdx_ui_color_enabled \
+  for service in _zdx_probe_resolve _zdx_probe_tool _zdx_probe_clt_placeholder \
+    _zdx_run_with_timeout _zdx_ui_say _zdx_ui_color_enabled \
     _zdx_ui_heading _zdx_ui_section _zdx_ui_label _zdx_ui_command_display \
     _zdx_count_noun; do
     (( ${+functions[$service]} )) || return 1
@@ -69,14 +70,19 @@ _zdx_status_core_ready() {
 # Private: run one bounded probe with closed stdin and hidden stderr. REPLY is
 # its stdout; the status is the probe's own, or 124 when the bound expired.
 _zdx_status_probe() {
-  local seconds="${1-}"
-  shift
+  emulate -L zsh
+  local seconds="${1-}" token="${2-}" program=""
+  (( $# >= 2 )) || { REPLY=""; return 2; }
+  shift 2
   REPLY=""
   local probe_output=""
   local -i probe_rc=0
-  probe_output=$(_zdx_run_with_timeout "$seconds" "$@" </dev/null 2>/dev/null) \
+  _zdx_probe_resolve "$token" || return $?
+  program="$REPLY"
+  REPLY=""
+  probe_output=$(_zdx_probe_tool "$seconds" "$program" "$@") \
     || probe_rc=$?
-  REPLY="$probe_output"
+  (( probe_rc == 0 )) && REPLY="$probe_output"
   return $probe_rc
 }
 
@@ -92,19 +98,23 @@ _zdx_status_note() {
 
 # --- Probes ------------------------------------------------------------------
 
-# True when git can run without side effects. On macOS, /usr/bin/git is a
-# Command Line Tools placeholder that opens an installation dialog while
-# xcode-select reports no developer directory, so it counts as missing.
+# REPLY: one native Git candidate after explicit CLT clearance. Returned
+# interruptions remain distinct from unavailable or indeterminate metadata.
 _zdx_status_git_usable() {
   emulate -L zsh
-  local git_path="${commands[git]-}" developer_dir=""
-  [[ -n "$git_path" ]] || return 1
-  [[ "${OSTYPE:-}" == darwin* && "$git_path" == /usr/bin/git ]] || return 0
-  (( ${+commands[xcode-select]} )) || return 1
-  local REPLY=""
-  _zdx_status_probe 3 xcode-select -p || return 1
-  developer_dir="${REPLY%%$'\n'*}"
-  [[ -n "$developer_dir" && -d "$developer_dir" ]]
+  local git_path=""
+  local -i probe_rc=0
+  REPLY=""
+  _zdx_probe_resolve git || return 1
+  git_path="$REPLY"
+  REPLY=""
+  _zdx_probe_clt_placeholder git "$git_path" || probe_rc=$?
+  case "$probe_rc" in
+    1) REPLY="$git_path"; return 0 ;;
+    0) return 1 ;;
+    124|125|130|143) return $probe_rc ;;
+    *) return 125 ;;
+  esac
 }
 
 # REPLY: Linux, WSL1, WSL2, or macOS; empty for another kernel. WSL counts
@@ -170,7 +180,10 @@ _zdx_status_load_average() {
       ;;
     darwin*)
       local REPLY=""
-      _zdx_status_probe 3 sysctl -n vm.loadavg || return 0
+      local -i probe_rc=0
+      _zdx_status_probe 3 sysctl -n vm.loadavg || probe_rc=$?
+      (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+      (( probe_rc == 0 )) || return 0
       line="${REPLY//[\{\}]/ }"
       ;;
     *)
@@ -196,7 +209,10 @@ _zdx_status_home_filesystem() {
   reply=()
   [[ -n "${HOME:-}" && -d "$HOME" ]] || return 0
   local REPLY=""
-  _zdx_status_probe 3 df -P -k -- "$HOME" || return 0
+  local -i probe_rc=0
+  _zdx_status_probe 3 df -P -k -- "$HOME" || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  (( probe_rc == 0 )) || return 0
   local -a rows=("${(@f)REPLY}")
   (( ${#rows} >= 2 )) || return 0
   local -a fields=(${=rows[2]})
@@ -224,7 +240,8 @@ _zdx_status_wireguard_interfaces() {
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
   local net_root="${1:-/sys/class/net}"
-  local interface_dir="" interface_name="" line=""
+  local interface_dir="" interface_name="" line="" REPLY="" ip_path=""
+  local -i probe_rc=0
   local -a found=()
   reply=()
   [[ "${OSTYPE:-}" == linux* ]] || return 1
@@ -239,9 +256,11 @@ _zdx_status_wireguard_interfaces() {
         fi
       done < "$interface_dir/uevent"
     done
-  elif (( ${+commands[ip]} )); then
-    local REPLY=""
-    _zdx_status_probe 3 ip -o -d link show type wireguard || return 1
+  elif _zdx_probe_resolve ip; then
+    ip_path="$REPLY"
+    _zdx_status_probe 3 "$ip_path" -o -d link show type wireguard || probe_rc=$?
+    (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+    (( probe_rc == 0 )) || return 1
     for line in "${(@f)REPLY}"; do
       [[ "$line" =~ '^[0-9]+: ([^:@ ]+)[:@]' ]] && found+=("${match[1]}")
     done
@@ -263,11 +282,19 @@ _zdx_status_wireguard_interfaces() {
 # directory, or git is unusable.
 _zdx_status_repository() {
   emulate -L zsh
-  _zdx_status_git_usable || return 1
-  local REPLY=""
+  local REPLY="" git_path=""
   local -i probe_rc=0
-  _zdx_status_probe 3 git rev-parse --show-toplevel --absolute-git-dir \
+  _zdx_status_git_usable || probe_rc=$?
+  case "$probe_rc" in
+    0) git_path="$REPLY" ;;
+    130|143) return $probe_rc ;;
+    124) _zdx_ui_say warn "git availability timed out; repository facts are unknown."; return 1 ;;
+    125) _zdx_ui_say warn "git availability is unknown; repository facts are unknown."; return 1 ;;
+    *) return 1 ;;
+  esac
+  _zdx_status_probe 3 "$git_path" rev-parse --show-toplevel --absolute-git-dir \
     || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( probe_rc == 124 )); then
     _zdx_ui_say warn "git rev-parse timed out after 3s; repository facts are unknown."
     return 1
@@ -304,8 +331,9 @@ _zdx_status_repository() {
   # Porcelain v2 reports ahead/behind from local refs; nothing is fetched,
   # and --no-optional-locks keeps status from refreshing the index on disk.
   probe_rc=0
-  _zdx_status_probe 5 git --no-optional-locks status --porcelain=v2 \
+  _zdx_status_probe 5 "$git_path" --no-optional-locks -c core.fsmonitor=false status --porcelain=v2 \
     --branch -z || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( probe_rc == 0 )); then
     _zdx_status_parse_porcelain "$REPLY"
   elif (( probe_rc == 124 )); then
@@ -316,7 +344,8 @@ _zdx_status_repository() {
 
   # Effective configuration, including include and includeIf files.
   probe_rc=0
-  _zdx_status_probe 3 git config --get user.email || probe_rc=$?
+  _zdx_status_probe 3 "$git_path" config --get user.email || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( probe_rc == 0 )); then
     zdx_status_facts[user_email]="${REPLY%%$'\n'*}"
   elif (( probe_rc == 124 )); then
@@ -328,7 +357,7 @@ _zdx_status_repository() {
   local base="${WS_BASE_DIR-${HOME:A}/workspaces}" relative=""
   if [[ -n "$base" && "$base" == /* ]]; then
     base="${base:A}"
-    if [[ "$base" != / && "$root" == "$base"/?*/?* ]]; then
+    if [[ "$base" != / && "$root" == "$base"/?*/?*/?* ]]; then
       relative="${root#"$base"/}"
       zdx_status_facts[ws_platform]="${relative%%/*}"
       relative="${relative#*/}"
@@ -404,7 +433,7 @@ _zdx_status_project() {
   local stop="${1-}" directory="${PWD:A}" name=""
   local -a found=()
   while true; do
-    found=("$directory"/(pyproject.toml|uv.lock|package.json|Cargo.toml|go.mod|dbt_project.yml|[Jj]ustfile|Makefile)(N))
+    found=("$directory"/(pyproject.toml|uv.lock|package.json|Cargo.toml|go.mod|dbt_project.yml|[Jj]ustfile|Makefile)(N-.))
     (( ${#found} > 0 )) && break
     if [[ -n "$stop" && "$directory" != "$stop" && "$directory" == "$stop"/* ]]; then
       directory="${directory:h}"
@@ -458,12 +487,15 @@ _zdx_status_kubernetes() {
   emulate -L zsh
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
-  (( ${+commands[kubectl]} )) || return 1
+  local REPLY="" context="" namespace="" kubectl_path=""
+  local -i probe_rc=0
+  _zdx_probe_resolve kubectl || return 1
+  kubectl_path="$REPLY"
   zdx_status_facts[k8s_known]=true
-  local REPLY="" context="" namespace=""
-  if _zdx_status_probe 3 kubectl config view --minify \
-    -o 'jsonpath={.current-context}{"\t"}{.contexts[0].context.namespace}' \
-    && [[ "$REPLY" == *$'\t'* && "$REPLY" != *$'\n'* ]]; then
+  _zdx_status_probe 3 "$kubectl_path" config view --minify \
+    -o 'jsonpath={.current-context}{"\t"}{.contexts[0].context.namespace}' || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  if (( probe_rc == 0 )) && [[ "$REPLY" == *$'\t'* && "$REPLY" != *$'\n'* ]]; then
     context="${REPLY%%$'\t'*}"
     namespace="${REPLY#*$'\t'}"
     [[ -n "$context" && ${#context} -le 253 \
@@ -492,7 +524,10 @@ _zdx_status_kubernetes() {
 # Strings are empty when unknown; numbers and booleans hold JSON literals.
 _zdx_status_collect() {
   emulate -L zsh
-  local REPLY=""
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  local REPLY="" value=""
+  local -i probe_rc=0
   local -a reply=()
   zdx_status_facts=(
     repo false repo_root "" branch "" detached null commit "" upstream ""
@@ -510,42 +545,65 @@ _zdx_status_collect() {
   zdx_status_files=()
   zdx_status_wireguard=()
 
-  _zdx_status_repository || true
+  _zdx_status_repository || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   _zdx_status_project "${zdx_status_facts[repo_root]}"
 
-  _zdx_status_kubernetes || true
+  probe_rc=0
+  _zdx_status_kubernetes || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
 
-  if _zdx_status_wireguard_interfaces; then
+  probe_rc=0
+  _zdx_status_wireguard_interfaces || probe_rc=$?
+  if (( probe_rc == 0 )); then
     zdx_status_facts[wireguard_known]=true
     zdx_status_wireguard=("${reply[@]}")
+  elif (( probe_rc == 130 || probe_rc == 143 )); then
+    return $probe_rc
   fi
 
   _zdx_status_platform
   zdx_status_facts[platform]="$REPLY"
   _zdx_status_reboot_required
   zdx_status_facts[reboot_required]="$REPLY"
-  _zdx_status_home_filesystem
+  probe_rc=0
+  _zdx_status_home_filesystem || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( ${#reply} == 4 )); then
     zdx_status_facts[disk_size]="${reply[1]}"
     zdx_status_facts[disk_used]="${reply[2]}"
     zdx_status_facts[disk_available]="${reply[3]}"
     zdx_status_facts[disk_percent]="${reply[4]}"
   fi
-  _zdx_status_load_average
+  probe_rc=0
+  _zdx_status_load_average || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( ${#reply} == 3 )); then
-    zdx_status_facts[load_1]="${reply[1]}"
-    zdx_status_facts[load_5]="${reply[2]}"
-    zdx_status_facts[load_15]="${reply[3]}"
+    local -i valid_load=1
+    for value in "${reply[@]}"; do
+      [[ ${#value} -le 16 && "$value" =~ '^(0|[1-9][0-9]*)([.][0-9]+)?$' ]] \
+        || valid_load=0
+    done
+    if (( valid_load )); then
+      zdx_status_facts[load_1]="${reply[1]}"
+      zdx_status_facts[load_5]="${reply[2]}"
+      zdx_status_facts[load_15]="${reply[3]}"
+    fi
   fi
 
   _zdx_status_release
   zdx_status_facts[version]="$REPLY"
   local -a reply=()
-  if (( ${+functions[_zdx_release_checkout]} )) \
-    && _zdx_release_checkout "${_ZDX_STATUS_SOURCE_DIR:h}"; then
-    zdx_status_facts[zdx_commit]="${reply[1]}"
-    zdx_status_facts[zdx_modified]=false
-    [[ -n "${reply[2]}" ]] && zdx_status_facts[zdx_modified]=true
+  if (( ${+functions[_zdx_release_checkout]} )); then
+    probe_rc=0
+    _zdx_release_checkout "${_ZDX_STATUS_SOURCE_DIR:h}" || probe_rc=$?
+    if (( probe_rc == 0 )); then
+      zdx_status_facts[zdx_commit]="${reply[1]}"
+      zdx_status_facts[zdx_modified]=false
+      [[ -n "${reply[2]}" ]] && zdx_status_facts[zdx_modified]=true
+    elif (( probe_rc == 130 || probe_rc == 143 )); then
+      return $probe_rc
+    fi
   fi
   (( ${+ZDX_LOADED_PLUGINS} )) \
     && zdx_status_facts[plugins]="${#ZDX_LOADED_PLUGINS[@]}"
@@ -783,7 +841,8 @@ _zdx_status_render_json() {
   emulate -L zsh
   local MATCH="" MBEGIN=0 MEND=0
   local -a match=() mbegin=() mend=()
-  local generated_at="" document=""
+  local generated_at="" document="" jq_path="${1-}"
+  local -i probe_rc=0
   if zmodload zsh/datetime 2>/dev/null; then
     generated_at=$(TZ=UTC strftime '%Y-%m-%dT%H:%M:%SZ' "$EPOCHSECONDS")
   fi
@@ -911,23 +970,25 @@ _zdx_status_render_json() {
         verbose: $verbose
       }
     }'
-  document=$(command jq -c -n -M "${jq_arguments[@]}" "$filter" 2>/dev/null) \
-    && [[ -n "$document" ]] || {
+  document=$(_zdx_probe_tool 5 "$jq_path" -c -n -M "${jq_arguments[@]}" "$filter") \
+    || probe_rc=$?
+  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  if (( probe_rc != 0 )) || [[ -z "$document" ]]; then
     _zdx_ui_say error "jq could not build the zdx.status.v1 document."
     return 1
-  }
+  fi
   print -r -- "$document"
 }
 
 # Private: collect once, then render the requested mode.
 _zdx_status_run() {
   emulate -L zsh
-  local mode="${1:-text}"
+  local mode="${1:-text}" jq_path="${2-}"
   local -A zdx_status_facts=()
   local -a zdx_status_files=() zdx_status_wireguard=()
-  _zdx_status_collect
+  _zdx_status_collect || return $?
   if [[ "$mode" == json ]]; then
-    _zdx_status_render_json
+    _zdx_status_render_json "$jq_path"
   else
     _zdx_status_render_text
   fi
@@ -936,10 +997,10 @@ _zdx_status_run() {
 # Public: zdx-status [--json]. Read-only; never opens fzf or prompts, so it
 # runs non-interactively. Text goes to stderr; --json prints one document on
 # stdout. Status 0 on success, 1 without the core runtime or (for --json) jq,
-# and 2 for invalid arguments. See docs/user-guide.md.
+# 2 for invalid arguments, and 130/143 for interruption. See docs/user-guide.md.
 zdx-status() {
   emulate -L zsh
-  local mode=text
+  local mode=text jq_path="" REPLY=""
   case "${1-}" in
     "")
       if (( $# > 0 )); then
@@ -977,15 +1038,18 @@ zdx-status() {
       "zdx status needs the ZDX core runtime; load zdx-suite.plugin.zsh or functions.zsh."
     return 1
   }
-  if [[ "$mode" == json ]] && (( ! ${+commands[jq]} )); then
-    _zdx_status_error "jq is required for zdx status --json; run zdx doctor."
-    return 1
+  if [[ "$mode" == json ]]; then
+    _zdx_probe_resolve jq || {
+      _zdx_status_error "jq is required for zdx status --json; run zdx doctor."
+      return 1
+    }
+    jq_path="$REPLY"
   fi
 
   if (( ${+functions[_timed]} )); then
-    _timed "zdx:status" _zdx_status_run "$mode"
+    _timed "zdx:status" _zdx_status_run "$mode" "$jq_path"
   else
-    _zdx_status_run "$mode"
+    _zdx_status_run "$mode" "$jq_path"
   fi
 }
 
