@@ -927,6 +927,8 @@ _zdx_surface_plan_stub() {
 }
 
 _zdx_surface_plan_dispatch() {
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
   local anchor="$_ZS_NEW_ANCHOR" new="$_ZS_NEW_COMMAND"
   local rel="${_ZS[dispatch_file]:-}" array_name="" first="" second="" third=""
   local indent="" pad="" prepare="" body="" text=""
@@ -975,7 +977,13 @@ _zdx_surface_plan_dispatch() {
     fi
   elif (( end == arm + 2 )) && [[ "$first" =~ "^([[:space:]]+)${anchor}\\)\$" ]]; then
     indent="${match[1]}"
-    if [[ "$second" =~ '^([[:space:]]+)(_[a-z0-9_]+_dispatch_prepare) "\$command_name" "\$@" \\$' ]]; then
+    if [[ "$second" =~ "^([[:space:]]+)_${_ZS[suite]}_timed \"${_ZS[suite]}:${anchor}\" ${anchor} \"\\\$@\"\$" ]]; then
+      pad="${match[1]}"
+      if [[ "$third" == "${pad};;" ]]; then
+        body="${pad}_${_ZS[suite]}_timed \"${_ZS[suite]}:${new}\" ${new} \"\$@\""
+        text="${indent}${new})"$'\n'"${body}"$'\n'"${pad};;"
+      fi
+    elif [[ "$second" =~ '^([[:space:]]+)(_[a-z0-9_]+_dispatch_prepare) "\$command_name" "\$@" \\$' ]]; then
       prepare="${match[2]}"
       body="${match[1]}${prepare} \"\$command_name\" \"\$@\""
       if [[ "$third" =~ "^[[:space:]]+&& ${anchor} \"\\\$@\" ;;\$" ]]; then

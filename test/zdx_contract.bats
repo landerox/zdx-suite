@@ -868,3 +868,235 @@ ZSH
   run f304_regex_probe 'release-checkout' unset
   [ "$status" -eq 0 ]
 }
+
+# Record accidental execution at the parser boundary without opening a picker,
+# probing the host, or persisting telemetry. Product code still parses the call.
+_routing_grammar_fixture() {
+  ROUTING_GUARDS="$TEST_TEMP_DIR/routing-guards.zsh"
+  export ROUTING_GUARDS
+  cat > "$ROUTING_GUARDS" <<'ZSH'
+_zdx_interactive() {
+  print -r -- picker >> "$HOME/routing.events"
+  return "${ROUTING_PICKER_RC:-0}"
+}
+_timed() {
+  print -r -- timer >> "$HOME/routing.events"
+  return 97
+}
+_log_telemetry() {
+  print -r -- telemetry >> "$HOME/routing.events"
+  return 97
+}
+_zdx_doctor_detect_os() {
+  print -r -- os >> "$HOME/routing.events"
+  print -r -- Linux
+}
+_zdx_doctor_detect_pkg_manager() {
+  print -r -- manager >> "$HOME/routing.events"
+  print -r -- none
+}
+_zdx_doctor_visual_diagnostics() {
+  print -r -- visual >> "$HOME/routing.events"
+}
+_zdx_release_checkout() {
+  print -r -- version >> "$HOME/routing.events"
+  return 97
+}
+_zdx_doctor_report_dependency() {
+  print -r -- dependency >> "$HOME/routing.events"
+  return 130
+}
+ZSH
+}
+
+_routing_grammar_rejected() {
+  _routing_grammar_fixture
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    source "$1/functions.zsh" || exit 91
+    source "$ROUTING_GUARDS" || exit 92
+    ZDX_TELEMETRY=1
+    shift
+    "$@" > "$HOME/call.out" 2> "$HOME/call.err"
+    route_rc=$?
+    print -r -- "status=$route_rc stderr=$([[ -s "$HOME/call.err" ]] && print present || print absent)"
+    [[ "$route_rc" == 2 && ! -s "$HOME/call.out" && -s "$HOME/call.err" ]] || exit 93
+    [[ ! -s "$HOME/routing.events" ]] || exit 94
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" ]] || exit 95
+  ' _ "$TEST_SUITE_ROOT" "$@"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'status=2 stderr=present' ]
+}
+
+@test "routing grammar: zdx rejects a sole explicit empty argument without execution" {
+  _routing_grammar_rejected zdx ""
+}
+
+@test "routing grammar: zdx rejects an empty first argument before trailing arguments" {
+  _routing_grammar_rejected zdx "" --help ignored
+}
+
+@test "routing grammar: zdx-menu rejects a sole explicit empty argument without a picker" {
+  _routing_grammar_rejected zdx-menu ""
+}
+
+@test "routing grammar: zdx-menu rejects an empty first argument before trailing arguments" {
+  _routing_grammar_rejected zdx-menu "" --help ignored
+}
+
+@test "routing grammar: doctor diagnoses a sole explicit empty argument before probes" {
+  _routing_grammar_rejected zdx-doctor ""
+}
+
+@test "routing grammar: doctor diagnoses an empty first argument before trailing arguments" {
+  _routing_grammar_rejected zdx-doctor "" --help ignored
+}
+
+@test "routing grammar: an empty doctor operand remains a diagnosed error through the master" {
+  _routing_grammar_rejected zdx doctor ""
+}
+
+@test "routing grammar: the master rejects the section sentinel as a direct route" {
+  _routing_grammar_rejected zdx :
+}
+
+@test "routing grammar: the master rejects the section sentinel with trailing arguments" {
+  _routing_grammar_rejected zdx : --help ignored
+}
+
+@test "routing grammar: plausible unknown and colon-containing routes fail before execution" {
+  local entrypoint token
+  for entrypoint in zdx zdx-menu zdx-doctor; do
+    for token in unregistered-route-123 git:git-status :unknown; do
+      _routing_grammar_rejected "$entrypoint" "$token" extra
+    done
+  done
+}
+
+@test "routing grammar: wrapper help and option arity errors fail before execution" {
+  local entrypoint help_token
+  for entrypoint in zdx zdx-menu zdx-doctor; do
+    _routing_grammar_rejected "$entrypoint" --unknown
+    for help_token in -h --help; do
+      _routing_grammar_rejected "$entrypoint" "$help_token" extra
+    done
+  done
+  _routing_grammar_rejected zdx help extra
+  _routing_grammar_rejected zdx-doctor help extra
+  _routing_grammar_rejected zdx-doctor --dry-run extra
+  _routing_grammar_rejected zdx --version extra
+  _routing_grammar_rejected zdx -v extra
+  _routing_grammar_rejected zdx version extra
+  # zdx-menu deliberately has only -h and --help, unlike zdx and doctor.
+  _routing_grammar_rejected zdx-menu help
+}
+
+@test "routing grammar: recognized help spellings are quiet data and perform no execution" {
+  _routing_grammar_fixture
+  local entrypoint help_token
+  for entrypoint in zdx zdx-menu zdx-doctor; do
+    for help_token in -h --help help; do
+      [ "$entrypoint" != zdx-menu ] || [ "$help_token" != help ] || continue
+      run zsh -f -c '
+        emulate -R zsh
+        cd "$HOME" || exit 90
+        source "$1/functions.zsh" || exit 91
+        source "$ROUTING_GUARDS" || exit 92
+        ZDX_TELEMETRY=1
+        "$2" "$3" > "$HOME/help.out" 2> "$HOME/help.err"
+        help_rc=$?
+        [[ "$help_rc" == 0 && ! -s "$HOME/help.out" && -s "$HOME/help.err" ]] || exit 93
+        [[ "$(<"$HOME/help.err")" == *Usage:* ]] || exit 94
+        [[ ! -s "$HOME/routing.events" && ! -e "$HOME/.config/zdx/telemetry.json" ]] || exit 95
+      ' _ "$TEST_SUITE_ROOT" "$entrypoint" "$help_token"
+      [ "$status" -eq 0 ]
+      [ -z "$output" ]
+    done
+  done
+}
+
+@test "routing grammar: no-argument master calls retain interactive dispatch and its status" {
+  _routing_grammar_fixture
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    source "$1/functions.zsh" || exit 91
+    source "$ROUTING_GUARDS" || exit 92
+    local entrypoint picker_rc route_rc
+    for picker_rc in 0 17; do
+      ROUTING_PICKER_RC="$picker_rc"
+      for entrypoint in zdx zdx-menu; do
+        "$entrypoint" > "$HOME/call.out" 2> "$HOME/call.err"
+        route_rc=$?
+        [[ "$route_rc" == "$picker_rc" ]] || exit 93
+        [[ ! -s "$HOME/call.out" && ! -s "$HOME/call.err" ]] || exit 94
+      done
+    done
+    [[ "$(<"$HOME/routing.events")" == $'\''picker\npicker\npicker\npicker'\'' ]] || exit 95
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" ]] || exit 96
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "routing grammar: no-argument and dry-run doctor routes start only the mocked scan" {
+  _routing_grammar_fixture
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    source "$1/functions.zsh" || exit 91
+    source "$ROUTING_GUARDS" || exit 92
+    local mode route_rc
+    for mode in plain dry-run; do
+      : > "$HOME/routing.events"
+      if [[ "$mode" == plain ]]; then
+        zdx-doctor > "$HOME/call.out" 2> "$HOME/call.err"
+      else
+        zdx-doctor --dry-run > "$HOME/call.out" 2> "$HOME/call.err"
+      fi
+      route_rc=$?
+      [[ "$route_rc" == 130 && ! -s "$HOME/call.out" && -s "$HOME/call.err" ]] || exit 93
+      [[ "$(<"$HOME/routing.events")" == $'\''os\nmanager\nvisual\ndependency'\'' ]] || exit 94
+    done
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" ]] || exit 95
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "routing grammar: canonical master routes preserve literal empty colon and shell-bearing operands" {
+  _routing_grammar_fixture
+  run zsh -f -c '
+    emulate -R zsh
+    cd "$HOME" || exit 90
+    source "$1/functions.zsh" || exit 91
+    source "$ROUTING_GUARDS" || exit 92
+    _zdx_route_test_arguments() {
+      print -r -- "owner=$1"
+      shift
+      print -r -- "count=$#"
+      printf "<%s>\n" "$@"
+      return 7
+    }
+    git-menu() { _zdx_route_test_arguments git "$@"; }
+    zdx-status() { _zdx_route_test_arguments status "$@"; }
+    zdx-doctor() { _zdx_route_test_arguments doctor "$@"; }
+    zdx-plugins() { _zdx_route_test_arguments plugins "$@"; }
+    local owner route_rc
+    for owner in git status doctor plugins; do
+      zdx "$owner" "" : "two words" "\$(touch $HOME/evaluated)" > "$HOME/call.out" 2> "$HOME/call.err"
+      route_rc=$?
+      [[ "$route_rc" == 7 && ! -s "$HOME/call.err" ]] || exit 93
+      print -r -- "$(<"$HOME/call.out")"
+    done
+    [[ ! -e "$HOME/evaluated" && ! -s "$HOME/routing.events" ]] || exit 94
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" ]] || exit 95
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+  local owner
+  for owner in git status doctor plugins; do
+    [[ "$output" == *"owner=$owner"$'\ncount=4\n<>\n<:>\n<two words>\n<$(touch '"$HOME/evaluated)>"* ]]
+  done
+  [ ! -e "$HOME/evaluated" ]
+}

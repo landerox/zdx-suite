@@ -1992,6 +1992,9 @@ known release version.
 
 The Dependency Doctor checks required and optional tools, reports display
 settings, and offers a platform-aware installer with explicit confirmation.
+Calling `zdx-doctor` or `zdx doctor` without operands starts the scan. An
+explicit empty operand, as in `zdx doctor ""`, is diagnosed with status `2`
+before any probe.
 
 ### 🔍 Diagnostic Scans
 
@@ -2202,8 +2205,12 @@ The core **`zdx`** executable serves as the centralized orchestrator and wrapper
   section above.
   `status` is a reserved route, so a custom plugin cannot use that name.
 - **Predictable parser behavior**: `zdx --help` and `zdx-menu --help` write
-  usage text to stderr. Unknown options, unexpected master-menu arguments, and
-  unknown dispatch names return status `2`.
+  usage text to stderr. Only a call with zero arguments opens the master menu;
+  `zdx ""` and `zdx-menu ""` are diagnosed errors, including with trailing arguments.
+  The first `zdx` route word cannot contain a colon: `zdx :` returns status `2`
+  because menu section tokens are internal. Empty words and colons after a valid
+  route remain literal operands for that owner's parser. Unknown options,
+  unexpected master-menu arguments, and unknown dispatch names also return `2`.
 - **Deferred autoloading (lazy load)**: The core wrapper registers lightweight
   stubs and loads an allowlisted module on first invocation. The loader derives
   one `functions/` root from its own source file, installs stubs through Zsh's

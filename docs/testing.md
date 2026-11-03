@@ -161,6 +161,14 @@ The shared fixtures are in `core_options_test_helper.bash`.
 | `core_option_boundaries.bats` | Actual cold VPN help under `KSH_ARRAYS` and `emulate sh`; identity-hook override execution outside owned preparation, preserving deliberate session and regex changes |
 | `scaffold.bats` | `just surfaces` rows for complete suites, invalid suites and options, a removed or orphaned surface with its file hint, and `--strict`; `just new-command` dry runs that write nothing, wired uniform surfaces with only the manual ones left, a generated command that runs through the suite runtime, list-style suites, and refusals of an existing command, invalid names, modules, metadata, or text, and an ambiguous or unrecognized target region |
 
+Nine scaffold cases cover the canonical three-line timed anchor, passive
+plans, atomic malformed-anchor refusal, surface inventory, and literal
+arguments and statuses through the real generated arm and timer/logger.
+They compose the actual entrypoint and selection examples from
+[`menu-spec.md`](menu-spec.md) over that arm, including untimed grammar errors,
+sections, cancellation and forged rows. Existing owner menus adopt those
+contributor templates separately; legacy scaffold shapes keep their controls.
+
 `lazy_loading.bats` also repairs an actual partial eager load and a test-owned
 core parse failure after real installed-plugin activation. Retrying preserves
 real command bodies, API constants, plugin membership and the source counter.
@@ -500,6 +508,13 @@ shell remain manual acceptance.
 | `zdx_status.bats` | `zdx status` source safety, help and grammar statuses before any probe, router, help, catalog order, completion (`zdx status` and `zdx-status`), reserved-name, and lazy-stub parity, the reported release against `pyproject.toml`; `zdx.status.v1` documents checked with `jq -e` for a repository with upstream, changes, and workspace, outside a repository, a hostile branch name, a merge in progress, and a detached HEAD, with exactly one monochrome document on stdout; the text report on stderr only; every external probe bounded and a timed-out `git status` left `null`; `--json` without jq; WireGuard, platform, reboot-flag, and load-average fixtures; and macOS nulls with the Command Line Tools `git` placeholder never run |
 | `zdx_widgets.bats` | Insert-widget source safety and the single quoted `LBUFFER` edit; branch, pull-request, port (`ss` and macOS `lsof`), and virtual-environment candidates with hostile names round-tripped through `${(q)…}`; `Esc`, no match, a failed picker, and forged or arithmetic-bearing rows leaving the buffer untouched; one `zle -M` message for a missing tool, repository, or `gh` authentication without opening fzf; bounded probes, plain-mode and isolated fzf options; unbound-only binding with override, empty, and `ZDX_KEYBINDINGS=0` cases in an interactive shell; the `Ctrl-G` `git-menu` chord moved by `ZDX_KEY_GIT` and unbound by an empty value; `Ctrl-G` pressed in a real line editor on a pseudo-terminal, where `git-menu` runs as a command line that answers a line confirmation and a prefilled `vared` text prompt, from an empty line and from a half-typed line that comes back, `HIST_IGNORE_SPACE` leaves no history entry, and the chord does nothing in `vared`, on a continuation line, or in a recursive edit; and first-use loading in lazy mode |
 | `zdx_doctor_rendering.bats` | Isolated fzf version probes, caller-environment preservation, malformed or failed version reporting for every dependency without a `v` placeholder, interruption propagation, and escaped display/source diagnostics without configuration values; WSL detection from interop, late interop, or the kernel release; the Linux system package manager ahead of Linuxbrew; a mocked healthy macOS host that passes with `ip` not applicable and no `findmnt` row, GNU tar found as `gtar`, and the watchdog advisory instead of a missing `timeout`; Apple Command Line Tools placeholders reported missing without being run; and counted Linux capabilities |
+
+Fifteen routing cases distinguish zero operands from sole and trailing explicit
+empty operands, reject public section tokens, preserve help/version arity and
+literal remaining arguments. Rejected wrapper grammar must return status `2`
+with separated streams and no timer, telemetry, picker or scan event. Safe
+mocked no-argument master and doctor paths retain their returned statuses
+without an added master timer.
 
 The focused router tests replace suite entrypoints and FZF with local mocks.
 They do not execute a real plugin or prove the safety of plugin code after its

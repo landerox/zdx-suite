@@ -1014,7 +1014,10 @@ zdx-doctor() {
   local -i dry_run=0
   case "${1:-}" in
     "")
-      (( $# == 0 )) || return 2
+      (( $# == 0 )) || {
+        _zdx_doctor_error "zdx-doctor does not accept an empty argument."
+        return 2
+      }
       ;;
     --dry-run)
       (( $# == 1 )) || {

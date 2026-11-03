@@ -49,6 +49,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Distinguish bare master invocations from explicit empty arguments and reject
+  direct colon routes with usage status `2` before execution. Diagnose empty
+  doctor operands while preserving no-argument scans and literal owner arguments.
+  Extend command scaffolding for the canonical fixed-label timed arm; contributor
+  templates share one dispatcher for direct and interactive calls.
 - Bind Linux PTY test cleanup to the recorded worker's process, group, session
   and start identity instead of a global argument-pattern search. Missing or
   changed ownership evidence cannot authorize a group signal.

@@ -119,9 +119,14 @@ _zdx_show_version() {
 }
 
 zdx-menu() {
-  case "${1:-}" in
+  if (( $# == 0 )); then
+    _zdx_interactive
+    return $?
+  fi
+  case "$1" in
     "")
-      _zdx_interactive
+      _zdx_error "zdx-menu requires a non-empty argument."
+      return 2
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -142,9 +147,18 @@ zdx-menu() {
 }
 
 zdx() {
-  case "${1:-}" in
+  if (( $# == 0 )); then
+    zdx-menu
+    return $?
+  fi
+  case "$1" in
     "")
-      zdx-menu
+      _zdx_error "zdx requires a non-empty command argument."
+      return 2
+      ;;
+    *:*)
+      _zdx_error "Invalid zdx command: '$1'."
+      return 2
       ;;
     -h|--help|help)
       (( $# == 1 )) || {
