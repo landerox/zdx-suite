@@ -238,14 +238,27 @@ existing seeded values and initially unset state.
 ### Argument routing
 
 Parse help and options before dispatching. Unknown options MUST fail closed.
-Forward remaining arguments without flattening them:
+Distinguish zero operands from an explicit empty first operand. Reject empty
+and colon-containing public route words with a diagnostic and status `2`,
+without timing, telemetry, picker or probe work. Forward later operands
+without flattening them:
 
 ```zsh
-case "${1:-}" in
-  "")
-    _example_interactive
+if (( $# == 0 )); then
+  _example_interactive
+  return $?
+fi
+
+case "$1" in
+  ""|*:*)
+    _example_error "Invalid command argument."
+    return 2
     ;;
   -h|--help)
+    (( $# == 1 )) || {
+      _example_error "Help does not accept additional arguments."
+      return 2
+    }
     _example_usage >&2
     ;;
   -*)
@@ -253,15 +266,20 @@ case "${1:-}" in
     return 2
     ;;
   *)
-    local command_name="$1"
-    shift
-    _example_dispatch "$command_name" "$@"
+    _example_dispatch "$@"
     ;;
 esac
 ```
 
 Do not build a function name from user input. Dispatch through a `case` whose
-arms call fixed functions.
+fixed canonical action arms own their sole literal timing call; unknown and
+private section arms stay untimed. Direct and foreground interactive adapters
+call that same dispatcher without an outer timer or second executable
+allowlist; see [`menu-spec.md`](menu-spec.md#explicit-dispatcher). Known action
+operands belong to the owner's parser and remain literal. Execution
+coordinators and their ancestors retain the option-scope rules above; isolate
+pure preparation, then return before invoking user/plugin code. Existing owner
+suites adopt both timing paths together rather than acquiring another layer.
 
 ### Quoting and command construction
 
@@ -801,6 +819,23 @@ them, the dispatcher arm, menu record, `--help` entry, completion entry and
 copies the shape of the anchor's own entry. The stub accepts only `--help`
 and returns `1` until it is implemented. `--dry-run` prints the planned
 edits and writes nothing.
+
+Dispatcher scaffolding preserves the supported plain and dispatch-prepare
+anchor shapes. It also recognizes this exact three-line canonical timed arm:
+
+```zsh
+    example-status)
+      _<suite>_timed "<suite>:example-status" example-status "$@"
+      ;;
+```
+
+The wrapper must match the suite; the literal label and fixed target must
+match the anchor. Literal single spaces separate the body operands, and the
+standalone `;;` has the body's indentation. The generator clones that arm
+with the new canonical label and target. Dynamic identities, extra operands,
+appended logic and other unrecognized timed shapes are refused before any
+publication. The `DISP` inventory still derives from case tokens. This narrow
+extension does not rewrite existing owner adapters or add a generator option.
 
 The generator refuses, without writing anything, an unknown suite or
 module, a name that is not kebab-case, lacks a prefix the suite's fixture

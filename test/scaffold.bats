@@ -363,3 +363,329 @@ generate_tool_probe() {
   grep -Fq 'does not end with its typeset -g _..._SOURCED=1 sentinel' "$SURFACE_ERR"
   assert_copy_unchanged
 }
+
+# F3-09 prospective scaffold acceptance. The generator adds dispatcher arms;
+# it does not generate a complete entrypoint or migrate the Python suite.
+# shellcheck disable=SC2016
+
+scaffold_timed_anchor() {
+  SCAFFOLD_ANCHOR_KIND="${1:-valid}" perl - \
+    "$SCAFFOLD_REPO/functions/py-menu.zsh" <<'PERL'
+use strict;
+use warnings;
+my $path = shift @ARGV;
+open my $input, '<', $path or die "$path: $!\n";
+local $/;
+my $source = <$input>;
+close $input or die "$path: $!\n";
+my %bodies = (
+    valid => q{_py_timed "py:tool-upgrade" tool-upgrade "$@"},
+    wrong_suite => q{_py_timed "dev:tool-upgrade" tool-upgrade "$@"},
+    wrong_label => q{_py_timed "py:tool-install" tool-upgrade "$@"},
+    wrong_target => q{_py_timed "py:tool-upgrade" tool-uninstall "$@"},
+    wrong_wrapper => q{_dev_timed "py:tool-upgrade" tool-upgrade "$@"},
+    dynamic_label => q{_py_timed "py:$command_name" tool-upgrade "$@"},
+    dynamic_target => q{_py_timed "py:tool-upgrade" "$command_name" "$@"},
+    extra_argument => q{_py_timed "py:tool-upgrade" tool-upgrade --invented "$@"},
+    extra_logic => q{_py_timed "py:tool-upgrade" tool-upgrade "$@" || true},
+);
+my $kind = $ENV{SCAFFOLD_ANCHOR_KIND};
+exists $bodies{$kind} or die "unknown fixture kind\n";
+my $replacement = "    tool-upgrade)\n      $bodies{$kind}\n      ;;";
+my $count = $source =~ s{^    tool-upgrade\)[ \t]+tool-upgrade "\$\@" ;;$}{$replacement}mg;
+$count == 1 or die "expected exactly one legacy fixture anchor, got $count\n";
+open my $output, '>', $path or die "$path: $!\n";
+print {$output} $source or die "$path: $!\n";
+close $output or die "$path: $!\n";
+PERL
+}
+
+# Instantiates the actual normative code examples, rather than maintaining a
+# second handwritten entrypoint/selection implementation in these tests.
+scaffold_contract_templates() {
+  perl - "$SCAFFOLD_REPO/docs/menu-spec.md" "$HOME" <<'PERL'
+use strict;
+use warnings;
+my ($path, $home) = @ARGV;
+open my $input, '<', $path or die "$path: $!\n";
+local $/;
+my $document = <$input>;
+close $input or die "$path: $!\n";
+sub example {
+    my ($heading) = @_;
+    my ($section) = $document =~ /^## \Q$heading\E\s*\n(.*?)(?=^## |\z)/ms;
+    defined $section or die "missing normative section $heading\n";
+    my $fence = chr(96) x 3;
+    my ($body) = $section =~ /^\Q$fence\Ezsh\n(.*?)^\Q$fence\E\s*$/ms;
+    defined $body or die "missing Zsh example in $heading\n";
+    $body =~ s/<suite>/py/g;
+    $body =~ s/<prefix>/py/g;
+    return $body;
+}
+my $entry = "emulate -R zsh\n" . example('Entrypoint routing');
+my $selection = "emulate -R zsh\n_py_interactive() {\n" .
+    "  local -a options=(\n" .
+    "    '  Probe Tool Backend|tool-probe|Show which backend owns one isolated tool.'\n" .
+    "    'Section|:|Select an action.'\n" .
+    "  )\n" . example('Selection and cancellation') . "}\n";
+for my $item (['scaffold-entry.zsh', $entry], ['scaffold-selection.zsh', $selection]) {
+    my ($name, $body) = @$item;
+    open my $output, '>', "$home/$name" or die "$home/$name: $!\n";
+    print {$output} $body or die "$home/$name: $!\n";
+    close $output or die "$home/$name: $!\n";
+}
+PERL
+  zsh -n "$HOME/scaffold-entry.zsh" || return 96
+  zsh -n "$HOME/scaffold-selection.zsh" || return 97
+}
+
+scaffold_routing_support() {
+  cat > "$HOME/scaffold-support.zsh" <<'ZSH'
+emulate -R zsh
+builtin cd -- "$HOME" || return 80
+export NO_COLOR=1 ZDX_TELEMETRY=1
+functions[_scaffold_original_timed]="${functions[_timed]}"
+_timed() {
+  print -r -- "$1" >> "$HOME/timer.labels"
+  _scaffold_original_timed "$@"
+}
+tool-probe() {
+  print -r -- "$#" > "$HOME/actual.argc"
+  : > "$HOME/actual.args"
+  if (( $# > 0 )); then
+    printf '%s\0' "$@" > "$HOME/actual.args"
+  fi
+  printf 'payload\n\n'
+  return "${SCAFFOLD_ROUTE_STATUS:-7}"
+}
+# Never let a mis-generated target reach the real updater in this fixture.
+tool-upgrade() { print -r -- anchor >> "$HOME/forbidden"; return 98; }
+tool-plausible-unknown() { print -r -- unknown >> "$HOME/forbidden"; return 98; }
+# Metadata is deliberately permissive; only the real case arms authorize execution.
+_py_command_is_canonical() { return 0; }
+_py_require_command() { print -r -- probe >> "$HOME/probes"; return 97; }
+_py_dispatch_prepare() { print -r -- probe >> "$HOME/probes"; return 97; }
+_py_fzf_capture() {
+  print -r -- picker >> "$HOME/pickers"
+  REPLY="${SCAFFOLD_SELECTION-}"
+  return "${SCAFFOLD_PICKER_STATUS:-0}"
+}
+_py_usage() { print -u2 -r -- 'Usage: py-menu [command]'; }
+ZSH
+  zsh -n "$HOME/scaffold-support.zsh"
+}
+
+@test "new-command: a canonical timed anchor keeps dry-run publication passive" {
+  scaffold_timed_anchor valid
+  snapshot_copy
+  generate_tool_probe --dry-run
+  [ "$SURFACE_STATUS" -eq 0 ]
+  [ ! -s "$SURFACE_ERR" ]
+  grep -Fq 'dispatcher arm' "$SURFACE_OUT"
+  assert_copy_unchanged
+}
+
+@test "new-command: a generated timed arm reaches the actual command parser" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  # A literal label/target is the narrow code-generation contract. Runtime
+  # behavior alone cannot distinguish a fixed label from a variable that
+  # happens to contain the same canonical token on this invocation.
+  grep -Eq '(^|[[:space:]])_py_timed[[:space:]]+"py:tool-probe"[[:space:]]+tool-probe[[:space:]]+"\$@"([[:space:]]|$)' \
+    "$SCAFFOLD_REPO/functions/py-menu.zsh"
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    tool-upgrade() { return 98; }
+    _py_dispatch tool-probe --help > "$HOME/help.out" 2> "$HOME/help.err"
+    [[ "$?" == 0 && ! -s "$HOME/help.out" ]] || exit 81
+    _py_dispatch tool-probe --bogus > "$HOME/bad.out" 2> "$HOME/bad.err"
+    [[ "$?" == 2 && ! -s "$HOME/bad.out" ]] || exit 82
+    command jq -s -e "length == 2 and map(.exit_code) == [0,2] and all(.[]; .suite == \"py\" and .command == \"tool-probe\")" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 83
+  '
+  [ "$status" -eq 0 ]
+  grep -Fq 'Usage: tool-probe [-h|--help]' "$HOME/help.err"
+  grep -Fq 'tool-probe accepts no arguments.' "$HOME/bad.err"
+}
+
+@test "new-command: a generated timed arm preserves literal operands and command status" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  scaffold_routing_support
+  printf '%s\0' '' : 'two words' $'line\nbreak' '; touch canary' '*' \
+    '$(touch canary)' > "$HOME/expected.args"
+  printf 'payload\n\n' > "$HOME/expected.out"
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    source "$HOME/scaffold-support.zsh" || exit 81
+    _py_dispatch tool-probe "" : "two words" $'"'"'line\nbreak'"'"' \
+      "; touch canary" "*" "\$(touch canary)" > "$HOME/actual.out" 2> "$HOME/actual.err"
+    [[ "$?" == 7 && ! -e "$HOME/canary" ]] || exit 82
+    [[ "$(<"$HOME/timer.labels")" == py:tool-probe ]] || exit 83
+    [[ ! -e "$HOME/forbidden" && ! -e "$HOME/probes" && ! -e "$HOME/pickers" ]] || exit 84
+    command jq -s -e "length == 1 and .[0].suite == \"py\" and .[0].command == \"tool-probe\" and .[0].exit_code == 7" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 85
+  '
+  [ "$status" -eq 0 ]
+  cmp "$HOME/expected.args" "$HOME/actual.args"
+  cmp "$HOME/expected.out" "$HOME/actual.out"
+  [ "$(wc -l < "$HOME/actual.err")" -eq 1 ]
+  [[ "$(cat "$HOME/actual.err")" == "  py:tool-probe failed after "*" (status 7)" ]]
+}
+
+@test "new-command: generated dispatch rejects unknown functions before timing and keeps sections untimed" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  scaffold_routing_support
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    source "$HOME/scaffold-support.zsh" || exit 81
+    local token
+    for token in "" tool-plausible-unknown py:tool-probe --unknown; do
+      _py_dispatch "$token" > "$HOME/out" 2> "$HOME/err"
+      [[ "$?" == 2 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 82
+    done
+    _py_dispatch : > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 0 && ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 83
+    [[ ! -e "$HOME/timer.labels" && ! -e "$HOME/.config/zdx/telemetry.json" \
+      && ! -e "$HOME/forbidden" && ! -e "$HOME/probes" && ! -e "$HOME/pickers" ]] || exit 84
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "new-command: malformed timed anchors are refused before any publication" {
+  cp "$SCAFFOLD_REPO/functions/py-menu.zsh" "$HOME/original-py-menu.zsh"
+  local kind
+  for kind in wrong_suite wrong_label wrong_target wrong_wrapper dynamic_label \
+    dynamic_target extra_argument extra_logic; do
+    cp "$HOME/original-py-menu.zsh" "$SCAFFOLD_REPO/functions/py-menu.zsh"
+    scaffold_timed_anchor "$kind"
+    snapshot_copy
+    generate_tool_probe
+    [ "$SURFACE_STATUS" -eq 1 ]
+    [ ! -s "$SURFACE_OUT" ]
+    [ -s "$SURFACE_ERR" ]
+    assert_copy_unchanged
+  done
+}
+
+@test "new-command: surfaces derives the generated timed action from the dispatcher" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  surface check py
+  # Manual docs and frozen-count updates remain pending, as with legacy arms.
+  [ "$SURFACE_STATUS" -eq 1 ]
+  awk '$1 == "py" && $2 == "tool-probe" { seen++; if ($3 != "ok" || $4 != "ok") exit 1 } END { if (seen != 1) exit 1 }' \
+    "$SURFACE_OUT"
+  [[ "$(cat "$SURFACE_ERR")" != *"tool-probe: no dispatcher arm"* ]]
+}
+
+# These composed tests instantiate the published canonical entrypoint/selection
+# examples over the REAL generated dispatcher. They prove template compatibility,
+# not migration of the maintained py-menu public entrypoint in this core PR.
+@test "new-command: the canonical entrypoint rejects empty colon and unknown tokens before timing" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  scaffold_contract_templates
+  scaffold_routing_support
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    source "$HOME/scaffold-entry.zsh" || exit 81
+    source "$HOME/scaffold-selection.zsh" || exit 82
+    source "$HOME/scaffold-support.zsh" || exit 83
+    local token arity help_form
+    for token in "" : py:tool-probe tool-plausible-unknown --unknown; do
+      for arity in sole trailing; do
+        if [[ "$arity" == sole ]]; then
+          py-menu "$token" > "$HOME/out" 2> "$HOME/err"
+        else
+          py-menu "$token" "later operand" > "$HOME/out" 2> "$HOME/err"
+        fi
+        [[ "$?" == 2 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 84
+        [[ ! -e "$HOME/timer.labels" && ! -e "$HOME/.config/zdx/telemetry.json" \
+          && ! -e "$HOME/forbidden" && ! -e "$HOME/probes" && ! -e "$HOME/pickers" ]] || exit 85
+      done
+    done
+    for help_form in -h --help; do
+      py-menu "$help_form" extra > "$HOME/out" 2> "$HOME/err"
+      [[ "$?" == 2 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 86
+      py-menu "$help_form" > "$HOME/out" 2> "$HOME/err"
+      [[ "$?" == 0 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 87
+    done
+    [[ ! -e "$HOME/timer.labels" && ! -e "$HOME/.config/zdx/telemetry.json" \
+      && ! -e "$HOME/forbidden" && ! -e "$HOME/probes" && ! -e "$HOME/pickers" ]] || exit 88
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "new-command: canonical no-argument selection keeps sections cancellation and forgeries untimed" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  scaffold_contract_templates
+  scaffold_routing_support
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    source "$HOME/scaffold-entry.zsh" || exit 81
+    source "$HOME/scaffold-selection.zsh" || exit 82
+    source "$HOME/scaffold-support.zsh" || exit 83
+    SCAFFOLD_SELECTION="Section|:|Select an action."
+    py-menu > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 0 && ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 84
+    SCAFFOLD_SELECTION="Forged label|tool-probe|Show which backend owns one isolated tool."
+    py-menu > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 1 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 85
+    local picker_rc
+    for picker_rc in 1 130; do
+      SCAFFOLD_PICKER_STATUS=$picker_rc
+      py-menu > "$HOME/out" 2> "$HOME/err"
+      [[ "$?" == 0 && ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 86
+    done
+    SCAFFOLD_PICKER_STATUS=17
+    py-menu > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 1 && ! -s "$HOME/out" && -s "$HOME/err" ]] || exit 87
+    [[ "$(<"$HOME/pickers")" == $'"'"'picker\npicker\npicker\npicker\npicker'"'"' ]] || exit 88
+    [[ ! -e "$HOME/timer.labels" && ! -e "$HOME/.config/zdx/telemetry.json" \
+      && ! -e "$HOME/forbidden" && ! -e "$HOME/probes" && ! -e "$HOME/actual.args" ]] || exit 89
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "new-command: canonical direct and interactive adapters time the generated action once" {
+  scaffold_timed_anchor valid
+  generate_tool_probe
+  [ "$SURFACE_STATUS" -eq 0 ]
+  scaffold_contract_templates
+  scaffold_routing_support
+  printf '%s\0' '' : 'two words' '$(touch canary)' > "$HOME/expected.args"
+  printf 'payload\n\n' > "$HOME/expected.out"
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    source "$HOME/scaffold-entry.zsh" || exit 81
+    source "$HOME/scaffold-selection.zsh" || exit 82
+    source "$HOME/scaffold-support.zsh" || exit 83
+    py-menu tool-probe "" : "two words" "\$(touch canary)" \
+      > "$HOME/direct.out" 2> "$HOME/direct.err"
+    [[ "$?" == 7 && ! -e "$HOME/canary" ]] || exit 84
+    command cmp "$HOME/expected.args" "$HOME/actual.args" || exit 85
+    SCAFFOLD_SELECTION="  Probe Tool Backend|tool-probe|Show which backend owns one isolated tool."
+    py-menu > "$HOME/interactive.out" 2> "$HOME/interactive.err"
+    [[ "$?" == 7 && "$(<"$HOME/pickers")" == picker ]] || exit 86
+    [[ "$(<"$HOME/actual.argc")" == 0 && ! -s "$HOME/actual.args" ]] || exit 90
+    [[ "$(<"$HOME/timer.labels")" == $'"'"'py:tool-probe\npy:tool-probe'"'"' ]] || exit 87
+    [[ ! -e "$HOME/forbidden" && ! -e "$HOME/probes" ]] || exit 88
+    command jq -s -e "length == 2 and all(.[]; .suite == \"py\" and .command == \"tool-probe\" and .exit_code == 7)" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 89
+  '
+  [ "$status" -eq 0 ]
+  cmp "$HOME/expected.out" "$HOME/direct.out"
+  cmp "$HOME/expected.out" "$HOME/interactive.out"
+  [ "$(wc -l < "$HOME/direct.err")" -eq 1 ]
+  [ "$(wc -l < "$HOME/interactive.err")" -eq 1 ]
+}

@@ -124,9 +124,11 @@ A visual section uses `:` as a non-action sentinel:
 ── Synchronization ──|:|Fetch, integrate, and publish branch changes.
 ```
 
-Selecting a section is a no-op. Every dispatcher MUST include the `:)` arm.
-Sections are navigation aids, not decorative walls: keep their number low and
-put related actions together.
+Selecting a section from a validated interactive snapshot is an untimed no-op.
+Every private dispatcher MUST include the `:)` arm for that internal record.
+The public direct route MUST reject `:` and any colon-containing first
+argument with status `2` and a diagnostic. Sections are navigation aids: keep
+their number low and put related actions together.
 
 ### Labels and descriptions
 
@@ -225,24 +227,41 @@ exactly this form:
 
 ## Explicit dispatcher
 
-The dispatcher is the executable allowlist:
+The dispatcher is the executable allowlist. Its fixed canonical action arms
+own their sole timing call; membership is resolved before timing or telemetry:
 
 ```zsh
 _<prefix>_dispatch() {
-  local command_name="${1:-}"
-  shift 2>/dev/null || true
+  (( $# > 0 )) || {
+    _<prefix>_error "A command is required."
+    return 2
+  }
+  local command_name="$1"
+  shift
 
   case "$command_name" in
-    example-status) example-status "$@" ;;
-    example-clean)  example-clean "$@" ;;
-    :)              return 0 ;;
+    example-status)
+      _<prefix>_timed "<suite>:example-status" example-status "$@"
+      ;;
+    example-clean)
+      _<prefix>_timed "<suite>:example-clean" example-clean "$@"
+      ;;
+    :) return 0 ;;
     *)
-      _<prefix>_error "Unknown command: $command_name"
+      _<prefix>_error "Unknown command. Use '<suite>-menu --help'."
       return 2
       ;;
   esac
 }
 ```
+
+`_<prefix>_timed` delegates to the core `_timed` or its documented standalone
+fallback. Each label and target above is a fixed canonical identifier of the
+owning suite. Documented aliases MUST resolve explicitly to their canonical
+action and label before timing; this template introduces no aliases.
+Entrypoints and interactive adapters call this dispatcher directly, with no
+outer timer or second executable action list. Unknown and section arms stay
+untimed, even when a plausible unknown function exists in the shell.
 
 The dispatcher stays probe-free. Each public command parses its arguments
 first and then checks its command-specific dependencies and runtime
@@ -250,7 +269,9 @@ capabilities, so menu and direct invocation reach the same checks with the
 same parser statuses. A suite may centralize that check in a dispatch-scoped
 gate the command reaches after parsing, as Developer's `_dev_require_command`
 does. The public command still validates its concrete target immediately
-before use.
+before use. A known action with invalid concrete operands reaches that owner's
+parser and may record its canonical timed status `2`; later operands remain
+literal data rather than another master routing decision.
 
 The following are forbidden:
 
@@ -261,38 +282,57 @@ The following are forbidden:
 
 ## Entrypoint routing
 
-Every `<suite>-menu` provides both interactive and direct modes:
+Every `<suite>-menu` provides both interactive and direct modes. Zero operands
+select interactive mode; an explicit empty first operand is a usage error,
+including when later operands follow it. Invalid route tokens return `2` with
+a diagnostic before timing, telemetry, pickers, probes or action execution.
+Help accepts only its documented spellings and arity:
 
 ```zsh
 <suite>-menu() {
-  case "${1:-}" in
-    "")
-      _<prefix>_interactive
+  # Execution coordinator: preserve development.md's option-scope boundaries.
+  if (( $# == 0 )); then
+    _<prefix>_interactive
+    return $?
+  fi
+
+  case "$1" in
+    ""|*:*)
+      _<prefix>_error "Invalid command argument. Use '<suite>-menu --help'."
+      return 2
       ;;
     -h|--help)
+      (( $# == 1 )) || {
+        _<prefix>_error "Help does not accept additional arguments."
+        return 2
+      }
       _<prefix>_usage >&2
       ;;
     -*)
-      _<prefix>_error "Unknown option: $1"
+      _<prefix>_error "Unknown option. Use '<suite>-menu --help'."
       return 2
       ;;
     *)
-      local command_name="$1"
-      shift
-      _timed "<suite>:$command_name" \
-        _<prefix>_dispatch "$command_name" "$@"
+      _<prefix>_dispatch "$@"
       ;;
   esac
 }
 ```
 
-The timing wrapper is applied exactly once per dispatch. It MUST preserve the
-dispatched command's exit status. A nested `_timed`, reached through
-delegation to another suite or inside an aggregate step, records telemetry
-but prints no footer; see [`output-spec.md`](output-spec.md). If the core
-timing service is unavailable during a standalone source test, the suite
-invokes the dispatcher directly or uses a documented core fallback; it MUST
-NOT define a competing global `_timed`.
+The known action arm applies timing exactly once and MUST preserve the
+command's exit status. A nested `_timed`, reached through delegation or inside
+an aggregate step, records telemetry but prints no footer; see
+[`output-spec.md`](output-spec.md#timing-footer). Without the core timing
+service, the suite wrapper invokes the fixed action directly or uses its
+documented fallback; it MUST NOT define a competing global `_timed`.
+
+These templates specify new or adopted routing. A maintained suite moves its
+direct and interactive outer timers into fixed arms together in its owner
+change; the core routing change does not migrate those suites or add master
+timing. Preparation and invocation retain the execution boundaries in
+[`development.md`](development.md#zsh-options-and-match-state): arbitrary
+user/plugin code runs after any emulated preparation has returned, outside
+ZDX option-restoring ancestors.
 
 Help is concise and includes syntax, flags, direct-command behavior, destructive
 flags, and important prerequisites. Under the repository stream policy, usage
@@ -617,8 +657,13 @@ done
 local command_name="${${selected#*|}%%|*}"
 [[ "$command_name" == ":" ]] && return 0
 
-_timed "<suite>:$command_name" _<prefix>_dispatch "$command_name"
+_<prefix>_dispatch "$command_name"
 ```
+
+The adapter above is untimed; the selected fixed action arm owns timing.
+When invocation can reach user/plugin code, complete isolated selection
+preparation before invoking it, as required by the execution boundary in
+[`development.md`](development.md#zsh-options-and-match-state).
 
 Do not infer the action from the label. Do not use `cut` on a record when Zsh
 parameter expansion is sufficient.
@@ -714,7 +759,12 @@ Before declaring a menu conforming:
 
 - [ ] Direct CLI behavior is implemented and tested before menu wiring.
 - [ ] Row fields follow `label|command|description` and reject delimiters.
-- [ ] Section rows dispatch to a no-op.
+- [ ] No arguments selects interactive mode; explicit empty and colon-containing
+      first operands return `2` with a diagnostic, with or without later words.
+- [ ] Sections are untimed no-ops only after complete-row snapshot validation.
+- [ ] Unknown routes create no timer or telemetry event.
+- [ ] Direct and interactive adapters reach the same fixed canonical action
+      arm, which times once and forwards literal later operands.
 - [ ] The dispatcher is an explicit `case` and forwards arguments safely.
 - [ ] Help, menu, dispatcher, completion, and tests expose the same commands.
 - [ ] `fzf` options are built at invocation time.

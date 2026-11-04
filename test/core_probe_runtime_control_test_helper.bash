@@ -40,7 +40,7 @@ receipt = json.loads((home / 'runtime-pipx-started.json').read_text())
 assert receipt['argv'] == [sys.argv[1], '--version']
 assert receipt['stdin_eof'] is True
 started, deadline = receipt['started_monotonic'], receipt['deadline_monotonic']
-assert math.isfinite(started) and math.isfinite(deadline) and deadline - started == 8.0
+assert math.isfinite(started) and math.isfinite(deadline) and deadline == started + 8.0
 now = time.monotonic()
 assert started <= now and deadline - now <= 8.0
 limit = now + 10.0

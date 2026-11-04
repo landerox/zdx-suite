@@ -318,6 +318,17 @@ snippet and executes unintended code.
   Its foreground picker captures into a private bounded file, distinguishes
   cancellation from failure, and accepts only an exact row from the current
   menu snapshot.
+- Master parsing distinguishes zero operands from an explicit empty first
+  word and refuses colon-containing first route words. Empty doctor operands
+  are diagnosed before any scan. Remaining operands after a valid route stay
+  literal input for the owner's parser; the master adds no timing layer.
+- Canonical contributor routing templates put timing in fixed action arms.
+  Unknown route tokens and private section no-ops never enter a timer or select
+  an arbitrary function. Direct and interactive adapters share that dispatcher;
+  a known action still uses its own operand parser. The scaffold clones only
+  a matching literal wrapper, canonical label and fixed target, refusing
+  unsupported timed shapes before publication. Adoption by existing owner
+  menus is tracked separately in the suite contracts.
 - The `zdx-plugins` menu and its uninstall picker capture the same way,
   through a private 64 KiB-bounded file below the validated temporary root;
   they refuse data returned with a failed picker status and dispatch only an
