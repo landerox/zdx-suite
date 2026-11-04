@@ -47,6 +47,13 @@ verification, and remaining limitations.
   branch and tag deletion now refuse when the server cannot report its
   symbolic refs over protocol v2.
 
+### Changed
+
+- Add a private core delegation context for literal current-shell calls,
+  subordinate headings and suppressed child timing footers. Delegation leaves
+  actual timer events and aggregate result ownership unchanged; suites adopt
+  the context per workflow.
+
 ### Fixed
 
 - Distinguish bare master invocations from explicit empty arguments and reject

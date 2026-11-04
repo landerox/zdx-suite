@@ -329,6 +329,12 @@ snippet and executes unintended code.
   a matching literal wrapper, canonical label and fixed target, refusing
   unsupported timed shapes before publication. Adoption by existing owner
   menus is tracked separately in the suite contracts.
+- Private core delegation invokes exact quoted argv with inherited descriptors
+  and returned status in the current shell. Only its depth unwinds; intentional
+  callback options, working directory, globals, `REPLY`/`reply` and regex changes
+  remain visible. Authorization and trust decisions stay with the action owner;
+  actual timers and aggregate result slots retain their existing owners. The
+  helper stays outside plugin API v1's closed 19-service list.
 - The `zdx-plugins` menu and its uninstall picker capture the same way,
   through a private 64 KiB-bounded file below the validated temporary root;
   they refuse data returned with a failed picker status and dispatch only an

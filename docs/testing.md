@@ -146,6 +146,17 @@ create a separate test file merely because a production file exists.
 | --- | --- |
 | `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; key-value lines with one key width, an added colon, and a theme-safe bold key; report sections that follow the step depth and reuse a heading's blank line with `--first`; step summaries omitted inside a step unless verbose; exact step banners and result lines, including a first banner that reuses a heading's blank line; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; the outermost-only timing footer with per-level telemetry using registered command labels; and the core `_zdx_spinner` helper, which returns its command's output |
 
+Fifteen private-delegation cases in `output.bats` cover lazy availability,
+missing and empty command words, literal argv and inherited streams/status,
+callback option/session/result effects, nested depth, step-first headings,
+exact LF, `FORCE_FLOAT`, color policy and actual partial-result owners. Seven
+`telemetry.bats` cases use the real logger to check bare, untimed, timed,
+nested, aggregate, verbose and disabled contexts without synthetic events.
+One `plugins_api.bats` case keeps the helper outside the closed 19-service API;
+existing read-only API checks remain. Returned `130`/`143` and a forced color
+predicate prove status and renderer branches, not physical signal or native
+PTY behavior.
+
 Core option regressions check all six regex-result parameters from both seeded
 and initially unset state. `output.bats` and `primitive_sync.bats` distinguish
 owned picker/confirmation hooks from arbitrary command callbacks, whose

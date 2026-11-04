@@ -87,11 +87,18 @@ line rendered by `_zdx_ui_label <key> <value>` through the suite
 
 ## Headings
 
-- A command's top-level heading is `════ Title ════`, surrounded by one blank
+- Outside an aggregate step or [private delegation](#private-delegation), a
+  command's top-level heading is `════ Title ════`, surrounded by one blank
   line (`_zdx_ui_heading`, used through the suite `_<prefix>_header`).
-- Inside an aggregate step the step banner already names the work, so a child
-  heading is omitted. With `ZDX_VERBOSE=1` it is printed as a demoted
-  `▸ Title` sub-heading instead.
+- An actual aggregate step takes precedence over delegation depth. Its child
+  heading is omitted by default. With `ZDX_VERBOSE=1`, it is a demoted
+  `▸ Title` line, indented two spaces per step level; delegation depth is not
+  added to that indentation.
+- Outside an aggregate step, positive delegation depth renders a demoted
+  `▸ Title` line in both default and verbose modes, indented two spaces per
+  delegation level. The title is escaped with `${(V)…}` and the line ends with
+  exactly one LF, without a leading or trailing blank-line frame. The existing
+  color and stream rules still apply.
 - A command prints one heading. Context that introduces a plan, such as a
   sweep root, is a key-value line under that heading, not a second heading.
 
@@ -313,13 +320,40 @@ Use `_zdx_count_noun <count> <singular> [plural]`. Text such as `(s)` or
 ## Timing footer
 
 `_timed` prints its `<suite>:<command> completed in …` footer only when it is
-the outermost timer and no aggregate step is active. Nested timers, such as a
-command delegated to another suite or a step wrapped for telemetry, print
-nothing but still write their opt-in telemetry record. The record schema is
-defined in `development.md` and does not change. The footer uses the same
-registered-command and owning-suite normalization as telemetry, even when
-recording is disabled: an unregistered or mismatched label becomes
-`<suite>:unknown` for a recognized suite, or `unknown:unknown` otherwise.
+the outermost actual timer, no aggregate step is active, and no private
+delegation context is active. Nested timers and timers inside delegation or
+an aggregate step still write their opt-in telemetry records. `ZDX_VERBOSE=1`
+does not reveal their suppressed footers. A real outer timer can print after
+its delegated call returns and that delegation context has unwound. An untimed
+parent acquires no timer or footer from delegation alone.
+
+The record schema is defined in `development.md` and does not change: each
+actual timer can write one record, while bare delegation creates none. The
+footer uses the same registered-command and owning-suite normalization as
+telemetry, even when recording is disabled: an unregistered or mismatched label
+becomes `<suite>:unknown` for a recognized suite, or `unknown:unknown` otherwise.
+
+## Private delegation
+
+`_zdx_delegate <command> [argument...]` is a private core helper available once
+the core is loaded, including while suites remain lazy. It invokes exact quoted
+argv in the current shell with inherited file descriptors and forwards the
+command's streams and status unchanged. Missing or empty command words return
+`2` silently before execution; other words retain normal shell lookup behavior.
+
+Only a dynamically local delegation depth is added and restored on return.
+The helper MUST NOT introduce an emulated or option-restoring scope over the
+callback. The callback's intentional option, working-directory, global,
+`REPLY`/`reply`, and regex-result changes remain visible in the current shell.
+No timer, aggregate step or partial-result receiver is created. Reports and
+partial markers still belong to an actual reachable step or timer.
+
+Owners adopt this capability per workflow. Keep timing at the actual action
+owner and use one existing timed route or one explicit timer for an untimed
+callback; do not wrap an already timed route in another timer. The helper is
+outside the closed 19-service [plugin API v1](plugins.md#plugin-api-v1).
+Core support does not establish adoption by Workspace, Developer, or every
+existing owner.
 
 ## Verbosity
 
@@ -402,7 +436,8 @@ Clarifications that keep these rules mechanical:
 | `_zdx_outcome_class <token>` | `REPLY` class; status `2` for an unknown token |
 | `_zdx_ui_outcome <token>` | `REPLY` glyph and word |
 | `_zdx_ui_command_display <argv...>` | `REPLY` display-only quoted command with `~` |
-| `_zdx_ui_heading <title>` | heading, omitted or demoted inside a step |
+| `_zdx_ui_heading <title>` | step policy first; otherwise demoted inside delegation or framed at top level |
+| `_zdx_delegate <command> [argument...]` | private current-shell delegation; exact argv, streams and status; no timer or result slot |
 | `_zdx_ui_label <key> <value>` | key-value line; status `2` for an empty key |
 | `_zdx_ui_section [--first] <title>` | report sub-heading; status `2` for an empty title |
 | `_zdx_ui_step_banner [--first] <i> <n> <label>` | step banner; `--first` directly after a heading |
@@ -414,9 +449,11 @@ Clarifications that keep these rules mechanical:
 | `_zdx_step_reported` / `_zdx_step_active` | slot predicates |
 | `_zdx_run_captured` / `_zdx_run_captured_here` | captured execution |
 
-These services live in `functions.zsh`. Suites call them through thin
+The output renderers live in `functions.zsh`. Suites call them through thin
 `_<prefix>_*` wrappers that check `${+functions[...]}` at call time and fall
 back to plain output, so a suite sourced without the core still works.
+The private delegation helper is a core capability outside the plugin API's
+19-service list; this reference table does not extend that public API.
 
 ## Adoption checklist
 
