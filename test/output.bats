@@ -717,3 +717,312 @@ teardown() {
   '
   [ "$status" -eq 0 ]
 }
+
+# Acceptance for the private delegation context. The exact indentation below
+# follows the proposed F3-10 contract and must be approved with that contract.
+@test "output: delegation is available lazily before a suite is loaded" {
+  run env -u TEST_TEMP_DIR -u BATS_TEST_DIRNAME ZDX_LAZY_LOAD=1 ZDX_EAGER_LOAD=0 zsh -f -c '
+    emulate -R zsh
+    builtin cd -- "$HOME" || exit 80
+    source "$1/functions.zsh" || exit 81
+    (( ${+functions[_zdx_delegate]} )) || exit 82
+    (( ! ${+functions[_git_dispatch]} )) || exit 83
+    _zdx_delegate true > "$HOME/out" 2> "$HOME/err" || exit 84
+    [[ ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 85
+  ' _ "$TEST_SUITE_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation rejects missing command words without execution" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _zdx_delegate > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 2 ]] || exit 81
+    _zdx_delegate "" touch "$HOME/ran" >> "$HOME/out" 2>> "$HOME/err"
+    [[ "$?" == 2 && ! -e "$HOME/ran" ]] || exit 82
+    [[ ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 83
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation preserves missing command lookup status" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    unfunction command_not_found_handler 2>/dev/null || :
+    _zdx_delegate zdx-missing-delegation-canary-912 > "$HOME/out" 2> "$HOME/err"
+    local delegate_rc=$?
+    (( delegate_rc == 127 )) || exit 81
+    [[ ! -s "$HOME/out" ]] || exit 82
+    [[ "$(<"$HOME/err")" == *zdx-missing-delegation-canary-912* ]] || exit 83
+    (( ! ${+_ZDX_DELEGATION_DEPTH} )) || exit 84
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation forwards literal argv and inherited streams" {
+  printf 'stdin value\n' > "$HOME/input"
+  printf 'payload\n\n' > "$HOME/expected.out"
+  printf 'callback error\n' > "$HOME/expected.err"
+  printf '%s\0' '' 'two words' $'line\nbreak' '; touch canary' '*' \
+    '$(touch canary)' '--flag=value' > "$HOME/expected.args"
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _delegate_literal_callback() {
+      local input=""
+      IFS= read -r input || return 81
+      [[ "$input" == "stdin value" ]] || return 82
+      printf "%s\0" "$@" > "$HOME/actual.args"
+      printf "payload\n\n"
+      print -u2 -r -- "callback error"
+      return 7
+    }
+    _zdx_delegate _delegate_literal_callback "" "two words" $'"'"'line\nbreak'"'"' \
+      "; touch canary" "*" "\$(touch canary)" --flag=value \
+      < "$HOME/input" > "$HOME/actual.out" 2> "$HOME/actual.err"
+    [[ "$?" == 7 && ! -e "$HOME/canary" ]] || exit 83
+  '
+  [ "$status" -eq 0 ]
+  cmp "$HOME/expected.args" "$HOME/actual.args"
+  cmp "$HOME/expected.out" "$HOME/actual.out"
+  cmp "$HOME/expected.err" "$HOME/actual.err"
+}
+
+@test "output: delegation preserves command statuses and creates no UI" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _delegate_status_callback() { return "$1"; }
+    local expected delegate_rc
+    for expected in 0 7 124 130 143; do
+      _zdx_delegate _delegate_status_callback "$expected" \
+        > "$HOME/out" 2> "$HOME/err"
+      delegate_rc=$?
+      [[ "$delegate_rc" == "$expected" ]] || exit 81
+      [[ ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 82
+      (( ! ${+_ZDX_DELEGATION_DEPTH} )) || exit 83
+    done
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation scopes nested depth and restores seeded context" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _delegate_depth_leaf() {
+      print -r -- "$_ZDX_DELEGATION_DEPTH" >> "$HOME/depths"
+      return 7
+    }
+    _delegate_depth_parent() {
+      print -r -- "$_ZDX_DELEGATION_DEPTH" >> "$HOME/depths"
+      _zdx_delegate _delegate_depth_leaf
+    }
+    unset _ZDX_DELEGATION_DEPTH
+    _zdx_delegate _delegate_depth_parent
+    [[ "$?" == 7 ]] || exit 81
+    (( ! ${+_ZDX_DELEGATION_DEPTH} )) || exit 82
+    [[ "$(<"$HOME/depths")" == $'"'"'1\n2'"'"' ]] || exit 83
+    : > "$HOME/depths"
+    typeset -gi _ZDX_DELEGATION_DEPTH=5
+    _zdx_delegate _delegate_depth_parent
+    [[ "$?" == 7 && "$_ZDX_DELEGATION_DEPTH" == 5 ]] || exit 84
+    [[ "$(<"$HOME/depths")" == $'"'"'6\n7'"'"' ]] || exit 85
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation retains callback session and result changes" {
+  mkdir "$HOME/changed"
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    setopt ksh_arrays sh_word_split force_float pipe_fail
+    unsetopt extended_glob
+    _delegate_session_callback() {
+      [[ -o ksh_arrays && -o sh_word_split && -o force_float && -o pipe_fail ]] \
+        || return 81
+      unsetopt ksh_arrays sh_word_split force_float pipe_fail
+      setopt extended_glob
+      typeset -g DELEGATE_CANARY=changed REPLY=callback-result
+      typeset -ga reply=("two words" "")
+      builtin cd -- "$HOME/changed" || return 82
+      return 7
+    }
+    _zdx_delegate _delegate_session_callback
+    local delegate_rc=$?
+    [[ "$delegate_rc" == 7 && "$DELEGATE_CANARY" == changed ]] || exit 83
+    [[ ! -o ksh_arrays && ! -o sh_word_split && ! -o force_float && ! -o pipe_fail \
+      && -o extended_glob ]] || exit 84
+    [[ "$PWD" == "$HOME/changed" && "$REPLY" == callback-result ]] || exit 85
+    [[ ${#reply} == 2 && "${reply[1]}" == "two words" && -z "${reply[2]}" ]] || exit 86
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation preserves intentional regex results from seeded and unset state" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _delegate_match_callback() {
+      [[ cbtext =~ "(cb)(text)" ]] || return 81
+      return 7
+    }
+    local initial delegate_rc
+    for initial in seeded unset; do
+      if [[ "$initial" == seeded ]]; then
+        MATCH=before MBEGIN=9 MEND=10
+        match=(before) mbegin=(9) mend=(10)
+      else
+        unset MATCH MBEGIN MEND match mbegin mend
+      fi
+      _zdx_delegate _delegate_match_callback
+      delegate_rc=$?
+      [[ "$delegate_rc" == 7 ]] || exit 82
+      [[ "$MATCH" == cbtext && "$MBEGIN" == 1 && "$MEND" == 6 ]] || exit 83
+      [[ "${(j:,:)match}" == cb,text && "${(j:,:)mbegin}" == 1,3 \
+        && "${(j:,:)mend}" == 2,6 ]] || exit 84
+    done
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation creates no aggregate or partial-result receiver" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    unset _ZDX_TIMED_DEPTH _ZDX_TIMED_OUTCOME _ZDX_STEP_DEPTH \
+      _ZDX_STEP_SHELL _ZDX_STEP_OUTCOME _ZDX_STEP_DETAIL
+    _delegate_no_slot_callback() {
+      (( ! ${+_ZDX_TIMED_DEPTH} && ! ${+_ZDX_TIMED_OUTCOME} \
+        && ! ${+_ZDX_STEP_DEPTH} && ! ${+_ZDX_STEP_SHELL} \
+        && ! ${+_ZDX_STEP_OUTCOME} && ! ${+_ZDX_STEP_DETAIL} )) || return 81
+      _zdx_step_active && return 82
+      _zdx_step_report current "unowned report"
+      [[ "$?" == 1 ]] || return 83
+      _zdx_timed_mark_partial
+      [[ "$?" == 1 ]] || return 84
+      REPLY=leaf-result
+      reply=(leaf detail)
+      return 0
+    }
+    _zdx_delegate _delegate_no_slot_callback > "$HOME/out" 2> "$HOME/err" || exit 85
+    [[ "$REPLY" == leaf-result && "${(j:,:)reply}" == leaf,detail ]] || exit 86
+    [[ ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 87
+    (( ! ${+_ZDX_TIMED_OUTCOME} && ! ${+_ZDX_STEP_OUTCOME} )) || exit 88
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegation keeps actual aggregate reports and failure reconciliation" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    _delegate_report_callback() {
+      (( _ZDX_STEP_DEPTH == 1 && _ZDX_DELEGATION_DEPTH == 2 )) || return 81
+      _zdx_step_report current "already current" || return 82
+      return "$1"
+    }
+    local expected outcome
+    for expected outcome in 0 current 7 failed 124 timed-out 130 interrupted 143 interrupted; do
+      _zdx_step_exec _zdx_delegate _zdx_delegate _delegate_report_callback "$expected"
+      [[ "$?" == "$expected" && "${reply[1]}" == "$outcome" ]] || exit 83
+      if (( expected == 0 )); then
+        [[ "${reply[2]}" == "already current" ]] || exit 84
+      else
+        [[ "${reply[2]}" == "status $expected" ]] || exit 85
+      fi
+      (( ! ${+_ZDX_DELEGATION_DEPTH} && ! ${+_ZDX_STEP_OUTCOME} )) || exit 86
+    done
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "output: delegated headings are subordinate at each delegation depth" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1
+    _zdx_ui_heading Outer > "$HOME/out" 2> "$HOME/top" || exit 81
+    _zdx_delegate _zdx_ui_heading Child >> "$HOME/out" 2> "$HOME/child" || exit 82
+    ZDX_VERBOSE=1 _zdx_delegate _zdx_ui_heading Child \
+      >> "$HOME/out" 2> "$HOME/verbose" || exit 83
+    _zdx_delegate _zdx_delegate _zdx_ui_heading Grandchild \
+      >> "$HOME/out" 2> "$HOME/nested" || exit 84
+    [[ ! -s "$HOME/out" ]] || exit 85
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/top")" = $'\n════ Outer ════' ]
+  [ "$(cat "$HOME/child")" = "  ▸ Child" ]
+  cmp "$HOME/child" "$HOME/verbose"
+  printf '    ▸ Grandchild\n' > "$HOME/expected.nested"
+  cmp "$HOME/expected.nested" "$HOME/nested"
+}
+
+@test "output: real aggregate heading policy takes precedence over delegation depth" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1
+    _zdx_step_exec _zdx_delegate _zdx_delegate _zdx_ui_heading Hidden \
+      > "$HOME/out" 2> "$HOME/default" || exit 81
+    ZDX_VERBOSE=1 _zdx_step_exec _zdx_delegate _zdx_delegate _zdx_ui_heading Shown \
+      >> "$HOME/out" 2> "$HOME/verbose" || exit 82
+    ZDX_VERBOSE=1 _zdx_step_exec _zdx_step_exec _zdx_delegate _zdx_ui_heading Nested \
+      >> "$HOME/out" 2> "$HOME/nested" || exit 83
+    [[ ! -s "$HOME/out" && ! -s "$HOME/default" ]] || exit 84
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/verbose")" = "  ▸ Shown" ]
+  [ "$(cat "$HOME/nested")" = "    ▸ Nested" ]
+}
+
+@test "output: delegated heading widths tolerate FORCE_FLOAT and restore context" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1
+    setopt force_float
+    typeset -gi _ZDX_DELEGATION_DEPTH=3
+    _zdx_delegate _zdx_ui_heading Child > "$HOME/out" 2> "$HOME/child" || exit 81
+    [[ -o force_float ]] || exit 82
+    (( _ZDX_DELEGATION_DEPTH == 3 )) || exit 83
+    unset _ZDX_DELEGATION_DEPTH
+    _zdx_ui_heading Standalone >> "$HOME/out" 2> "$HOME/top" || exit 84
+    [[ ! -s "$HOME/out" ]] || exit 85
+  '
+  [ "$status" -eq 0 ]
+  printf '        ▸ Child\n' > "$HOME/expected.depth4"
+  cmp "$HOME/expected.depth4" "$HOME/child"
+  [ "$(cat "$HOME/top")" = $'\n════ Standalone ════' ]
+}
+
+@test "output: delegated headings escape titles and obey existing color policy" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 TERM=xterm-256color
+    _zdx_delegate _zdx_ui_heading $'"'"'a\eb'"'"' > "$HOME/out" 2> "$HOME/plain" || exit 81
+    unset NO_COLOR
+    TERM=dumb _zdx_delegate _zdx_ui_heading Child >> "$HOME/out" 2> "$HOME/dumb" || exit 82
+    TERM=xterm-256color _zdx_delegate _zdx_ui_heading Child \
+      >> "$HOME/out" 2> "$HOME/nonterminal" || exit 83
+    # Exercise the renderer branch only; this is not native PTY acceptance.
+    _zdx_ui_color_enabled() { return 0; }
+    _zdx_delegate _zdx_ui_heading Child >> "$HOME/out" 2> "$HOME/color" || exit 84
+    [[ ! -s "$HOME/out" ]] || exit 85
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/plain")" = "  ▸ a^[b" ]
+  [ "$(cat "$HOME/dumb")" = "  ▸ Child" ]
+  cmp "$HOME/dumb" "$HOME/nonterminal"
+  [ "$(cat "$HOME/color")" = $'  \e[0;35m▸ Child\e[0m' ]
+}
+
+@test "output: delegation preserves an actual timer partial-result receiver" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1
+    _delegate_partial_callback() {
+      (( _ZDX_TIMED_DEPTH == 1 && _ZDX_DELEGATION_DEPTH == 1 )) || return 81
+      _zdx_timed_mark_partial || return 82
+      return 7
+    }
+    _timed "sys:sys-info" _zdx_delegate _delegate_partial_callback \
+      > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 7 && ! -s "$HOME/out" ]] || exit 83
+    (( ! ${+_ZDX_DELEGATION_DEPTH} && ! ${+_ZDX_TIMED_OUTCOME} )) || exit 84
+  '
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$HOME/err")" == "  sys:sys-info completed with partial failures in "*" (status 7)" ]]
+  [ "$(wc -l < "$HOME/err")" -eq 1 ]
+}

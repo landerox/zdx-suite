@@ -388,6 +388,16 @@ _zdx_step_active() {
   (( ${_ZDX_STEP_DEPTH:-0} > 0 ))
 }
 
+# Private delegation context: exact argv and streams in the current shell.
+# Only the local depth unwinds; callback options, state and status stay intact.
+# Usage: _zdx_delegate <command> [argument...]
+_zdx_delegate() {
+  (( $# > 0 )) || return 2
+  [[ -n "${1-}" ]] || return 2
+  local -i _ZDX_DELEGATION_DEPTH=$(( ${_ZDX_DELEGATION_DEPTH:-0} + 1 ))
+  "$@"
+}
+
 # REPLY: one compact duration such as 0.4s, 24s, 1m 18s, 1h 02m, or 1d 02h.
 # Integer arithmetic keeps LC_NUMERIC from changing the decimal point. Status
 # 2 means the input is not an unsigned decimal number of seconds.
@@ -545,6 +555,18 @@ _zdx_ui_heading() {
     _zdx_ui_verbose || return 0
     local indent=""
     printf -v indent '%*s' $(( 2 * ${_ZDX_STEP_DEPTH:-0} )) ''
+    if _zdx_ui_color_enabled; then
+      printf '%s\033[0;35m▸ %s\033[0m\n' "$indent" "$title" >&2
+    else
+      printf '%s▸ %s\n' "$indent" "$title" >&2
+    fi
+    return 0
+  fi
+  # A delegated heading stays visible outside a real aggregate step, without
+  # a top-level frame. The existing step branch above always takes precedence.
+  if (( ${_ZDX_DELEGATION_DEPTH:-0} > 0 )); then
+    local indent=""
+    printf -v indent '%*s' $(( 2 * ${_ZDX_DELEGATION_DEPTH:-0} )) ''
     if _zdx_ui_color_enabled; then
       printf '%s\033[0;35m▸ %s\033[0m\n' "$indent" "$title" >&2
     else
@@ -3412,7 +3434,8 @@ _timed() {
     label="$REPLY"
   }
 
-  if (( _ZDX_TIMED_DEPTH == 1 )) && ! _zdx_step_active; then
+  if (( _ZDX_TIMED_DEPTH == 1 )) && ! _zdx_step_active \
+    && (( ${_ZDX_DELEGATION_DEPTH:-0} <= 0 )); then
     local REPLY="" duration=""
     if _zdx_format_duration "$elapsed"; then
       duration="$REPLY"

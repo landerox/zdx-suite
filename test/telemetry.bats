@@ -578,3 +578,130 @@ _telemetry_race_call() {
   [ -d "$HOME/lock.original" ]
   [ "$(sha256_file "$TELEMETRY_RACE_LOG")" = "$original_hash" ]
 }
+
+# F3-10 acceptance uses registered labels and the real logger. Delegation
+# creates neither synthetic telemetry nor a parent timer.
+@test "telemetry: an untimed parent suppresses its delegated child footer only" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_timed_child() { _zdx_ui_heading Child; print -r -- child-data; }
+    _zdx_delegate true > "$HOME/out" 2> "$HOME/err" || exit 84
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" && ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 85
+    _zdx_ui_heading Parent > "$HOME/out" 2> "$HOME/err" || exit 81
+    _zdx_delegate _timed "sys:sys-info" _delegate_timed_child \
+      >> "$HOME/out" 2>> "$HOME/err" || exit 82
+    command jq -s -e "length == 1 and .[0].suite == \"sys\" and .[0].command == \"sys-info\" and .[0].exit_code == 0" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 83
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/out")" = child-data ]
+  [ "$(cat "$HOME/err")" = $'\n════ Parent ════\n\n  ▸ Child' ]
+}
+
+@test "telemetry: a timed parent owns one footer and both real timer events" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_record_child() { _zdx_ui_heading Child; return 7; }
+    _delegate_record_parent() { _zdx_delegate _timed "sys:sys-info" _delegate_record_child; }
+    _timed "dev:dev-update-all" _delegate_record_parent > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 7 && ! -s "$HOME/out" ]] || exit 81
+    command jq -s -e "length == 2 and .[0].suite == \"sys\" and .[0].command == \"sys-info\" and .[1].suite == \"dev\" and .[1].command == \"dev-update-all\" and all(.[]; .exit_code == 7)" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 82
+  '
+  [ "$status" -eq 0 ]
+  [ "$(sed -n '1p' "$HOME/err")" = "  ▸ Child" ]
+  [[ "$(sed -n '2p' "$HOME/err")" == "  dev:dev-update-all failed after "*" (status 7)" ]]
+  [ "$(wc -l < "$HOME/err")" -eq 2 ]
+}
+
+@test "telemetry: nested delegation keeps one actual child event and exact status" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_nested_leaf() { _zdx_ui_heading Leaf; return 143; }
+    _zdx_delegate _zdx_delegate _timed "sys:sys-info" _delegate_nested_leaf \
+      > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 143 && ! -s "$HOME/out" ]] || exit 81
+    (( ! ${+_ZDX_DELEGATION_DEPTH} )) || exit 82
+    command jq -s -e "length == 1 and .[0].suite == \"sys\" and .[0].command == \"sys-info\" and .[0].exit_code == 143" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 83
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/err")" = "    ▸ Leaf" ]
+}
+
+@test "telemetry: aggregate delegation preserves the actual result slot and child event" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_aggregate_leaf() {
+      _zdx_ui_heading Hidden || return 81
+      _zdx_step_report current "already current" || return 82
+      return 0
+    }
+    _zdx_step_exec _zdx_delegate _zdx_delegate _timed "sys:sys-info" _delegate_aggregate_leaf \
+      > "$HOME/out" 2> "$HOME/err" || exit 83
+    [[ "${reply[1]}" == current && "${reply[2]}" == "already current" ]] || exit 84
+    [[ ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 85
+    command jq -s -e "length == 1 and .[0].suite == \"sys\" and .[0].command == \"sys-info\" and .[0].exit_code == 0" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 86
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "telemetry: verbosity does not reveal delegated footers or add events" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_verbose_leaf() { _zdx_ui_heading Child; }
+    _zdx_delegate _timed "sys:sys-info" _delegate_verbose_leaf > "$HOME/out" 2> "$HOME/plain" || exit 81
+    ZDX_VERBOSE=1 _zdx_delegate _timed "sys:sys-info" _delegate_verbose_leaf \
+      >> "$HOME/out" 2> "$HOME/verbose" || exit 82
+    [[ ! -s "$HOME/out" ]] || exit 83
+    command jq -s -e "length == 2 and all(.[]; .suite == \"sys\" and .command == \"sys-info\" and .exit_code == 0)" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 84
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/plain")" = "  ▸ Child" ]
+  cmp "$HOME/plain" "$HOME/verbose"
+}
+
+@test "telemetry: disabled recording stays disabled across delegated timers" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1
+    unset ZDX_TELEMETRY
+    _zdx_delegate _timed "sys:sys-info" true > "$HOME/out" 2> "$HOME/err" || exit 81
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" && ! -s "$HOME/out" && ! -s "$HOME/err" ]] || exit 82
+    _timed "dev:dev-update-all" _zdx_delegate _timed "sys:sys-info" true \
+      > "$HOME/out" 2> "$HOME/parent" || exit 83
+    [[ ! -e "$HOME/.config/zdx/telemetry.json" && ! -s "$HOME/out" ]] || exit 84
+  '
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$HOME/parent")" == "  dev:dev-update-all completed in "* ]]
+  [ "$(wc -l < "$HOME/parent")" -eq 1 ]
+}
+
+@test "telemetry: delegation preserves the innermost real timer partial marker" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    export NO_COLOR=1 ZDX_TELEMETRY=1
+    _delegate_inner_partial() {
+      (( _ZDX_TIMED_DEPTH == 2 && _ZDX_DELEGATION_DEPTH == 1 )) || return 81
+      _zdx_timed_mark_partial || return 82
+      return 7
+    }
+    _delegate_outer_unmarked() {
+      _zdx_delegate _timed "sys:sys-health" _delegate_inner_partial
+    }
+    _timed "sys:update-system" _delegate_outer_unmarked > "$HOME/out" 2> "$HOME/err"
+    [[ "$?" == 7 && ! -s "$HOME/out" ]] || exit 83
+    command jq -s -e "length == 2 and .[0].suite == \"sys\" and .[0].command == \"sys-health\" and .[1].suite == \"sys\" and .[1].command == \"update-system\" and all(.[]; .exit_code == 7)" \
+      "$HOME/.config/zdx/telemetry.json" > /dev/null || exit 84
+  '
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$HOME/err")" == "  sys:update-system failed after "*" (status 7)" ]]
+  [ "$(wc -l < "$HOME/err")" -eq 1 ]
+}

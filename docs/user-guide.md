@@ -106,10 +106,14 @@ one verdict. Commands that change an exact set of files, such as
 `vpn-profile-remove`, show a numbered plan of those files, one line per file,
 and a counted verdict; `--dry-run` stops after the plan.
 
-The final `<suite>:<command> completed in …` line appears once, for the
-command you started. Commands it delegates to, and the steps inside an
-aggregate, do not print their own timing lines; opt-in telemetry still records
-each of them. Durations read `0.4s`, `24s`, `1m 18s`, `1h 02m`, or `1d 02h`.
+Timing lines belong to actual timers. The outermost timer prints its final
+`<suite>:<command> completed in …` line when no aggregate step or explicit
+delegation context is active. Aggregate steps show durations in their result
+lines. In a workflow that adopts delegated output, child headings become
+subordinate and child timing lines stay hidden, including with `ZDX_VERBOSE=1`.
+Delegation alone adds no parent timing line or telemetry event; each actual
+timer can still write its opt-in record. Suites adopt this core capability per
+workflow. Durations read `0.4s`, `24s`, `1m 18s`, `1h 02m`, or `1d 02h`.
 See [`output-spec.md`](output-spec.md) for the full contract.
 
 ### Master catalog

@@ -135,3 +135,16 @@ MOCK
   [[ "$output" == *"ignoring the unsafe or invalid completion of plugin 'mytool'"* ]]
   [[ "$output" != *"push=_mytool-menu"* ]]
 }
+
+@test "plugin api: the delegation context stays outside the closed v1 service list" {
+  run run_zsh '
+    builtin cd -- "$HOME" || exit 80
+    (( ${+functions[_zdx_delegate]} )) || exit 81
+    [[ "$ZDX_PLUGIN_API" == 1 ]] || exit 82
+    local service
+    for service in "${_ZDX_PLUGIN_API_SERVICES[@]}"; do
+      [[ "$service" != _zdx_delegate ]] || exit 83
+    done
+  '
+  [ "$status" -eq 0 ]
+}

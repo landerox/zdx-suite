@@ -220,10 +220,11 @@ that service's isolated options. Those hooks do not promise to preserve
 arbitrary caller option changes.
 
 Core execution coordinators that must not acquire a wholesale emulated
-scope include `_timed`, `_zdx_run_with_timeout`, `_zdx_run_captured`,
-`_zdx_run_captured_here`, `_zdx_timeout_watchdog`, `_zdx_lazy_dispatch`, and
-plugin activation. `_log_telemetry` also remains a non-emulated coordinator;
-its private validation and persistence helpers isolate their own options.
+scope include `_timed`, `_zdx_delegate`, `_zdx_run_with_timeout`,
+`_zdx_run_captured`, `_zdx_run_captured_here`, `_zdx_timeout_watchdog`,
+`_zdx_lazy_dispatch`, and plugin activation. `_log_telemetry` also remains a
+non-emulated coordinator; its private validation and persistence helpers isolate
+their own options.
 The current-shell rule also applies to `_zdx_step_exec` and to ancestors of
 user/plugin execution, even when those ancestors do not source code directly.
 
@@ -730,12 +731,21 @@ contains both failed and non-failed terminal results may call
 telemetry record to success, and the marker fails closed outside the dynamic
 scope of `_timed`. The marker applies to the innermost active timer.
 
-Only the outermost `_timed` prints its human footer, and only when no
-aggregate step is active: aggregate steps already report their own durations
-in their result lines. A nested timer, such as a command delegated to another
-suite or a step wrapped for telemetry, prints nothing but still writes its
-opt-in telemetry record with the unchanged schema. Displayed durations use
+Only the outermost actual `_timed` prints its human footer, and only when no
+aggregate step or private delegation context is active. Aggregate steps report
+their own durations in result lines. Nested timers and timers inside delegation
+still write their opt-in telemetry records with the unchanged schema; verbose
+output does not restore their suppressed footers. Displayed durations use
 `_zdx_format_duration`.
+
+The private [`_zdx_delegate`](output-spec.md#private-delegation) helper invokes
+literal argv in the current shell with inherited descriptors and status. Only
+its local depth unwinds; callback options and session results remain visible.
+Delegation creates no timer, aggregate/result slot or telemetry event. A real
+outer timer can print after the delegated call returns; an untimed parent gains
+no footer. Owners adopt the heading/footer context per workflow, preserving the
+actual action's timing authority. This core capability does not establish
+Workspace or Developer adoption or add a service to the closed plugin API v1.
 
 Performance work must not weaken validation, confirmations, or integrity
 checks.
