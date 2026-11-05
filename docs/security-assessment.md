@@ -501,6 +501,14 @@ wrong base directory causes deletion or overwrite outside the intended scope.
 
 **Current controls.**
 
+- GitHub write tests use a strict complete-argv recorder with NUL-delimited
+  evidence and a file-only disposable transport. They exercise exact head
+  publication, creation and verification partial failures, changed repository
+  identity, and pinned checkout. Disposable remote tests cover exact forced
+  leases, moved refs, cancellation, nonterminal refusal, merge and rebase
+  conflicts and dirty files. These tests do not replace live GitHub or native
+  pinentry acceptance.
+
 - High-risk workflows commonly request confirmation.
 - `zdx-plugins` removal accepts only a validated identifier, so no name can
   leave the canonical plugin root, and refuses a linked or foreign plugin
@@ -2793,4 +2801,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-10-29.
+Last reviewed: 2026-11-05.

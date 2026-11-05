@@ -347,6 +347,15 @@ fixtures and mocks; the platform notes in [`git-menu.md`](git-menu.md) record
 what that leaves unverified. See [`git-menu.md`](git-menu.md) for the frozen
 interface and manual-smoke-test boundary.
 
+The GitHub recorder compares complete argument arrays and keeps NUL-delimited
+arguments. Tests publish the reviewed head before creating a PR, retain it on
+creation failure, refuse a changed repository identity, check mismatched
+created PRs, and check out a distinct pinned head without `gh pr checkout`.
+Force-push cases verify exact leases, a moved or absent remote ref, raw-force
+rejection, dry runs, cancellation, and nonterminal refusal. Merge and rebase
+cases apply frozen OIDs, exercise conflicts and dirty trees, and propagate an
+already-set `GPG_TTY`; they do not establish native pinentry initialization.
+
 ### Developer coverage
 
 | File | Covered boundary |
