@@ -63,6 +63,302 @@ export_real_git() {
   REAL_GIT=$(command -v git)
 }
 
+# Observe the external mutation while real Git operates only on the disposable
+# repositories. One argument per line is unambiguous for these fixed fixtures.
+install_sync_recorder() {
+  export_real_git
+  cat > "$TEST_MOCK_BIN/git" <<'MOCK'
+#!/usr/bin/env bash
+original_args=("$@")
+# Git before 2.38 cannot compute merge-tree results; the product disables
+# directory renames on its final merge or rebase on that capability branch.
+if [[ "${1:-}" == -c && "${2:-}" == merge.directoryRenames=false ]]; then
+  shift 2
+fi
+case "${1:-}" in
+  push) printf '%s\n' "$@" > "$HOME/sync-push.args" ;;
+  merge|rebase)
+    printf '%s\n' "$@" > "$HOME/sync-apply.args"
+    printf '%s\n' "${GPG_TTY:-}" > "$HOME/sync-gpg-tty"
+    ;;
+esac
+exec "$REAL_GIT" "${original_args[@]}"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/git"
+}
+
+init_rewritten_remote_worktree() {
+  init_seeded_remote_worktree
+  printf '%s\n' "published" > "$WORK_REPO/local.txt"
+  git -C "$WORK_REPO" add -- local.txt
+  git -C "$WORK_REPO" commit -q -m "published local commit"
+  git -C "$WORK_REPO" push -q origin refs/heads/main:refs/heads/main
+  export FORCE_OLD FORCE_NEW
+  FORCE_OLD=$(git -C "$WORK_REPO" rev-parse HEAD)
+  printf '%s\n' "rewritten" > "$WORK_REPO/local.txt"
+  git -C "$WORK_REPO" commit -qam "rewritten local commit" --amend
+  FORCE_NEW=$(git -C "$WORK_REPO" rev-parse HEAD)
+  [ "$FORCE_OLD" != "$FORCE_NEW" ]
+}
+
+init_diverged_pull_worktree() {
+  init_seeded_remote_worktree
+  printf '%s\n' "remote change" > "$SEED_REPO/remote.txt"
+  git -C "$SEED_REPO" add -- remote.txt
+  git -C "$SEED_REPO" commit -q -m "remote change"
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  printf '%s\n' "local change" > "$WORK_REPO/local.txt"
+  git -C "$WORK_REPO" add -- local.txt
+  git -C "$WORK_REPO" commit -q -m "local change"
+  export PULL_BEFORE PULL_REMOTE
+  PULL_BEFORE=$(git -C "$WORK_REPO" rev-parse HEAD)
+  PULL_REMOTE=$(git --git-dir="$REMOTE_REPO" rev-parse refs/heads/main)
+}
+
+@test "git-push force: exact lease rewrites only the reviewed branch" {
+  init_rewritten_remote_worktree
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --ref refs/heads/main --force-with-lease --yes \
+      >"$HOME/force.stdout" 2>"$HOME/force.stderr"
+  '
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/force.stdout" ]
+  [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" rev-parse refs/heads/main)" = "$FORCE_NEW" ]
+  [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" for-each-ref --format='%(refname)')" = refs/heads/main ]
+  printf '%s\n' push --no-follow-tags --recurse-submodules=no \
+    "--force-with-lease=refs/heads/main:$FORCE_OLD" --force-if-includes \
+    -- "$REMOTE_REPO" "$FORCE_NEW:refs/heads/main" > "$HOME/expected-push.args"
+  cmp "$HOME/expected-push.args" "$HOME/sync-push.args"
+  grep -Fq "$FORCE_OLD" "$HOME/force.stderr"
+  grep -Fq "$FORCE_NEW" "$HOME/force.stderr"
+}
+
+@test "git-push force: a remote move after confirmation is refused before push" {
+  init_rewritten_remote_worktree
+  # Prepare a concurrent commit in the seed, based on the published history.
+  git -C "$SEED_REPO" fetch -q origin
+  git -C "$SEED_REPO" reset -q --hard "$FORCE_OLD"
+  printf '%s\n' concurrent > "$SEED_REPO/concurrent.txt"
+  git -C "$SEED_REPO" add -- concurrent.txt
+  git -C "$SEED_REPO" commit -q -m concurrent
+  export FORCE_CONCURRENT
+  FORCE_CONCURRENT=$(git -C "$SEED_REPO" rev-parse HEAD)
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    _git_sync_confirm_outcome() {
+      "$REAL_GIT" -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main \
+        || return 91
+      REPLY=confirmed
+    }
+    git-push --remote origin --ref refs/heads/main --force-with-lease \
+      >"$HOME/moved-force.stdout" 2>"$HOME/moved-force.stderr"
+  '
+
+  [ "$status" -eq 1 ]
+  [ ! -s "$HOME/moved-force.stdout" ]
+  [ ! -e "$HOME/sync-push.args" ]
+  [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" rev-parse refs/heads/main)" = "$FORCE_CONCURRENT" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD)" = "$FORCE_NEW" ]
+  grep -Fq 'Refused changed remote ref' "$HOME/moved-force.stderr"
+}
+
+@test "git-push force: absent remote refs and raw force are refused" {
+  init_empty_remote_worktree
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --ref refs/heads/main --force-with-lease --yes \
+      >"$HOME/absent-force.stdout" 2>"$HOME/absent-force.stderr"
+  '
+  [ "$status" -eq 1 ]
+  grep -Fq 'requires an existing remote object ID' "$HOME/absent-force.stderr"
+  [ ! -s "$HOME/absent-force.stdout" ]
+  [ ! -e "$HOME/sync-push.args" ]
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --ref refs/heads/main --force --yes \
+      >"$HOME/raw-force.stdout" 2>"$HOME/raw-force.stderr"
+  '
+  [ "$status" -eq 2 ]
+  grep -Fq 'Raw --force is unsupported' "$HOME/raw-force.stderr"
+  [ ! -s "$HOME/raw-force.stdout" ]
+  [ ! -e "$HOME/sync-push.args" ]
+  [ -z "$("$REAL_GIT" --git-dir="$REMOTE_REPO" for-each-ref --format='%(refname)')" ]
+}
+
+@test "git-push force: dry run, decline, and missing terminal preserve the remote" {
+  init_rewritten_remote_worktree
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-push --remote origin --ref refs/heads/main --force-with-lease --dry-run \
+      >"$HOME/force-dry.stdout" 2>"$HOME/force-dry.stderr" || return 91
+    git-push --remote origin --ref refs/heads/main --force-with-lease \
+      >"$HOME/force-nontty.stdout" 2>"$HOME/force-nontty.stderr" </dev/null
+    [[ $? == 1 ]] || return 92
+    _git_sync_confirm_outcome() { REPLY=cancelled; }
+    git-push --remote origin --ref refs/heads/main --force-with-lease \
+      >"$HOME/force-declined.stdout" 2>"$HOME/force-declined.stderr"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/sync-push.args" ]
+  [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" rev-parse refs/heads/main)" = "$FORCE_OLD" ]
+  [ ! -s "$HOME/force-dry.stdout" ]
+  [ ! -s "$HOME/force-nontty.stdout" ]
+  [ ! -s "$HOME/force-declined.stdout" ]
+  grep -Fq 'Dry run:' "$HOME/force-dry.stderr"
+  grep -Fq 'requires a terminal' "$HOME/force-nontty.stderr"
+  grep -Fq 'Cancelled.' "$HOME/force-declined.stderr"
+}
+
+@test "git-pull merge: applies the frozen remote OID and retains both histories" {
+  init_diverged_pull_worktree
+  install_sync_recorder
+  export GPG_TTY=/dev/zdx-test-tty
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --merge --yes \
+      >"$HOME/merge.stdout" 2>"$HOME/merge.stderr"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/merge.stdout" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD^1)" = "$PULL_BEFORE" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD^2)" = "$PULL_REMOTE" ]
+  [ "$(cat "$WORK_REPO/local.txt")" = 'local change' ]
+  [ "$(cat "$WORK_REPO/remote.txt")" = 'remote change' ]
+  printf '%s\n' merge --no-edit --no-overwrite-ignore "$PULL_REMOTE" > "$HOME/expected-apply.args"
+  cmp "$HOME/expected-apply.args" "$HOME/sync-apply.args"
+  [ "$(cat "$HOME/sync-gpg-tty")" = "$GPG_TTY" ]
+  [ -z "$("$REAL_GIT" -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
+}
+
+@test "git-pull rebase: replays the local commit onto the frozen remote OID" {
+  init_diverged_pull_worktree
+  install_sync_recorder
+  export GPG_TTY=/dev/zdx-test-tty
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/rebase.stdout" 2>"$HOME/rebase.stderr"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/rebase.stdout" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD^)" = "$PULL_REMOTE" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD)" != "$PULL_BEFORE" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" log -1 --format=%s)" = 'local change' ]
+  [ "$(cat "$WORK_REPO/local.txt")" = 'local change' ]
+  [ "$(cat "$WORK_REPO/remote.txt")" = 'remote change' ]
+  printf '%s\n' rebase "$PULL_REMOTE" > "$HOME/expected-apply.args"
+  cmp "$HOME/expected-apply.args" "$HOME/sync-apply.args"
+  [ "$(cat "$HOME/sync-gpg-tty")" = "$GPG_TTY" ]
+  [ -z "$("$REAL_GIT" -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
+}
+
+@test "git-pull modes: dry runs, declines, and missing terminal never fetch or apply" {
+  init_diverged_pull_worktree
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    for mode in merge rebase; do
+      git-pull --remote origin --ref refs/heads/main "--$mode" --dry-run \
+        >"$HOME/$mode-dry.stdout" 2>"$HOME/$mode-dry.stderr" || return 91
+      git-pull --remote origin --ref refs/heads/main "--$mode" \
+        >"$HOME/$mode-nontty.stdout" 2>"$HOME/$mode-nontty.stderr" </dev/null
+      [[ $? == 1 ]] || return 92
+    done
+    _git_sync_confirm_outcome() { REPLY=cancelled; }
+    for mode in merge rebase; do
+      git-pull --remote origin --ref refs/heads/main "--$mode" \
+        >"$HOME/$mode-declined.stdout" 2>"$HOME/$mode-declined.stderr" || return 93
+    done
+  '
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/sync-apply.args" ]
+  [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse HEAD)" = "$PULL_BEFORE" ]
+  run "$REAL_GIT" -C "$WORK_REPO" cat-file -e "$PULL_REMOTE^{commit}"
+  [ "$status" -ne 0 ]
+  local mode
+  for mode in merge rebase; do
+    [ ! -s "$HOME/$mode-dry.stdout" ]
+    [ ! -s "$HOME/$mode-nontty.stdout" ]
+    [ ! -s "$HOME/$mode-declined.stdout" ]
+    grep -Fq 'Dry run:' "$HOME/$mode-dry.stderr"
+    grep -Fq 'requires a terminal' "$HOME/$mode-nontty.stderr"
+    grep -Fq 'Cancelled.' "$HOME/$mode-declined.stderr"
+  done
+}
+
+@test "git-pull modes: real content conflicts return failure and remove temporary refs" {
+  init_seeded_remote_worktree
+  printf '%s\n' remote > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam remote
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  printf '%s\n' local > "$WORK_REPO/tracked.txt"
+  git -C "$WORK_REPO" commit -qam local
+  export PULL_BEFORE
+  PULL_BEFORE=$(git -C "$WORK_REPO" rev-parse HEAD)
+  install_sync_recorder
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    git-pull --remote origin --ref refs/heads/main --merge --yes \
+      >"$HOME/conflict-merge.stdout" 2>"$HOME/conflict-merge.stderr"
+    [[ $? == 1 ]] || return 91
+    [[ -n "$(command git ls-files -u)" ]] || return 92
+    command git merge --abort || return 93
+    git-pull --remote origin --ref refs/heads/main --rebase --yes \
+      >"$HOME/conflict-rebase.stdout" 2>"$HOME/conflict-rebase.stderr"
+    [[ $? == 1 ]] || return 94
+    [[ -n "$(command git ls-files -u)" ]] || return 95
+    command git rebase --abort || return 96
+    [[ "$(command git rev-parse HEAD)" == "$PULL_BEFORE" ]] || return 97
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/conflict-merge.stdout" ]
+  [ ! -s "$HOME/conflict-rebase.stdout" ]
+  grep -Fq 'Local merge operation failed (exit 1).' "$HOME/conflict-merge.stderr"
+  grep -Fq 'Local rebase operation failed (exit 1).' "$HOME/conflict-rebase.stderr"
+  [ -z "$("$REAL_GIT" -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
+}
+
+@test "git-pull modes: dirty tracked files are preserved when application fails" {
+  init_seeded_remote_worktree
+  printf '%s\n' remote > "$SEED_REPO/tracked.txt"
+  git -C "$SEED_REPO" commit -qam remote
+  git -C "$SEED_REPO" push -q origin refs/heads/main:refs/heads/main
+  export PULL_BEFORE
+  PULL_BEFORE=$(git -C "$WORK_REPO" rev-parse HEAD)
+  printf '%s\n' dirty > "$WORK_REPO/tracked.txt"
+
+  run run_zsh '
+    cd "$WORK_REPO" || return 90
+    for mode in merge rebase; do
+      git-pull --remote origin --ref refs/heads/main "--$mode" --yes \
+        >"$HOME/dirty-$mode.stdout" 2>"$HOME/dirty-$mode.stderr"
+      (( $? != 0 )) || return 91
+      [[ "$(command git rev-parse HEAD)" == "$PULL_BEFORE" ]] || return 92
+      [[ "$(<$WORK_REPO/tracked.txt)" == dirty ]] || return 93
+    done
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/dirty-merge.stdout" ]
+  [ ! -s "$HOME/dirty-rebase.stdout" ]
+  [ "$(cat "$WORK_REPO/tracked.txt")" = dirty ]
+  [ -z "$(git -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
+}
+
 # Installs a git wrapper that turns the ref named by the first `update-ref -d`
 # into a symbolic ref to TARGET just before Git deletes it, as a concurrent
 # writer could after the plan was reviewed and revalidated. Bats-side checks

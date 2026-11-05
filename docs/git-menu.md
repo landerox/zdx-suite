@@ -1151,6 +1151,14 @@ Remote deletion, force push, and pull-request creation use isolated mocks or
 disposable local remotes unless a separately documented manual smoke test
 targets a disposable remote.
 
+The GitHub recorder compares complete argv and retains argument boundaries.
+Behavior tests publish the exact reviewed head, report creation and
+verification partial failures, refuse changed repository identity, and check
+out a PR head distinct from the current HEAD. Force-push tests check the exact
+lease and unchanged remote after dry run, cancellation, nonterminal refusal,
+or a moved lease. Merge and rebase tests apply frozen OIDs, preserve dirty
+files, report conflicts, and propagate a preexisting `GPG_TTY` value.
+
 The contract suite must derive and compare surfaces rather than copy a second
 executable allowlist. Interface tests capture stdout and stderr separately and
 exercise production code in Zsh. Any new high-risk regression test covers

@@ -56,6 +56,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Git safety coverage now exercises actual pull-request publication and
+  partial failure through a strict GitHub recorder, exact forced-push leases,
+  and merge and rebase application against disposable local remotes.
+
 - Distinguish bare master invocations from explicit empty arguments and reject
   direct colon routes with usage status `2` before execution. Diagnose empty
   doctor operands while preserving no-argument scans and literal owner arguments.
