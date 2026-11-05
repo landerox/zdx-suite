@@ -314,7 +314,7 @@ _git_clean_collect_local_candidates() {
   local -a checked_refs=("$@")
 
   local output
-  output=$(command git for-each-ref \
+  output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects for-each-ref \
     --format='%(refname)%09%(objectname)%09%(symref)' \
     --merged "$default_oid" refs/heads 2>/dev/null) || {
     _git_error "Unable to enumerate merged local branches."
@@ -355,7 +355,7 @@ _git_clean_collect_remote_candidates() {
 
   local prefix="refs/remotes/${remote}/"
   local output
-  output=$(command git for-each-ref \
+  output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects for-each-ref \
     --format='%(refname)%09%(objectname)%09%(symref)' \
     --merged "$default_oid" "$prefix" 2>/dev/null) || {
     _git_error "Unable to enumerate merged remote branches."
@@ -774,7 +774,7 @@ clean-branches() {
     actual_oid=$(command git rev-parse --verify "${ref}^{commit}" \
       2>/dev/null) || actual_oid=""
     if [[ "$actual_oid" != "$oid" ]] \
-      || ! command git merge-base --is-ancestor "$oid" "$default_oid" \
+      || ! GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
         2>/dev/null; then
       _git_outcome_line "$(_git_display_escape "$ref")" blocked \
         "changed or no longer merged"
@@ -1015,7 +1015,7 @@ clean-remote-merged() {
     _git_clean_remote_find_oid "$branch_ref" "${current_remote_snapshot[@]}"
     actual_oid="$REPLY"
     if [[ "$actual_oid" != "$oid" ]] \
-      || ! command git merge-base --is-ancestor "$oid" "$default_oid" \
+      || ! GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
         2>/dev/null; then
       _git_outcome_line "$remote/$(_git_display_escape "${branch_ref#refs/heads/}")" \
         blocked "changed or no longer merged"

@@ -900,7 +900,7 @@ _git_push_require_fast_forward() {
     return 1
   }
 
-  command git --no-replace-objects \
+  GIT_GRAFT_FILE=/dev/null command git --no-replace-objects \
     merge-base --is-ancestor "$remote_oid" "$local_oid" 2>/dev/null
   local -i ancestor_rc=$?
   case "$ancestor_rc" in
@@ -918,6 +918,65 @@ _git_push_require_fast_forward() {
       return 1
       ;;
   esac
+}
+
+# An exact lease makes Git's --force-if-includes a no-op. Prove its intended
+# integration condition against this local branch, never its tracking ref:
+# the leased tip must be reachable from the frozen tip or a branch reflog tip.
+_git_push_require_integrated_lease() {
+  emulate -L zsh
+
+  local local_ref="$1" local_oid="$2" remote_oid="$3"
+  local reflog_output="" reflog_oid="" unreachable_count=""
+  local -i proof_rc=0
+  GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor \
+    "$remote_oid" "$local_oid" 2>/dev/null || proof_rc=$?
+  (( proof_rc == 0 )) && return 0
+  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  if (( proof_rc != 1 )); then
+    _git_error "Unable to prove that the force lease was integrated locally."
+    return 1
+  fi
+
+  proof_rc=0
+  reflog_output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects rev-list \
+    --walk-reflogs "$local_ref" -- 2>/dev/null) || proof_rc=$?
+  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  (( proof_rc == 0 )) || {
+    _git_error "Unable to inspect the local branch reflog for the force lease."
+    return 1
+  }
+  local -a revisions=("$remote_oid")
+  for reflog_oid in "${(@uf)reflog_output}"; do
+    [[ -n "$reflog_oid" ]] || continue
+    _git_validate_oid "$reflog_oid" || {
+      _git_error "Git returned an invalid branch reflog object ID."
+      return 1
+    }
+    revisions+=("^$reflog_oid")
+  done
+  # Subtract the union of branch-reflog histories from the leased tip's
+  # history in one traversal. Zero commits remain exactly when a reflog tip
+  # reaches the lease; the reflog can contain thousands of distinct entries.
+  proof_rc=0
+  if (( ${#revisions} > 1 )); then
+    unreachable_count=$(print -rl -- "${revisions[@]}" |
+      GIT_GRAFT_FILE=/dev/null command git --no-replace-objects rev-list \
+        --count --stdin 2>/dev/null) || proof_rc=$?
+  else
+    # Without an observed reflog tip no history can establish integration.
+    unreachable_count=1
+  fi
+  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  if (( proof_rc != 0 )) || [[ -z "$unreachable_count" \
+    || "$unreachable_count" == *[^0-9]* ]]; then
+    _git_error "Unable to verify the force-lease branch reflog history."
+    return 1
+  fi
+  [[ "$unreachable_count" == 0 ]] && return 0
+  _git_error \
+    "The remote tip ${remote_oid[1,12]} was never integrated into $(_git_display_escape "$local_ref"); fetch and integrate it before rewriting."
+  return 1
 }
 
 _git_push_build_plan() {
@@ -974,6 +1033,8 @@ _git_push_build_plan() {
       _git_error "The force-push destination is not a direct commit."
       return 1
     }
+    _git_push_require_integrated_lease "$local_ref" "$local_oid" "$remote_oid" \
+      || return $?
   else
     _git_push_require_fast_forward \
       "$remote_ref" "$remote_oid" "$local_oid" || return 1
@@ -1137,6 +1198,18 @@ _git_push_apply_plan() {
           failed=$(( failed + 1 ))
           continue
         fi
+        local -i lease_rc=0
+        _git_push_require_integrated_lease \
+          "$local_ref" "$local_oid" "$expected_remote_oid" || lease_rc=$?
+        if (( lease_rc == 130 || lease_rc == 143 )); then
+          _git_count_noun "$pushed" "ref update"
+          _git_warn "Push interrupted: $REPLY completed before the interruption."
+          return $lease_rc
+        fi
+        if (( lease_rc != 0 )); then
+          failed=$(( failed + 1 ))
+          continue
+        fi
         ;;
     esac
 
@@ -1151,7 +1224,6 @@ _git_push_apply_plan() {
     # reviewed plan never listed.
     local -a push_cmd=(command git push --no-follow-tags
       --recurse-submodules=no "$lease_arg")
-    [[ "$mode" == "force" ]] && push_cmd+=(--force-if-includes)
     push_cmd+=(-- "$push_url" "${local_oid}:${remote_ref}")
 
     # Git updates the refs that the remote's fetch refspecs map this ref to
@@ -1164,6 +1236,17 @@ _git_push_apply_plan() {
       _git_warn "Push interrupted: $REPLY completed before the interruption."
       return "$tracking_rc"
     elif (( tracking_rc != 0 )); then
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    local -i remote_alias_rc=0
+    _git_require_direct_remote_branch "$push_url" "$remote_ref" \
+      || remote_alias_rc=$?
+    if (( remote_alias_rc == 130 || remote_alias_rc == 143 )); then
+      _git_count_noun "$pushed" "ref update"
+      _git_warn "Push interrupted: $REPLY completed before the interruption."
+      return $remote_alias_rc
+    elif (( remote_alias_rc != 0 )); then
       failed=$(( failed + 1 ))
       continue
     fi
@@ -1339,6 +1422,8 @@ git-push() {
   for plan_record in "${plan[@]}"; do
     plan_remote_ref="${${plan_record#*$'\t'*$'\t'}%%$'\t'*}"
     _git_require_direct_tracking_refs "$_git_sync_remote" "$plan_remote_ref" \
+      || return $?
+    _git_require_direct_remote_branch "$_git_sync_push_url" "$plan_remote_ref" \
       || return $?
   done
 
@@ -2160,7 +2245,8 @@ git-pull() {
       success_message="Merged $remote_oid into $_git_sync_local_ref."
       ;;
     rebase)
-      apply_cmd=(command git "${dir_renames_option[@]}" rebase "$remote_oid")
+      apply_cmd=(command git -c rebase.updateRefs=false
+        "${dir_renames_option[@]}" rebase "$remote_oid")
       success_message="Rebased $_git_sync_local_ref onto $remote_oid."
       ;;
     ff-only)

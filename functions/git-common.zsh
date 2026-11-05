@@ -1767,6 +1767,31 @@ _git_remote_symref_refusal() {
     "Enable protocol v2 on the server (for an OpenSSH server, AcceptEnv GIT_PROTOCOL in sshd_config), or check the $ref_kind on the server and delete it there."
 }
 
+# Refuse branch publication through a server-side alias. Only protocol v2
+# reports aliases other than HEAD; an unobservable target is not a safe one.
+# Usage: _git_require_direct_remote_branch URL REF
+_git_require_direct_remote_branch() {
+  emulate -L zsh
+
+  local remote_url="$1" remote_ref="$2"
+  local -a reply=()
+  local REPLY=""
+  _git_remote_symbolic_refs "$remote_url" "$remote_ref" || return $?
+  if [[ "$REPLY" != v2 ]]; then
+    _git_error \
+      "The remote did not answer with protocol v2, so the branch cannot be proved non-symbolic before publication."
+    _git_info \
+      "Enable protocol v2 on the server (for an OpenSSH server, AcceptEnv GIT_PROTOCOL in sshd_config), or inspect and publish the branch on the server."
+    return 1
+  fi
+  if (( ${reply[(Ie)$remote_ref]} )); then
+    _git_error \
+      "Remote branch '$(_git_display_escape "$remote_ref")' is a symbolic ref; publication would update its target."
+    return 1
+  fi
+  return 0
+}
+
 # Sets reply to the local refs that the fetch refspecs of REMOTE map
 # REMOTE_REF to, with one '*' on each side of a pattern. After a push to the
 # remote URL, Git updates or deletes the first of them itself. Every match is

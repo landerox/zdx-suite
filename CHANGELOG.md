@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Git: ignore replacement refs and legacy grafts in publication and cleanup proofs, require local integration
+  before exact forced pushes, refuse observable server-side branch aliases,
+  and keep rebase updates within the reviewed branch.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

@@ -72,13 +72,18 @@ install_sync_recorder() {
 original_args=("$@")
 # Git before 2.38 cannot compute merge-tree results; the product disables
 # directory renames on its final merge or rebase on that capability branch.
-if [[ "${1:-}" == -c && "${2:-}" == merge.directoryRenames=false ]]; then
+record_args=()
+while [[ "${1:-}" == -c && "$#" -ge 2 ]]; do
+  if [[ "$2" != merge.directoryRenames=false ]]; then
+    record_args+=("$1" "$2")
+  fi
   shift 2
-fi
+done
+record_args+=("$@")
 case "${1:-}" in
   push) printf '%s\n' "$@" > "$HOME/sync-push.args" ;;
   merge|rebase)
-    printf '%s\n' "$@" > "$HOME/sync-apply.args"
+    printf '%s\n' "${record_args[@]}" > "$HOME/sync-apply.args"
     printf '%s\n' "${GPG_TTY:-}" > "$HOME/sync-gpg-tty"
     ;;
 esac
@@ -130,7 +135,7 @@ init_diverged_pull_worktree() {
   [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" rev-parse refs/heads/main)" = "$FORCE_NEW" ]
   [ "$("$REAL_GIT" --git-dir="$REMOTE_REPO" for-each-ref --format='%(refname)')" = refs/heads/main ]
   printf '%s\n' push --no-follow-tags --recurse-submodules=no \
-    "--force-with-lease=refs/heads/main:$FORCE_OLD" --force-if-includes \
+    "--force-with-lease=refs/heads/main:$FORCE_OLD" \
     -- "$REMOTE_REPO" "$FORCE_NEW:refs/heads/main" > "$HOME/expected-push.args"
   cmp "$HOME/expected-push.args" "$HOME/sync-push.args"
   grep -Fq "$FORCE_OLD" "$HOME/force.stderr"
@@ -259,7 +264,7 @@ init_diverged_pull_worktree() {
   [ "$("$REAL_GIT" -C "$WORK_REPO" log -1 --format=%s)" = 'local change' ]
   [ "$(cat "$WORK_REPO/local.txt")" = 'local change' ]
   [ "$(cat "$WORK_REPO/remote.txt")" = 'remote change' ]
-  printf '%s\n' rebase "$PULL_REMOTE" > "$HOME/expected-apply.args"
+  printf '%s\n' -c rebase.updateRefs=false rebase "$PULL_REMOTE" > "$HOME/expected-apply.args"
   cmp "$HOME/expected-apply.args" "$HOME/sync-apply.args"
   [ "$(cat "$HOME/sync-gpg-tty")" = "$GPG_TTY" ]
   [ -z "$("$REAL_GIT" -C "$WORK_REPO" for-each-ref --format='%(refname)' refs/zdx-suite)" ]
