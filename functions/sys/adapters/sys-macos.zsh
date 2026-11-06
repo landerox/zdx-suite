@@ -194,6 +194,9 @@ _sys_macos_diag_cpu_record() {
 
 # stdout TSV: uptime-seconds, 1-minute, 5-minute, and 15-minute load.
 _sys_macos_diag_runtime_record() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local boot_record boot_seconds now_seconds uptime_seconds load_record
   boot_record=$(
     _sys_run_bounded_probe 3 65536 sysctl -n kern.boottime 2>/dev/null
@@ -411,6 +414,7 @@ _sys_macos_softwareupdate_records() {
 # Usage: _sys_macos_softwareupdate_parse <softwareupdate-list-output>
 _sys_macos_softwareupdate_parse() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
   local list_output="${1:-}" line="" label="" detail=""
   local -a match=() mbegin=() mend=() labels=() details=()
   local -i no_updates=0 index=0

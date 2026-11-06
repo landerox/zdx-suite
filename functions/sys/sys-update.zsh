@@ -197,7 +197,7 @@ _sys_update_release_lock() {
     # failed zsystem ownership check. Never forget the sentinel while the fd
     # might still retain the lock in this long-lived interactive shell.
     local -i close_rc=0
-    exec {lock_fd}>&- 2>/dev/null || close_rc=$?
+    { exec {lock_fd}>&- } 2>/dev/null || close_rc=$?
     (( close_rc == 0 )) || return $release_rc
   fi
   _SYS_UPDATE_LOCK_HELD=0
@@ -600,6 +600,7 @@ _sys_update_run_previews() {
 }
 
 update-system() {
+  emulate -L zsh
   local REPLY
   local -i fail_fast=0 assume_yes=0 dry_run=0 include_remote_code=1
   local -i include_phased_updates=0 verbose=0

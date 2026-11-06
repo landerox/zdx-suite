@@ -978,6 +978,11 @@ through `sudo`, or a keepalive outlives its operation.
 
 **Current controls.**
 
+- System update-lock release scopes the fallback descriptor-close stderr
+  redirect. Failure cannot silently discard later session diagnostics, and
+  the owned descriptor state is cleared. `sys_session_safety.bats` exercises
+  the failed-unlock branch with separate streams; it performs no host update.
+
 - Privileged operations generally call `sudo` only when required.
 - System resource actions retain per-operation authentication without a
   keepalive. The update aggregate is the bounded exception: after
@@ -1771,6 +1776,12 @@ unintended targets.
   `git_temporary_safety.bats` covers unsafe leaves and ancestors, trusted
   aliases, kept commit identity after refused staging, and cleanup. These
   pathname checks do not eliminate a concurrent replacement after validation.
+
+- System-owned public/router logic restores caller options, and internal
+  regex matching localizes scalar and array state, including initially unset
+  values. `sys_session_safety.bats` covers direct and nested resource paths,
+  regex helpers and public telemetry without changing generic child-command
+  execution policy.
 
 - State is generally kept under the user's home.
 - Telemetry is opt-in.

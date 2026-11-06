@@ -120,6 +120,9 @@ _sys_linux_diag_memory_record() {
 
 # stdout TSV: logical-core-count, CPU model.
 _sys_linux_diag_cpu_record() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local core_count="" model_name=""
 
   if command -v getconf &>/dev/null; then
@@ -154,6 +157,9 @@ _sys_linux_diag_cpu_record() {
 
 # stdout TSV: uptime-seconds, 1-minute, 5-minute, and 15-minute load.
 _sys_linux_diag_runtime_record() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   [[ -r /proc/uptime && -r /proc/loadavg ]] || return 1
 
   local uptime_seconds ignored load_one load_five load_fifteen

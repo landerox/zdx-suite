@@ -147,6 +147,9 @@ _sys_wsl_diag_release() {
 
 # stdout: Windows version when interop is available.
 _sys_wsl_diag_windows_version() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   _sys_wsl_interop_available || return 3
 
   local version_output cmd_program REPLY
@@ -183,6 +186,9 @@ _sys_wsl_interop_deadline() {
 
 # True for a Linux network interface name that is safe to use in a /sys path.
 _sys_wsl_interface_name_valid() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   [[ "${1:-}" =~ '^[A-Za-z0-9_.:@-]{1,15}$' \
     && "${1:-}" != . && "${1:-}" != .. ]]
 }
@@ -242,6 +248,7 @@ _sys_wsl_read_config_text() {
 # holds a control character is malformed, so a record never spans fields.
 _sys_wsl_diag_ini_records() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
   setopt EXTENDED_GLOB
   local text="${1-}"
   local -a lines=("${(@f)text}") match=() mbegin=() mend=()
@@ -298,6 +305,8 @@ _sys_wsl_diag_ini_records() {
 # /proc/net/route. Status 1 when there is none.
 _sys_wsl_diag_default_route_interface() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local REPLY
   _sys_wsl_config_root
   local route_file="$REPLY/proc/net/route"
@@ -327,6 +336,8 @@ _sys_wsl_diag_default_route_interface() {
 # absent or unreadable; 2 for an invalid name.
 _sys_wsl_diag_interface_mtu() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local iface="${1:-}" mtu="" REPLY
   _sys_wsl_interface_name_valid "$iface" || return 2
   _sys_wsl_config_root
@@ -399,6 +410,8 @@ _sys_wsl_diag_resolv_conf_state() {
 # stdout: the systemd service units enabled for multi-user.target, at most 64.
 _sys_wsl_diag_enabled_service_units() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local REPLY unit unit_name
   _sys_wsl_config_root
   local wants_dir="$REPLY/etc/systemd/system/multi-user.target.wants"
@@ -417,6 +430,8 @@ _sys_wsl_diag_enabled_service_units() {
 # carriage returns and surrounding whitespace.
 _sys_wsl_windows_path_valid() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   setopt EXTENDED_GLOB
   local windows_path="${1-}"
   REPLY=""

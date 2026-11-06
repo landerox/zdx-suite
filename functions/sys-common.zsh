@@ -863,6 +863,9 @@ _sys_jq() {
 
 # REPLY: the validated SYS_COMMAND_CAPTURE_MAX_BYTES limit.
 _sys_capture_max_bytes() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local max_capture_bytes="${SYS_COMMAND_CAPTURE_MAX_BYTES:-262144}"
   if [[ ! "$max_capture_bytes" =~ '^[0-9]{4,8}$' ]] \
     || (( 10#$max_capture_bytes < 4096 \
@@ -1494,6 +1497,7 @@ _sys_update_start_sudo_keepalive() {
 # exit is confirmed.
 _sys_update_stop_sudo_keepalive() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
   local keepalive_handle="${1:-}"
   local -a match=() mbegin=() mend=()
   [[ "$keepalive_handle" \
@@ -2039,6 +2043,7 @@ _sys_dispatch_prepare() {
 }
 
 _sys_dispatch() {
+  emulate -L zsh
   local -i _SYS_DISPATCH_CAPABILITIES_FRESH=0
   local -i _SYS_DISPATCH_CAPABILITIES_PENDING=1
   local command_name="${1:-}"

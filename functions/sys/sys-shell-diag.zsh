@@ -23,6 +23,9 @@ _sys_startup_usage() {
 # REPLY: monotonic uptime where Linux exposes it, otherwise a portable
 # high-resolution wall-clock value. Callers must reject a regressing fallback.
 _sys_diag_clock_seconds() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   REPLY=""
 
   if [[ -r /proc/uptime ]]; then
@@ -74,6 +77,9 @@ _sys_diag_profile_startup() {
 }
 
 _sys_diag_render_startup_hints() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local zshrc_file="$HOME/.zshrc"
   [[ -r "$zshrc_file" ]] || {
     _sys_dim "No readable ~/.zshrc found for slowdown hints."
@@ -122,6 +128,9 @@ _sys_diag_render_startup_hints() {
 }
 
 sys-startup() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   case "${1:-}" in
     -h|--help)
       (( $# == 1 )) || {

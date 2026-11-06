@@ -278,6 +278,11 @@ Apple Silicon runner. They do not replace acceptance of host-only behavior.
 
 ### System coverage
 
+`sys_session_safety.bats` checks option isolation for the frozen public
+inventory and menu/dispatcher, direct and nested resource records under
+hostile array/splitting options, seeded and unset regex state, public
+telemetry matching, and separate stderr/stdout after failed lock release.
+
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, the absence of package-lock polling and process-name lock helpers, Homebrew analytics and environment-hint regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, bounded probes that merge stderr within the same bound, the active-tool resolver's usable, absent, world-writable, WSL Windows, and macOS placeholder results, closed-stdin bounded/redacted command capture announced as `$ <command>` that keeps the caller's umask, the core duration format with its standalone fallback, color policy, and advisory menu dependency annotations |

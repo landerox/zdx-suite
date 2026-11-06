@@ -70,6 +70,9 @@ _sys_services_backend() {
 }
 
 _sys_services_validate_id() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local service_backend="${1:-}"
   local service_id="${2:-}"
   [[ -n "$service_id" && ${#service_id} -le 255 && "$service_id" != -* \
@@ -116,6 +119,9 @@ _sys_services_systemd_records() {
 
 # stdout TSV: service, launchd, label, active state, PID/exit detail, label.
 _sys_services_launchd_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local service_output
   service_output=$(
     _sys_run_with_timeout 5 launchctl list 2>/dev/null
@@ -502,6 +508,7 @@ _sys_services_interactive() {
 }
 
 sys-services() {
+  emulate -L zsh
   case "${1:-}" in
     "")
       _sys_services_interactive

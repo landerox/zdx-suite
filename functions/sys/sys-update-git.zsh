@@ -410,6 +410,7 @@ _sys_update_fzf_active_in_git_dir() {
 }
 
 update-fzf() {
+  emulate -L zsh
   local REPLY
   local -a reply=()
   _sys_update_parse_plan_flags update-fzf "$@" || return $?
@@ -545,6 +546,7 @@ update-fzf() {
 }
 
 update-omz() {
+  emulate -L zsh
   local REPLY
   local -a reply=()
   _sys_update_parse_plan_flags update-omz "$@" || return $?
@@ -620,6 +622,7 @@ update-omz() {
 }
 
 update-zsh-plugins() {
+  emulate -L zsh
   local REPLY
   local -a reply=()
   _sys_update_parse_plan_flags update-zsh-plugins "$@" || return $?

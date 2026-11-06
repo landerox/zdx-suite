@@ -762,6 +762,7 @@ update-system --dry-run
 sys-ports --list
 ```
 
+System commands preserve the calling shell's options and temporary match state.
 Arguments after the command are forwarded unchanged. Help and human-readable UI
 use stderr. The documented `--list` modes use stdout for TSV data, so they can
 be composed safely in scripts. Unknown `sys-menu` options and command tokens

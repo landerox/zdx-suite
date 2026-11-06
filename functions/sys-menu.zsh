@@ -329,6 +329,7 @@ _sys_interactive() {
 }
 
 sys-menu() {
+  emulate -L zsh
   case "${1:-}" in
     "")
       _sys_interactive
