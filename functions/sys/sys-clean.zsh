@@ -909,22 +909,14 @@ _sys_remove_disabled_snap_revisions() {
   [[ -z "$disabled_snaps" ]] && return 0
 
   local -a privilege_prefix=()
-  if (( EUID == 0 )); then
-    privilege_prefix=()
-  elif _sys_has_capability "privilege:sudo" \
-    && command -v sudo &>/dev/null; then
-    _sys_info "Privileged authentication: sudo -v"
-    sudo -v >&2 || {
-      local -i auth_rc=$?
-      _sys_error "sudo authentication failed; no Snap revision was removed."
-      (( auth_rc == 130 || auth_rc == 143 )) && return $auth_rc
-      return 1
-    }
-    privilege_prefix=(sudo -n)
-  else
-    _sys_error "No supported privilege path is available."
-    return 1
-  fi
+  local -a operations=()
+  local planned_name planned_revision planned_record
+  for planned_record in "${(@f)disabled_snaps}"; do
+    read -r planned_name planned_revision <<< "$planned_record"
+    operations+=("snap remove $planned_name --revision=$planned_revision")
+  done
+  _sys_privilege_authorize "${operations[@]}" || return $?
+  privilege_prefix=("${reply[@]}")
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \
     && privilege_label="${(j: :)privilege_prefix} "
@@ -998,7 +990,11 @@ _sys_clean_step_apt_cache() {
     return
   }
   local -a privilege_prefix=()
-  _sys_resolve_privilege_prefix || return 1
+  _sys_privilege_authorize "apt-get clean" || return $?
+  _sys_has_capability "package:apt" || {
+    _sys_error "The APT capability changed during authentication."
+    return 1
+  }
   privilege_prefix=("${reply[@]}")
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \
@@ -1297,6 +1293,24 @@ _sys_clean_step_awscli_bundles() {
   }
   version="${reply[1]}"
   owner="${reply[2]}"
+  for name in "${names[@]}"; do
+    [[ "$name" == 2.<->.<-> ]] || {
+      _sys_error "Invalid planned AWS CLI bundle version."
+      return 1
+    }
+  done
+  if (( owner != EUID )); then
+    local -a operations=()
+    for name in "${names[@]}"; do operations+=("rm -rf -- $expected_root/$name"); done
+    _sys_privilege_authorize "${operations[@]}" || return $?
+    privilege_prefix=("${reply[@]}")
+    _sys_clean_awscli_root \
+      && [[ "$REPLY" == "$expected_root" && "${reply[1]}" == "$version" \
+        && "${reply[2]}" == "$owner" ]] || {
+      _sys_error "The AWS CLI selection changed during authentication; no bundle was removed."
+      return 1
+    }
+  fi
   _sys_clean_awscli_superseded "$expected_root" "$version" "$owner" \
     || superseded_rc=$?
   case $superseded_rc in
@@ -1328,10 +1342,6 @@ _sys_clean_step_awscli_bundles() {
   done
 
   if (( ${#targets} > 0 )); then
-    if (( owner != EUID )); then
-      _sys_resolve_privilege_prefix || return 1
-      privilege_prefix=("${reply[@]}")
-    fi
     local -i remove_rc=0
     if (( ${#privilege_prefix} > 0 )); then
       _sys_dim "Privileged operation: ${(j: :)privilege_prefix} rm -rf -- $(_sys_display_escape "${(j: :)targets}")"
@@ -1531,7 +1541,11 @@ _sys_clean_step_journal() {
   fi
 
   local -a privilege_prefix=()
-  _sys_resolve_privilege_prefix || return 1
+  _sys_privilege_authorize "journalctl --vacuum-time=3d" || return $?
+  _sys_has_systemd || {
+    _sys_error "The journal backend changed during authentication."
+    return 1
+  }
   privilege_prefix=("${reply[@]}")
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \
@@ -2025,6 +2039,35 @@ _sys_clean_system_main() {
     _sys_blank
   fi
 
+  local _SYS_PRIVILEGE_NONINTERACTIVE="${_SYS_PRIVILEGE_NONINTERACTIVE:-0}"
+  local -a privileged_operations=()
+  _sys_clean_privileged_labels "${plan_records[@]%%|*}"
+  local privileged_label
+  for privileged_label in "${reply[@]}"; do
+    case "$privileged_label" in
+      "APT cache") privileged_operations+=("apt-get clean") ;;
+      "Journal logs") privileged_operations+=("journalctl --vacuum-time=3d") ;;
+      "AWS CLI bundles")
+        for plan_record in "${plan_records[@]}"; do
+          [[ "$plan_record" == "AWS CLI bundles|"* ]] || continue
+          local bundle_scope="${plan_record#*|}" bundle_root bundle_name
+          bundle_root="${bundle_scope%%|*}"
+          for bundle_name in ${(s: :)${bundle_scope#*|}}; do
+            privileged_operations+=("rm -rf -- $bundle_root/$bundle_name")
+          done
+        done
+        ;;
+    esac
+  done
+  if (( ${#privileged_operations} )); then
+    local -i authentication_rc=0
+    _sys_privilege_authorize "${privileged_operations[@]}" || authentication_rc=$?
+    (( authentication_rc == 130 || authentication_rc == 143 )) \
+      && return "$authentication_rc"
+    # A failed authorization leaves sudo-n steps failed without reprompting;
+    # independent user-owned targets still retain their confirmed scope.
+    _SYS_PRIVILEGE_NONINTERACTIVE=1
+  fi
   _sys_clean_run "$mode" "$plan_output"
 }
 
@@ -2085,7 +2128,11 @@ clean-journal() {
 
   _sys_info "Vacuuming logs older than 3 days..."
   local -a privilege_prefix=()
-  _sys_resolve_privilege_prefix || return 1
+  _sys_privilege_authorize "journalctl --vacuum-time=3d" || return $?
+  _sys_has_systemd || {
+    _sys_error "The journal backend changed during authentication."
+    return 1
+  }
   privilege_prefix=("${reply[@]}")
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \

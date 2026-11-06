@@ -13,6 +13,11 @@ verification, and remaining limitations.
   only reviewed files, and generate Zsh integration offline. Missing proof
   gives manual instructions without requesting an executable archive.
 
+- System: bind selected process records to their observed start identity and
+  rescan port ownership after authentication. Announce narrow privileged
+  maintenance before one authentication, revalidate afterward, and guard
+  AWS/Starship Homebrew calls against inherited askpass prompts.
+
 - Git: ignore replacement refs and legacy grafts in publication and cleanup proofs, require local integration
   before exact forced pushes, refuse observable server-side branch aliases,
   and keep rebase updates within the reviewed branch.

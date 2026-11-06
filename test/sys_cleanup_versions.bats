@@ -375,7 +375,7 @@ EOF
   [ "$(id -u)" -ne 0 ] || skip "root owns every fixture"
   make_awscli 2.32.0 2.30.0 2.32.0
   local v2="$TEST_TEMP_DIR/aws-cli/v2"
-  export CLEAN_SHOW_TOOLS=aws MOCK_SUDO_ALLOW=rm
+  export CLEAN_SHOW_TOOLS=aws MOCK_SUDO_ALLOW=__validate__,rm
 
   run run_cleanup_zsh "
     _sys_clean_awscli_root() {
@@ -390,8 +390,10 @@ EOF
   [ ! -e "$v2/2.30.0" ]
   [ -d "$v2/2.32.0" ]
   [[ "$output" == *"These steps run through sudo: AWS CLI bundles."* ]]
-  [[ "$output" == *"Privileged operation: sudo rm -rf -- $v2/2.30.0"* ]]
-  grep -q -- "rm -rf -- $v2/2.30.0" "$MOCK_SUDO_LOG"
+  [[ "$output" == *"Privileged operation: sudo -n rm -rf -- $v2/2.30.0"* ]]
+  local expected_sudo
+  printf -v expected_sudo 'sudo -n rm -rf -- %q' "$v2/2.30.0"
+  [ "$(cat "$MOCK_SUDO_LOG")" = $'sudo -v\n'"$expected_sudo" ]
 
   # A bundle owned unlike the root-owned v2 directory refuses the whole plan.
   make_awscli 2.32.0 2.30.0 2.32.0

@@ -865,12 +865,16 @@ execute a destructive command inside `fzf`.
   memory, and command fields as TSV, sorted by CPU usage on Linux and macOS.
   `--terminate PID` sends `SIGTERM`; `--force` explicitly selects `SIGKILL`.
   Protected PIDs are rejected.
+  Browser selection retains the observed process start identity, so a reused
+  PID cannot replace the selected process during confirmation.
 - **Ports (`sys-ports`)**: `--list` emits protocol, port, address, PID, and
   command records from `ss` (preferred on Linux) or `lsof`. Use
   `--kill-port PORT` or an explicit `port:PORT` target; a bare number or a
   `pid:` target is rejected, because signaling a process by PID belongs to
   `sys-processes --terminate`.
   A port target must still have exactly one visible owner after confirmation.
+  When authentication is needed, socket ownership is checked afterward,
+  before the final process identity check.
   `lsof` without root cannot see sockets owned by other users, so only `ss`
   can refuse a port that has such a hidden owner.
 - **Services (`sys-services`)**: `--list` emits systemd or launchd records.

@@ -443,8 +443,8 @@ teardown() {
       print -r -- "$current_picker $ZSH_SUBSHELL" >>"$subshell_log"
       return 130
     }
-    _sys_processes_records() {
-      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo'\''
+    _sys_processes_snapshot() {
+      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo\tMon Jan  1 00:00:00 2026'\''
     }
     _sys_ports_records() {
       print -r -- $'\''port\ttcp\t3000\t127.0.0.1\t4242\tdemo'\''
@@ -514,8 +514,8 @@ teardown() {
       command cat >/dev/null
       print -r -- "forged|forged|forged"
     }
-    _sys_processes_records() {
-      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo'\''
+    _sys_processes_snapshot() {
+      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo\tMon Jan  1 00:00:00 2026'\''
     }
     _sys_ports_records() {
       print -r -- $'\''port\ttcp\t3000\t127.0.0.1\t4242\tdemo'\''
@@ -561,8 +561,8 @@ teardown() {
 
 @test "sys interface: resource browser keys route through the private capture" {
   run run_zsh '
-    _sys_processes_records() {
-      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo'\''
+    _sys_processes_snapshot() {
+      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo\tMon Jan  1 00:00:00 2026'\''
     }
     _sys_processes_fingerprint() {
       print -r -- $'\''process\t4242\t1000\tMon Jan  1 00:00:00 2026\tdemo'\''
@@ -596,8 +596,8 @@ teardown() {
 
 @test "sys interface: an action key on an empty filter is a quiet cancellation" {
   run run_zsh '
-    _sys_processes_records() {
-      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo'\''
+    _sys_processes_snapshot() {
+      print -r -- $'\''process\t4242\t1000\t0.0\t0.0\tdemo\tMon Jan  1 00:00:00 2026'\''
     }
     _sys_processes_terminate() {
       print -r -- "terminate:$*" >>"$HOME/route.log"
