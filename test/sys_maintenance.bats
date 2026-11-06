@@ -6210,6 +6210,9 @@ EOF_JOURNAL
   chmod +x "$fzf_repo/bin/fzf"
 
   run run_maintenance_zsh '
+    # Release integrity has dedicated real-path coverage; this test isolates
+    # active-owner routing from the separate release publication transaction.
+    _sys_update_fzf_verified_release() { return 0; }
     path=("$HOME/.fzf/bin" $path)
     dpkg() { [[ "$1" == -s && "$2" == fzf ]]; }
     _sys_run_logged() {

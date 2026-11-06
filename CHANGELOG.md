@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- System: replace the fzf installer with an exact-version release download
+  verified against upstream checksums before extraction or execution, publish
+  only reviewed files, and generate Zsh integration offline. Missing proof
+  gives manual instructions without requesting an executable archive.
+
 - Git: ignore replacement refs and legacy grafts in publication and cleanup proofs, require local integration
   before exact forced pushes, refuse observable server-side branch aliases,
   and keep rebase updates within the reviewed branch.

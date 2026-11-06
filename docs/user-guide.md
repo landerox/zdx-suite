@@ -1005,8 +1005,18 @@ unless `--safe-only` is present.
 The Git-owned repository paths display their origin and current commit,
 require owned symlink-free checkouts below `HOME`, repeat identity and origin
 checks after authorization, and use fast-forward-only pulls. The fzf installer
-must match its tracked Git blob; Oh My Zsh does not execute
+is read only as tracked version metadata and is never executed; Oh My Zsh does not execute
 `tools/upgrade.sh`.
+
+fzf downloads the exact checkout-version release only after finding its unique
+SHA256 in the official checksum file. Missing proof gives manual installation
+instructions without downloading a binary. A verified single-member archive
+and exact staged version are required before replacing the checkout binary.
+Zsh integration is generated offline into `~/.fzf.zsh`; startup files and
+other shells are not edited. If binary publication succeeds but integration
+fails, the command reports that partial result and preserves the existing
+integration. The authorized Git pull may already have completed before a
+download or metadata failure.
 
 The aggregate authorization — interactive confirmation or `--yes` —
 pre-authorizes these mutable origins, so use `--dry-run` first when their

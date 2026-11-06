@@ -1334,6 +1334,22 @@ in a compromised release channel and then installed, potentially as root.
   classification/control audit gap: this bounded change grants no exemption
   from the development remote-code delegation contract.
 
+- System never executes fzf's installer. Its tracked version selects an exact
+  official release; a unique matching upstream checksum is required before
+  any executable archive request. SHA256 precedes archive inspection or
+  staged version execution. Only one regular `fzf` archive member is accepted,
+  and reviewed binary/integration targets use revalidated staged replacement.
+  New stage paths, parent and file identities, ownership, single-link regular
+  type, empty size and private mode are proved before descriptor writes or
+  cleanup authority; an unexpected allocation result is left untouched.
+  Zsh integration is generated offline. Integrity fixtures cover malformed
+  proofs, redirect boundaries, unexpected allocation paths, changed stages and
+  truthful partial publication.
+  The checksum metadata is not an independently signed attestation: the
+  authorized Git origin, release publisher, disclosed GitHub/CDN transport and
+  installed tools remain trusted. Separate file publications retain a final
+  race and are not one kernel-atomic transaction.
+
 - Downloads use HTTPS and generally fail on HTTP errors.
 - Without a Homebrew or Snap owner, `update-awscli` refuses automatic bundle
   installation and points to AWS's detached-signature verification procedure.

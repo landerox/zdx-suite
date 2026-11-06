@@ -349,11 +349,13 @@ _sys_update_fzf_install_fingerprint() {
   local expected_blob actual_blob
   expected_blob=$(_sys_update_git_read -C "$repository" \
     rev-parse --verify 'HEAD:install' 2>/dev/null) || {
+      local -i fingerprint_rc=$?
       _sys_error "fzf's integration installer is not tracked by HEAD."
+      (( fingerprint_rc == 130 || fingerprint_rc == 143 )) && return "$fingerprint_rc"
       return 1
     }
   actual_blob=$(_sys_update_git_read -C "$repository" \
-    hash-object -- install 2>/dev/null) || return 1
+    hash-object -- install 2>/dev/null) || return $?
   (( ${#expected_blob} == 40 || ${#expected_blob} == 64 )) \
     && [[ "$expected_blob" == [[:xdigit:]]## \
       && "$actual_blob" == "$expected_blob" ]] || {
@@ -375,7 +377,7 @@ _sys_update_fzf_install_revalidate() {
   local repository="${1:-}"
   local expected_fingerprint="${2:-}"
   [[ -n "$expected_fingerprint" ]] || return 2
-  _sys_update_fzf_install_fingerprint "$repository" || return 1
+  _sys_update_fzf_install_fingerprint "$repository" || return $?
   [[ "$REPLY" == "$expected_fingerprint" ]] || {
     _sys_error "fzf's integration installer changed before execution."
     return 1
@@ -421,6 +423,437 @@ _sys_update_fzf_active_in_git_dir() {
   fi
   [[ "$active_fzf" == /* && "$active_fzf" != *[[:cntrl:]]* ]] || return 1
   [[ "${active_fzf:A}" == "${fzf_dir:A}"/* ]]
+}
+
+# Resolve one external observation/transfer tool without trusting a shell
+# function, a writable executable, or an unsafe installation directory.
+_sys_update_fzf_tool() {
+  emulate -L zsh
+  local name="$1" program
+  local -A state=() root=()
+  _sys_tool_program "$name" || return 1
+  program="${REPLY:A}"
+  zmodload -F zsh/stat b:zstat 2>/dev/null \
+    && zstat -H state "$program" && zstat -H root / || return 1
+  (( (state[uid] == EUID || state[uid] == root[uid]) \
+    && (state[mode] & 8#22) == 0 )) || return 1
+  _sys_resolve_trusted_dir "${program:h}" || return 1
+  REPLY="$program"
+}
+
+_sys_update_fzf_sha256() {
+  emulate -L zsh
+  local input="$1" program raw MATCH MBEGIN MEND
+  local -a args=() match=() mbegin=() mend=()
+  local -A state=()
+  local -i10 input_fd=-1 probe_rc=0
+  if _sys_update_fzf_tool sha256sum; then
+    program="$REPLY"
+  elif _sys_update_fzf_tool shasum; then
+    program="$REPLY"; args=(-a 256)
+  else
+    _sys_error "sha256sum or shasum is required to verify the fzf release."
+    return 1
+  fi
+  zmodload zsh/system 2>/dev/null || return 1
+  sysopen -r -o nofollow,nonblock,cloexec -u input_fd -- "$input" 2>/dev/null \
+    || return 1
+  {
+    zstat -H state -f "$input_fd" 2>/dev/null \
+      && (( (state[mode] & 8#170000) == 8#100000 )) || return 1
+    raw=$(_sys_run_bounded_probe 10 4096 "$program" "${args[@]}" \
+      <&$(( input_fd )) 2>/dev/null) || probe_rc=$?
+  } always {
+    exec {input_fd}<&-
+  }
+  (( probe_rc == 0 )) || return "$probe_rc"
+  raw="${raw%%[[:space:]]*}"
+  [[ "$raw" =~ '^[0-9a-fA-F]{64}$' ]] || return 1
+  REPLY="${raw:l}"
+}
+
+# Freeze both the owned parent and the existing file, including its bytes.
+# Absent files are publishable, but links, shared files and writable targets
+# are never replaced by this updater. REPLY is an opaque equality record.
+_sys_update_fzf_target_state() {
+  emulate -L zsh
+  local target="$1" parent="${1:h}" record field
+  local -A parent_state=() target_state=()
+  [[ "$target" == /* && "$target" != *[[:cntrl:]]* \
+    && "$parent" == "${parent:A}" && -O "$parent" ]] || return 1
+  _sys_resolve_trusted_dir "$parent" || return 1
+  zstat -H parent_state "$parent" 2>/dev/null || return 1
+  (( (parent_state[mode] & 8#22) == 0 )) || return 1
+  record="${parent_state[device]}:${parent_state[inode]}:${parent_state[mode]}"
+  if [[ -e "$target" || -L "$target" ]]; then
+    [[ -f "$target" && ! -L "$target" && -O "$target" ]] \
+      && zstat -H target_state "$target" 2>/dev/null || return 1
+    (( target_state[nlink] == 1 && (target_state[mode] & 8#22) == 0 )) || return 1
+    for field in device inode uid mode nlink size mtime ctime; do
+      record+="|${target_state[$field]}"
+    done
+    _sys_update_fzf_sha256 "$target" || return $?
+    REPLY="$record|$REPLY"
+  else
+    REPLY="$record|absent"
+  fi
+}
+
+# GitHub release redirects are followed explicitly so every hop stays on the
+# disclosed HTTPS publisher/CDN allowlist. No response body is executable.
+_sys_update_fzf_download() {
+  emulate -L zsh
+  local curl_program="$1" url="$2" target="$3" limit="$4"
+  local metadata="${target}.transfer" response location
+  local -a transfer_status=() fields=()
+  local -A state=()
+  local -i hop=0
+  while (( hop <= 5 )); do
+    [[ "$url" == https://github.com/* \
+      || "$url" == https://release-assets.githubusercontent.com/* \
+      || "$url" == https://objects.githubusercontent.com/* ]] || return 1
+    [[ "$url" != *[[:cntrl:]]* && "$url" != *\#* ]] || return 1
+    _sys_run_with_timeout 35 "$curl_program" -q --silent --show-error \
+      --fail --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 30 \
+      --max-filesize "$limit" --retry 0 --output - \
+      --write-out '%{stderr}ZDX-FZF-STATUS:%{http_code}\nZDX-FZF-LOCATION:%{redirect_url}\n' \
+      -- "$url" </dev/null 2>"$metadata" \
+      | command head -c "$(( limit + 1 ))" >| "$target"
+    transfer_status=("${pipestatus[@]}")
+    (( transfer_status[1] == 130 || transfer_status[1] == 143 )) \
+      && return "${transfer_status[1]}"
+    (( transfer_status[2] == 130 || transfer_status[2] == 143 )) \
+      && return "${transfer_status[2]}"
+    (( transfer_status[1] == 0 && transfer_status[2] == 0 )) || return 1
+    zstat -H state "$target" 2>/dev/null \
+      && (( state[size] <= limit )) || return 1
+    zstat -H state "$metadata" 2>/dev/null \
+      && (( state[size] <= 16384 )) || return 1
+    fields=("${(@f)$(<"$metadata")}")
+    (( ${#fields} == 2 )) || return 1
+    [[ "${fields[1]}" == ZDX-FZF-STATUS:<-> \
+      && "${fields[2]}" == ZDX-FZF-LOCATION:* ]] || return 1
+    response="${fields[1]#ZDX-FZF-STATUS:}"
+    location="${fields[2]#ZDX-FZF-LOCATION:}"
+    case "$response" in
+      200) [[ -z "$location" && -s "$target" ]]; return $? ;;
+      301|302|303|307|308) [[ -n "$location" ]] || return 1; url="$location" ;;
+      *) return 1 ;;
+    esac
+    (( ++hop ))
+  done
+  return 1
+}
+
+# Read the exact installer blob as metadata; never source or execute it.
+_sys_update_fzf_release() {
+  emulate -L zsh
+  local repository="$1" metadata line version="" os arch MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  local -i count=0
+  _sys_update_fzf_install_fingerprint "$repository" || return $?
+  metadata=$(_sys_update_git_read -C "$repository" show HEAD:install) || return $?
+  for line in "${(@f)metadata}"; do
+    [[ "$line" == version=* ]] || continue
+    (( ++count ))
+    [[ "$line" =~ '^version=([0-9]+[.][0-9]+[.][0-9]+)$' ]] || return 1
+    version="${match[1]}"
+  done
+  (( count == 1 && ${#version} <= 32 )) || return 1
+  os=$(_sys_capability_value os) || return 1
+  arch=$(_sys_capability_value architecture) || return 1
+  case "$os" in linux|darwin) ;; *) return 1 ;; esac
+  case "$arch" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  reply=("$version" "fzf-$version-${os}_${arch}.tar.gz")
+}
+
+_sys_update_fzf_manual() {
+  _sys_error "The checked-out fzf release could not be verified; binary and integration updates require manual action."
+  _sys_dim "Verify the exact release and install it using official guidance:"
+  _sys_dim "https://github.com/junegunn/fzf/releases"
+  _sys_dim "https://github.com/junegunn/fzf#installation"
+}
+
+# Open only an empty private mktemp result in the exact publication parent.
+# No create/truncate flag is used. The opened object and path must agree before
+# the caller receives the descriptor and may register cleanup or write bytes.
+# Usage: <stage> <canonical parent> <literal stem> <reviewed parent identity>
+# reply=(<write fd> <stage device:inode>).
+_sys_update_fzf_stage_open() {
+  emulate -L zsh
+  local staged="$1" parent="$2" stem="$3" expected_parent="$4" REPLY field
+  local -x LC_ALL=C
+  local -A parent_before=() parent_after=() before=() opened=() after=()
+  local -i10 opened_fd=-1
+  [[ "$stem" == .zdx-fzf. || "$stem" == .zdx-fzf-zsh. ]] || return 2
+  [[ "$parent" == /* && "$parent" != *[[:cntrl:]]* \
+    && "$parent" == "${parent:A}" \
+    && "$staged" == /* && "$staged" != *[[:cntrl:]]* \
+    && "$staged" == "${staged:a}" && "$staged" == "${staged:A}" \
+    && "${staged:h}" == "$parent" && "${staged:t}" == "$stem"?????? \
+    && -d "$parent" && ! -L "$parent" && -O "$parent" \
+    && -f "$staged" && ! -L "$staged" && -O "$staged" ]] || return 1
+  _sys_resolve_trusted_dir "$parent" || return 1
+  [[ "$REPLY" == "$parent" ]] || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  zstat -L -H parent_before -- "$parent" 2>/dev/null \
+    && zstat -L -H before -- "$staged" 2>/dev/null || return 1
+  [[ "${parent_before[device]}:${parent_before[inode]}:${parent_before[mode]}" \
+    == "$expected_parent" ]] || return 1
+  (( (parent_before[mode] & 8#170000) == 8#40000 \
+    && parent_before[uid] == EUID && (parent_before[mode] & 8#22) == 0 \
+    && (before[mode] & 8#170000) == 8#100000 && before[uid] == EUID \
+    && before[nlink] == 1 && (before[mode] & 8#7777) == 8#600 \
+    && before[device] == parent_before[device] && before[size] == 0 )) || return 1
+  zmodload zsh/system 2>/dev/null || return 1
+  {
+    sysopen -w -o nofollow,nonblock,cloexec -u opened_fd -- "$staged" \
+      2>/dev/null || return 1
+    zstat -H opened -f "$opened_fd" 2>/dev/null \
+      && zstat -L -H after -- "$staged" 2>/dev/null \
+      && zstat -L -H parent_after -- "$parent" 2>/dev/null || return 1
+    for field in device inode uid gid mode nlink size mtime ctime; do
+      [[ "${opened[$field]}" == "${before[$field]}" \
+        && "${after[$field]}" == "${before[$field]}" ]] || return 1
+    done
+    [[ "${parent_after[device]}:${parent_after[inode]}:${parent_after[mode]}" \
+      == "$expected_parent" && "$staged" == "${staged:A}" ]] \
+      && (( parent_after[uid] == EUID )) || return 1
+    reply=("$opened_fd" "${opened[device]}:${opened[inode]}")
+    opened_fd=-1
+    return 0
+  } always {
+    (( opened_fd >= 0 )) && exec {opened_fd}>&-
+  }
+}
+
+# Checksum-first release publication, followed by a local Zsh integration
+# loader. The upstream installer, wget and Go fallback are never executed.
+_sys_update_fzf_verified_release() {
+  emulate -L zsh
+  local repository="$1" expected_repository="$2" REPLY
+  local -a reply=() source_records=() extraction_status=()
+  local version asset url checksum="" line MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  local -i matches=0 operation_rc=0 binary_published=0
+  local -i10 binary_stage_fd=-1 integration_stage_fd=-1
+  _sys_update_fzf_release "$repository" || operation_rc=$?
+  if (( operation_rc != 0 )); then
+    _sys_update_fzf_manual
+    (( operation_rc == 130 || operation_rc == 143 )) && return "$operation_rc"
+    return 1
+  fi
+  version="${reply[1]}"; asset="${reply[2]}"
+  local binary="$repository/bin/fzf" integration="$HOME/.fzf.zsh"
+  local binary_state integration_state curl_program tar_program
+  _sys_update_fzf_target_state "$binary" || {
+    operation_rc=$?
+    _sys_error "Refusing an unsafe fzf binary publication target."
+    return "$operation_rc"
+  }
+  binary_state="$REPLY"
+  _sys_update_fzf_target_state "$integration" || {
+    operation_rc=$?
+    _sys_error "Refusing an unsafe fzf Zsh integration publication target."
+    return "$operation_rc"
+  }
+  integration_state="$REPLY"
+  _sys_update_fzf_tool curl || { _sys_update_fzf_manual; return 1; }
+  curl_program="$REPLY"
+  _sys_update_fzf_tool tar || return 1
+  tar_program="$REPLY"
+  _sys_resolve_trusted_dir "${TMPDIR:-/tmp}" || return 1
+  local parent="$REPLY" work="" binary_stage="" integration_stage=""
+  local work_identity="" binary_stage_identity="" integration_stage_identity=""
+  local binary_stage_state="" integration_stage_state=""
+  local -A state=() stage_path_state=()
+  {
+    work=$(umask 077; command mktemp -d "${parent%/}/zdx-fzf.XXXXXX") || return $?
+    [[ "$work" == "${parent%/}"/zdx-fzf.* && "$work" != *[[:cntrl:]]* \
+      && "$work" == "${work:A}" \
+      && -d "$work" && ! -L "$work" && -O "$work" ]] \
+      && zstat -L -H state -- "$work" || return 1
+    (( (state[mode] & 8#170000) == 8#40000 \
+      && (state[mode] & 8#7777) == 8#700 && state[uid] == EUID )) || return 1
+    work_identity="${state[device]}:${state[inode]}"
+    url="https://github.com/junegunn/fzf/releases/download/v$version"
+    _sys_update_fzf_download "$curl_program" "$url/fzf_${version}_checksums.txt" \
+      "$work/checksums" 262144 || operation_rc=$?
+    if (( operation_rc != 0 )); then
+      _sys_update_fzf_manual
+      (( operation_rc == 130 || operation_rc == 143 )) && return "$operation_rc"
+      return 1
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" =~ '^([0-9a-fA-F]{64}) [ *]([^[:space:]]+)$' ]] || {
+        _sys_update_fzf_manual; return 1
+      }
+      if [[ "${match[2]}" == "$asset" ]]; then
+        (( ++matches )); checksum="${match[1]:l}"
+      fi
+    done <"$work/checksums"
+    (( matches == 1 )) || { _sys_update_fzf_manual; return 1; }
+    _sys_update_fzf_download "$curl_program" "$url/$asset" \
+      "$work/archive" 33554432 || operation_rc=$?
+    if (( operation_rc != 0 )); then
+      _sys_update_fzf_manual
+      return "$operation_rc"
+    fi
+    _sys_update_fzf_sha256 "$work/archive" || return $?
+    [[ "$REPLY" == "$checksum" ]] || { _sys_update_fzf_manual; return 1; }
+    local listing verbose_listing
+    listing=$(_sys_run_bounded_probe 15 65536 "$tar_program" -tzf "$work/archive" \
+      </dev/null 2>/dev/null) || return $?
+    verbose_listing=$(LC_ALL=C _sys_run_bounded_probe 15 65536 \
+      "$tar_program" -tvzf "$work/archive" </dev/null 2>/dev/null) || return $?
+    [[ "$listing" == fzf && "$verbose_listing" == -* \
+      && "$verbose_listing" != *$'\n'* ]] || {
+      _sys_error "The verified fzf archive must contain exactly one regular fzf member."
+      return 1
+    }
+    binary_stage=$(umask 077; command mktemp "$repository/bin/.zdx-fzf.XXXXXX") || return $?
+    _sys_update_fzf_stage_open "$binary_stage" "$repository/bin" .zdx-fzf. \
+      "${binary_state%%|*}" || {
+      operation_rc=$?
+      _sys_error "Refusing an unsafe fzf binary stage."
+      return "$operation_rc"
+    }
+    binary_stage_fd="${reply[1]}"
+    binary_stage_identity="${reply[2]}"
+    _sys_run_with_timeout 15 "$tar_program" -xOzf "$work/archive" fzf </dev/null \
+      | command head -c 33554433 >&$(( binary_stage_fd ))
+    extraction_status=("${pipestatus[@]}")
+    (( extraction_status[1] == 130 || extraction_status[1] == 143 )) \
+      && return "${extraction_status[1]}"
+    (( extraction_status[2] == 130 || extraction_status[2] == 143 )) \
+      && return "${extraction_status[2]}"
+    (( extraction_status[1] == 0 && extraction_status[2] == 0 )) || return 1
+    zstat -H state -f "$binary_stage_fd" \
+      && (( state[size] > 0 && state[size] <= 33554432 )) || return 1
+    zstat -L -H stage_path_state -- "$binary_stage" \
+      && [[ "$binary_stage" == "${binary_stage:A}" \
+        && "${stage_path_state[device]}:${stage_path_state[inode]}" == "$binary_stage_identity" \
+        && "${state[device]}:${state[inode]}" == "$binary_stage_identity" ]] \
+      && (( (stage_path_state[mode] & 8#170000) == 8#100000 \
+        && stage_path_state[uid] == EUID && stage_path_state[nlink] == 1 \
+        && (stage_path_state[mode] & 8#7777) == 8#600 \
+        && stage_path_state[size] == state[size] )) || return 1
+    state=()
+    zstat -L -H state -- "$repository/bin" \
+      && [[ "${state[device]}:${state[inode]}:${state[mode]}" == "${binary_state%%|*}" ]] \
+      || return 1
+    command chmod -- 700 "$binary_stage" || return $?
+    exec {binary_stage_fd}>&-
+    binary_stage_fd=-1
+    _sys_update_fzf_target_state "$binary_stage" || return $?
+    binary_stage_state="$REPLY"
+    local observed_version
+    observed_version=$(FZF_DEFAULT_OPTS='' _sys_run_bounded_probe 3 65536 \
+      "$binary_stage" --version </dev/null 2>/dev/null) || return $?
+    [[ "${observed_version%%[[:space:]]*}" == "$version" ]] || {
+      _sys_error "The verified fzf binary does not report the exact checkout version."
+      return 1
+    }
+    local source_file expected_blob actual_blob
+    for source_file in shell/completion.zsh shell/key-bindings.zsh; do
+      _sys_update_validate_owned_path "$repository" "$repository/$source_file" file || return $?
+      _sys_update_fzf_target_state "$repository/$source_file" || return $?
+      source_records+=("$repository/$source_file" "$REPLY")
+      expected_blob=$(_sys_update_git_read -C "$repository" rev-parse --verify "HEAD:$source_file") \
+        && actual_blob=$(_sys_update_git_read -C "$repository" hash-object -- "$source_file") \
+        && [[ "$expected_blob" == "$actual_blob" ]] || return $?
+    done
+    integration_stage=$(umask 077; command mktemp "$HOME/.zdx-fzf-zsh.XXXXXX") || return $?
+    _sys_update_fzf_stage_open "$integration_stage" "$HOME" .zdx-fzf-zsh. \
+      "${integration_state%%|*}" || {
+      operation_rc=$?
+      _sys_error "Refusing an unsafe fzf Zsh integration stage."
+      return "$operation_rc"
+    }
+    integration_stage_fd="${reply[1]}"
+    integration_stage_identity="${reply[2]}"
+    {
+      print -r -- '# fzf integration: regenerated locally from the reviewed checkout.' || return $?
+      print -r -- '() {' || return $?
+      print -r -- "  local fzf_bin=${(q)repository}/bin" || return $?
+      print -r -- '  if (( ! ${path[(Ie)$fzf_bin]} )); then path+=("$fzf_bin"); fi' || return $?
+      print -r -- '}' || return $?
+      print -r -- "source ${(q)repository}/shell/completion.zsh" || return $?
+      print -r -- "source ${(q)repository}/shell/key-bindings.zsh" || return $?
+    } >&$(( integration_stage_fd )) || return $?
+    zstat -H state -f "$integration_stage_fd" \
+      && zstat -L -H stage_path_state -- "$integration_stage" \
+      && [[ "$integration_stage" == "${integration_stage:A}" \
+        && "${stage_path_state[device]}:${stage_path_state[inode]}" == "$integration_stage_identity" \
+        && "${state[device]}:${state[inode]}" == "$integration_stage_identity" ]] \
+      && (( (stage_path_state[mode] & 8#170000) == 8#100000 \
+        && stage_path_state[uid] == EUID && stage_path_state[nlink] == 1 \
+        && (stage_path_state[mode] & 8#7777) == 8#600 \
+        && stage_path_state[size] == state[size] )) || return 1
+    state=()
+    zstat -L -H state -- "$HOME" \
+      && [[ "${state[device]}:${state[inode]}:${state[mode]}" == "${integration_state%%|*}" ]] \
+      || return 1
+    command chmod -- 600 "$integration_stage" || return $?
+    exec {integration_stage_fd}>&-
+    integration_stage_fd=-1
+    _sys_update_fzf_target_state "$integration_stage" || return $?
+    integration_stage_state="$REPLY"
+    _sys_update_git_revalidate "$HOME" "$repository" "$expected_repository" || return $?
+    local source_path expected_source
+    for source_path expected_source in "${source_records[@]}"; do
+      _sys_update_fzf_target_state "$source_path" \
+        && [[ "$REPLY" == "$expected_source" ]] || return $?
+    done
+    _sys_update_fzf_target_state "$binary" \
+      && [[ "$REPLY" == "$binary_state" ]] || return $?
+    _sys_update_fzf_target_state "$binary_stage" \
+      && [[ "$REPLY" == "$binary_stage_state" ]] || return $?
+    command mv -f -- "$binary_stage" "$binary" || return $?
+    binary_stage=""; binary_published=1
+    for source_path expected_source in "${source_records[@]}"; do
+      _sys_update_fzf_target_state "$source_path" \
+        && [[ "$REPLY" == "$expected_source" ]] || return $?
+    done
+    _sys_update_fzf_target_state "$integration" \
+      && [[ "$REPLY" == "$integration_state" ]] || return $?
+    _sys_update_fzf_target_state "$integration_stage" \
+      && [[ "$REPLY" == "$integration_stage_state" ]] || return $?
+    command mv -f -- "$integration_stage" "$integration" || return $?
+    integration_stage=""
+    _sys_info "Installed verified fzf $version and refreshed Zsh integration without the installer."
+  } always {
+    operation_rc=$?
+    (( binary_stage_fd >= 0 )) && exec {binary_stage_fd}>&-
+    (( integration_stage_fd >= 0 )) && exec {integration_stage_fd}>&-
+    if (( operation_rc != 0 && binary_published )); then
+      _sys_warn "The verified fzf binary was installed; Zsh integration was not published."
+    fi
+    local staged expected_identity
+    for staged expected_identity in "$binary_stage" "$binary_stage_identity" \
+      "$integration_stage" "$integration_stage_identity"; do
+      [[ -n "$staged" && -n "$expected_identity" \
+        && -f "$staged" && ! -L "$staged" ]] || continue
+      state=()
+      if zstat -H state "$staged" 2>/dev/null \
+        && [[ "${state[device]}:${state[inode]}" == "$expected_identity" ]]; then
+        command rm -f -- "$staged" 2>/dev/null
+      fi
+    done
+    state=()
+    if [[ -d "$work" && ! -L "$work" ]] \
+      && zstat -H state "$work" 2>/dev/null \
+      && [[ "${state[device]}:${state[inode]}" == "$work_identity" ]]; then
+      command rm -rf -- "$work" 2>/dev/null
+    elif [[ -n "$work" && -d "$work" ]]; then
+      _sys_warn "Could not validate the temporary fzf directory for cleanup; retained: $(_sys_display_escape "$work")"
+    fi
+  }
+  return "$operation_rc"
 }
 
 update-fzf() {
@@ -478,7 +911,9 @@ update-fzf() {
     local expected_git_inode="${reply[7]}"
     local expected_fingerprint="$REPLY"
     _sys_update_program_fingerprint "$fzf_program" || {
+      local -i fingerprint_rc=$?
       _sys_error "The active fzf executable could not be bound to this plan."
+      (( fingerprint_rc == 130 || fingerprint_rc == 143 )) && return "$fingerprint_rc"
       return 1
     }
     local expected_program_fingerprint="$REPLY"
@@ -486,6 +921,11 @@ update-fzf() {
     _sys_label "Repository:" "${fzf_dir/#$HOME/~}"
     _sys_label "Origin:" "$(_sys_display_escape "$origin")"
     _sys_label "Current commit:" "$current_commit"
+    _sys_label "Binary policy:" "Exact checkout version; upstream release checksum required before download and execution"
+    _sys_label "Release owner:" "github.com/junegunn/fzf; GitHub release CDN over HTTPS"
+    _sys_label "Binary target:" "$fzf_dir/bin/fzf"
+    _sys_label "Integration target:" "$HOME/.fzf.zsh (regenerated offline)"
+    _sys_dim "Missing verifiable release metadata requires official manual installation; the installer is never executed."
     (( dry_run )) && {
       _sys_report_result planned "at ${current_commit[1,7]}" \
         "Dry run complete; the repository was not updated."
@@ -512,7 +952,9 @@ update-fzf() {
     _sys_update_program_revalidate fzf "$fzf_program" \
       "$expected_program_fingerprint" \
       && _sys_update_fzf_active_in_git_dir "$fzf_dir" "$fzf_program" || {
+      local -i validation_rc=$?
       _sys_error "The active fzf executable changed after the update plan."
+      (( validation_rc == 130 || validation_rc == 143 )) && return "$validation_rc"
       return 1
     }
     if _sys_update_git_logged -C "$fzf_dir" pull --ff-only origin; then
@@ -523,21 +965,11 @@ update-fzf() {
       local post_pull_fingerprint="$REPLY"
       local updated_head="${reply[3]}"
 
-      if [[ -e "$fzf_dir/install" || -L "$fzf_dir/install" ]]; then
-        _sys_update_fzf_install_fingerprint "$fzf_dir" || return 1
-        local installer_fingerprint="$REPLY"
-        _sys_info "Refreshing shell integration..."
-        _sys_update_git_revalidate \
-          "$HOME" "$fzf_dir" "$post_pull_fingerprint" || return 1
-        _sys_update_fzf_install_revalidate \
-          "$fzf_dir" "$installer_fingerprint" || return 1
-        "$fzf_dir/install" --key-bindings --completion --no-update-rc \
-          >/dev/null 2>&1 || {
-            _sys_error "fzf updated, but shell integration refresh failed."
-            return 1
-          }
-      else
-        _sys_dim "No tracked fzf integration installer was present."
+      local -i release_rc=0
+      _sys_update_fzf_verified_release "$fzf_dir" "$post_pull_fingerprint" || release_rc=$?
+      if (( release_rc != 0 )); then
+        (( release_rc == 130 || release_rc == 143 )) && return "$release_rc"
+        return 1
       fi
       _sys_tool_program fzf \
         && _sys_update_fzf_active_in_git_dir "$fzf_dir" "$REPLY" || {
@@ -546,9 +978,12 @@ update-fzf() {
       }
       fzf_program="$REPLY"
       local version_output updated_version
+      local -i version_rc=0
       version_output=$(
         _sys_run_bounded_probe 3 65536 "$fzf_program" --version 2>/dev/null
-      ) || version_output=""
+      ) || version_rc=$?
+      (( version_rc == 130 || version_rc == 143 )) && return "$version_rc"
+      (( version_rc == 0 )) || version_output=""
       updated_version="${version_output%%[[:space:]]*}"
       [[ -n "$updated_version" ]] || updated_version="unknown"
       _sys_update_git_change "$fzf_dir" "$current_commit" "$updated_head"
@@ -560,7 +995,9 @@ update-fzf() {
           "fzf is already up to date ($updated_version, ${reply[1]})."
       fi
     else
+      local -i pull_rc=$?
       _sys_warn "fzf git update failed."
+      (( pull_rc == 130 || pull_rc == 143 )) && return "$pull_rc"
       return 1
     fi
     return 0
