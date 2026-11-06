@@ -24,6 +24,10 @@ verification, and remaining limitations.
   record lists, change or stash fingerprints, stash diffs, and amend messages.
   Unsafe roots are refused before allocation, including after confirmation.
 
+- System: validate temporary-root ancestors before staging keys or private
+  helpers, and create bounded diagnostic captures only below the canonical
+  trusted root. Unsafe roots are refused before allocation or child execution.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;
