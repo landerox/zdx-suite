@@ -17,13 +17,15 @@ fi
 _sys_update_probe_version() {
   emulate -L zsh
   local seconds="${1:-3}" program="${2:-}" output="" line=""
+  local -i probe_rc=0
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
   REPLY=""
   shift 2 2>/dev/null || return 2
   program=$(builtin whence -p -- "$program" 2>/dev/null) || return 1
   output=$(_sys_run_bounded_probe "$seconds" 65536 "$program" "$@" \
-    </dev/null 2>/dev/null) || return 1
+    </dev/null 2>/dev/null) || probe_rc=$?
+  (( probe_rc == 0 )) || return "$probe_rc"
   line="${output%%$'\n'*}"
   [[ "$line" != *[[:cntrl:]]* \
     && "$line" =~ '[0-9]+([.][0-9]+)+([-+][0-9A-Za-z.]+)?' ]] || return 1
@@ -277,15 +279,165 @@ update-gcloud() {
   fi
 }
 
+# Verify the selected installed owner against its reviewed canonical scope.
+# Ownership follows the active executable, while the selected native manager
+# and root must remain the same before review, after consent, and after update.
+# Usage: <tool> <active executable> <Homebrew|Cargo> <manager> <canonical root>
+_sys_update_owned_tool_recheck() {
+  emulate -L zsh
+  local tool="$1" active_program="$2" owner="$3" manager_program="$4"
+  local owner_prefix="$5" formula REPLY
+  local -a reply=()
+  _sys_tool_program "$tool" || return $?
+  [[ "$REPLY" == "$active_program" ]] || return 1
+  case "$owner" in
+    Homebrew)
+      case "$tool" in
+        aws) formula=awscli ;;
+        starship) formula=starship ;;
+        *) return 2 ;;
+      esac
+      _sys_update_homebrew_owns_program "$formula" "$active_program" \
+        || return $?
+      [[ "$REPLY" == "$owner_prefix" \
+        && "${reply[2]}" == "$manager_program" ]] || return 1
+      ;;
+    Cargo)
+      [[ "$tool" == starship ]] || return 2
+      _sys_resolve_trusted_dir "${CARGO_HOME:-$HOME/.cargo}" || return 1
+      [[ "$REPLY" == "$owner_prefix" ]] || return 1
+      _sys_update_starship_owner "$active_program" || return $?
+      [[ "$REPLY" == cargo \
+        && "${reply[2]}" == "$manager_program" ]] || return 1
+      ;;
+    *) return 2 ;;
+  esac
+  return 0
+}
+
+# Run one installed owner's fixed argv after a passive, content-bound review.
+# Usage: <dry-run> <yes> <tool> <subject> <active> <manager> <owner> <args...>
+_sys_update_owned_tool() {
+  emulate -L zsh
+  local -i dry_run="$1" assume_yes="$2" operation_rc=0
+  local tool="$3" subject="$4" active_program="$5"
+  local manager_program="$6" owner="$7" REPLY
+  local -a reply=()
+  shift 7
+  local -a owner_args=("$@")
+  local active_fingerprint manager_fingerprint before after="" manager_version
+  local owner_prefix updated_program
+  _sys_update_program_fingerprint "$active_program" || {
+    _sys_update_owner_failure "$?" "$subject executable failed identity and checksum validation."
+    return $?
+  }
+  active_fingerprint="$REPLY"
+  _sys_update_program_fingerprint "$manager_program" || {
+    _sys_update_owner_failure "$?" "$owner executable failed identity and checksum validation."
+    return $?
+  }
+  manager_fingerprint="$REPLY"
+  _sys_update_probe_version 5 "$active_program" --version || {
+    _sys_update_owner_failure "$?" "$subject version probe failed; refusing delegation."
+    return $?
+  }
+  before="$REPLY"
+  _sys_update_probe_version 5 "$manager_program" --version || {
+    _sys_update_owner_failure "$?" "$owner version probe failed; refusing delegation."
+    return $?
+  }
+  manager_version="$REPLY"
+  if [[ "$owner" == Homebrew ]]; then
+    _sys_update_homebrew_prefix "$manager_program" || {
+      _sys_update_owner_failure "$?" "Homebrew installation prefix could not be verified."
+      return $?
+    }
+  else
+    _sys_resolve_trusted_dir "${CARGO_HOME:-$HOME/.cargo}" || return 1
+  fi
+  owner_prefix="$REPLY"
+  _sys_update_owned_tool_recheck "$tool" "$active_program" "$owner" \
+    "$manager_program" "$owner_prefix" || {
+    _sys_update_owner_failure "$?" "The selected $subject installation owner could not be verified."
+    return $?
+  }
+  _sys_header "$subject Update Plan"
+  _sys_label "Executable:" "$active_program ($before)"
+  _sys_label "Owner:" "$manager_program ($manager_version)"
+  _sys_label "Prefix:" "$owner_prefix"
+  _sys_label "Scope:" "Dynamic latest available $subject release through installed $owner"
+  _sys_label "Command:" "${(q)manager_program} ${(j: :)${(@q)owner_args}}"
+  _sys_warn "This delegates remote code selection and release verification to the installed owner."
+  _sys_dim "The reviewed executable identities and SHA-256 contents are revalidated before delegation."
+  if (( dry_run )); then
+    _sys_report_result planned "$owner; no mutation executed"
+    return 0
+  fi
+  _sys_update_owner_authorize "$assume_yes" "$subject" || operation_rc=$?
+  (( operation_rc == 3 )) && return 0
+  (( operation_rc == 0 )) || return "$operation_rc"
+  # Ownership observations execute the installed manager too; compare its
+  # reviewed bytes before those observations, then again before mutation.
+  _sys_update_program_revalidate "$tool" "$active_program" "$active_fingerprint" || {
+    _sys_update_owner_failure "$?" "The reviewed $subject executable changed; refusing ownership observations."
+    return $?
+  }
+  _sys_update_program_revalidate "${manager_program:t}" \
+    "$manager_program" "$manager_fingerprint" || {
+    _sys_update_owner_failure "$?" "The reviewed $owner owner changed; refusing ownership observations."
+    return $?
+  }
+  _sys_update_owned_tool_recheck "$tool" "$active_program" "$owner" \
+    "$manager_program" "$owner_prefix" || {
+    _sys_update_owner_failure "$?" "The reviewed $subject installation owner changed; refusing delegation."
+    return $?
+  }
+  local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+  local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1 CARGO_NET_RETRY=0
+  local -x CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+  [[ "$owner" == Cargo ]] && CARGO_HOME="$owner_prefix"
+  _sys_update_program_revalidate "$tool" "$active_program" "$active_fingerprint" || {
+    _sys_update_owner_failure "$?" "The reviewed $subject executable changed; refusing delegation."
+    return $?
+  }
+  _sys_update_program_revalidate "${manager_program:t}" \
+    "$manager_program" "$manager_fingerprint" || {
+    _sys_update_owner_failure "$?" "The reviewed $owner owner changed; refusing delegation."
+    return $?
+  }
+  "$manager_program" "${owner_args[@]}" </dev/null >&2 || operation_rc=$?
+  if (( operation_rc != 0 )); then
+    _sys_update_owner_failure "$operation_rc" "$owner failed to update $subject."
+    return $?
+  fi
+  _sys_tool_program "$tool" || {
+    _sys_update_owner_failure "$?" "The update completed, but the active $subject executable could not be verified."
+    return $?
+  }
+  updated_program="$REPLY"
+  _sys_update_owned_tool_recheck "$tool" "$updated_program" "$owner" \
+    "$manager_program" "$owner_prefix" || {
+    _sys_update_owner_failure "$?" "The update completed, but the active $subject owner could not be verified."
+    return $?
+  }
+  _sys_update_program_fingerprint "$updated_program" || {
+    _sys_update_owner_failure "$?" "The updated $subject executable failed identity and checksum validation."
+    return $?
+  }
+  _sys_update_probe_version 5 "$updated_program" --version \
+    && after="$REPLY" || operation_rc=$?
+  (( operation_rc == 130 || operation_rc == 143 )) && return "$operation_rc"
+  _sys_update_report_version "$subject" "$before" "$after" "$owner"
+}
+
 update-awscli() {
   emulate -L zsh
   local REPLY
   local -a reply=()
-  _sys_update_parse_no_args update-awscli "$@" || return $?
+  _sys_update_parse_plan_flags update-awscli "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
-  _sys_header "Updating AWS CLI v2"
+  local -i dry_run="${reply[1]}" assume_yes="${reply[2]}" program_rc=0
 
-  local -i program_rc=0
   _sys_tool_program aws || program_rc=$?
   local aws_program="$REPLY"
   if (( program_rc != 0 && program_rc != 1 )); then
@@ -298,43 +450,43 @@ update-awscli() {
     owner_rc=0
     _sys_update_homebrew_owns_program awscli "$aws_program" || owner_rc=$?
   fi
-  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   if (( owner_rc == 0 )); then
-    local manager="${reply[2]}" aws_before="" aws_after=""
-    _sys_update_probe_version 5 "$aws_program" --version && aws_before="$REPLY"
-    _sys_info "AWS CLI is managed by Homebrew; upgrading that formula."
-    local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
-    local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
-    "$manager" upgrade --no-ask awscli </dev/null >&2 || {
-      local -i mutation_rc=$?
-      _sys_error "Homebrew failed to update AWS CLI."
-      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
-      return 1
-    }
-    owner_rc=0
-    _sys_tool_program aws \
-      && _sys_update_homebrew_owns_program awscli "$REPLY" || owner_rc=$?
-    (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
-    if (( owner_rc != 0 )); then
-      _sys_error "Homebrew completed, but the active AWS CLI owner could not be verified."
-      return 1
-    fi
-    _sys_update_probe_version 5 "${reply[1]}" --version && aws_after="$REPLY"
-    _sys_update_report_version "AWS CLI" "$aws_before" "$aws_after" Homebrew
-    return 0
+    local manager="${reply[2]}"
+    _sys_update_owned_tool "$dry_run" "$assume_yes" aws "AWS CLI" \
+      "$aws_program" "$manager" Homebrew upgrade --no-ask awscli
+    return $?
   fi
 
-  if (( program_rc == 0 )) && command -v snap &>/dev/null \
-    && command snap list aws-cli &>/dev/null 2>&1; then
-    _sys_report_result delegated "Snap → sys-menu update-snap" \
-      "AWS CLI is managed by Snap; run update-snap instead."
-    return 0
+  if (( program_rc == 0 )); then
+    local snap_program=""
+    owner_rc=0
+    _sys_tool_program snap || owner_rc=$?
+    if (( owner_rc == 0 )); then
+      snap_program="$REPLY"
+      _sys_update_program_fingerprint "$snap_program" || owner_rc=$?
+      if (( owner_rc == 0 )); then
+        _sys_run_bounded_probe 10 65536 "$snap_program" list aws-cli \
+          </dev/null >/dev/null 2>&1 || owner_rc=$?
+        if (( owner_rc == 0 )); then
+          _sys_report_result delegated "Snap → sys-menu update-snap" \
+            "AWS CLI is managed by Snap; run update-snap instead."
+          return 0
+        fi
+      fi
+    fi
+    (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   fi
 
   local current_version="not installed"
-  if (( program_rc == 0 )) \
-    && _sys_update_probe_version 5 "$aws_program" --version; then
-    current_version="$REPLY"
+  local -i version_rc=0
+  if (( program_rc == 0 )); then
+    _sys_update_program_fingerprint "$aws_program" || version_rc=$?
+    if (( version_rc == 0 )); then
+      _sys_update_probe_version 5 "$aws_program" --version || version_rc=$?
+      (( version_rc == 0 )) && current_version="$REPLY"
+    fi
+    (( version_rc == 130 || version_rc == 143 )) && return "$version_rc"
   fi
   _sys_label "Current:" "$current_version"
   _sys_error "Automatic AWS CLI bundle installation is disabled."
@@ -350,18 +502,17 @@ update-starship() {
   emulate -L zsh
   local REPLY
   local -a reply=()
-  _sys_update_parse_no_args update-starship "$@" || return $?
+  _sys_update_parse_plan_flags update-starship "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
-  _sys_header "Updating Starship"
+  local -i dry_run="${reply[1]}" assume_yes="${reply[2]}" program_rc=0
 
-  local -i program_rc=0
   _sys_update_tool_program starship Starship || program_rc=$?
   (( program_rc == 3 )) && return 0
   (( program_rc == 0 )) || return 1
   local starship_program="$REPLY"
   local -i owner_rc=0
   _sys_update_starship_owner "$starship_program" || owner_rc=$?
-  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   if (( owner_rc != 0 )); then
     _sys_error "Starship's installation owner could not be verified."
     _sys_dim "Update it with its original package manager."
@@ -370,42 +521,13 @@ update-starship() {
     return 1
   fi
   local owner="$REPLY" manager="${reply[2]}"
-  local starship_before="" starship_after=""
-  _sys_update_probe_version 3 "$starship_program" --version \
-    && starship_before="$REPLY"
   if [[ "$owner" == homebrew ]]; then
-    _sys_info "Starship is managed by Homebrew."
-    local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
-    local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
-    "$manager" upgrade --no-ask starship </dev/null >&2 || {
-      local -i mutation_rc=$?
-      _sys_error "Homebrew failed to update Starship."
-      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
-      return 1
-    }
+    _sys_update_owned_tool "$dry_run" "$assume_yes" starship Starship \
+      "$starship_program" "$manager" Homebrew upgrade --no-ask starship
   else
-    _sys_info "Starship is managed by Cargo."
-    local -x CARGO_NET_RETRY=0
-    "$manager" install --locked starship </dev/null >&2 || {
-      local -i mutation_rc=$?
-      _sys_error "Cargo failed to update Starship."
-      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
-      return 1
-    }
+    _sys_update_owned_tool "$dry_run" "$assume_yes" starship Starship \
+      "$starship_program" "$manager" Cargo install --locked starship
   fi
-  owner_rc=0
-  _sys_tool_program starship \
-    && _sys_update_starship_owner "$REPLY" || owner_rc=$?
-  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
-  if (( owner_rc != 0 )) \
-    || [[ "$REPLY" != "$owner" || "${reply[2]}" != "$manager" ]]; then
-    _sys_error "The update completed, but the active Starship owner could not be verified."
-    return 1
-  fi
-  _sys_update_probe_version 3 "${reply[1]}" --version \
-    && starship_after="$REPLY"
-  _sys_update_report_version Starship "$starship_before" "$starship_after" \
-    "${(C)owner}"
 }
 
 _sys_uv_resolved_program() {

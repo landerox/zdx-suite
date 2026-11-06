@@ -306,6 +306,16 @@ trusted cleanup tools, and standalone loading through confined recorders.
 Mocked ownership and native UID-sensitive fixture checks remain separate from
 real-host package-manager acceptance.
 
+`sys_update_trust.bats` checks safe-only against the current remote-code fixture,
+direct and aggregate AWS CLI/Starship/Homebrew plans and authorization,
+passive previews, changed executable bytes and targets, canonical owner roots,
+unsafe managers, failed checksum and version probes, cancellation, completion
+and interrupted phases. Additional owner controls reject a same-prefix binary
+outside its formula and a post-update owner replacement; post-consent manager
+replacements cannot run prefix or inventory observations before rejection.
+Confined recording managers establish these branches; they do not attest
+upstream artifacts or real-host package transactions.
+
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, the absence of package-lock polling and process-name lock helpers, Homebrew analytics and environment-hint regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, bounded probes that merge stderr within the same bound, the active-tool resolver's usable, absent, world-writable, WSL Windows, and macOS placeholder results, closed-stdin bounded/redacted command capture announced as `$ <command>` that keeps the caller's umask, the core duration format with its standalone fallback, color policy, and advisory menu dependency annotations |

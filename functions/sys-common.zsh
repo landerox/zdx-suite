@@ -1142,6 +1142,76 @@ _sys_nvm_global_packages() {
 # Shared by the sys-update*.zsh modules: argument grammars, the trusted program
 # validator, and the Darwin Homebrew askpass guard.
 
+# 0 authorizes; 3 is a successful cancellation for the public caller; 1 is
+# unavailable confirmation. Preserve terminal interruption statuses.
+_sys_update_owner_authorize() {
+  emulate -L zsh
+  local assume_yes="$1" subject="$2"
+  (( assume_yes )) && return 0
+  local -i confirm_rc=0
+  _sys_confirm_ask "Authorize $subject with this installed owner and scope?" \
+    || confirm_rc=$?
+  case "$confirm_rc" in
+    0) return 0 ;;
+    1) _sys_report_result skipped "cancelled"; return 3 ;;
+    130|143) return "$confirm_rc" ;;
+    *)
+      _sys_error "Confirmation is unavailable; review --dry-run and pass --yes explicitly."
+      return 1
+      ;;
+  esac
+}
+
+# Report a failed review observation while preserving actual interruptions.
+_sys_update_owner_failure() {
+  emulate -L zsh
+  local -i failure_rc="$1"
+  _sys_error "$2"
+  (( failure_rc == 130 || failure_rc == 143 )) && return "$failure_rc"
+  return 1
+}
+
+# Read one native Homebrew root; keep probes passive and validate the returned
+# directory through the suite's existing trusted-directory contract.
+_sys_update_homebrew_prefix() {
+  emulate -L zsh
+  local manager="$1" prefix
+  local -i probe_rc=0
+  local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+  local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+  prefix=$(_sys_run_bounded_probe 10 4096 "$manager" --prefix \
+    </dev/null 2>/dev/null) || probe_rc=$?
+  (( probe_rc == 0 )) || return "$probe_rc"
+  [[ "$prefix" == /* && "$prefix" != *[[:cntrl:]]* ]] || return 1
+  _sys_resolve_trusted_dir "$prefix"
+}
+
+# Display native removal observations as advisory child output. They never
+# refresh metadata or remove anything; an unavailable observation blocks review.
+_sys_update_brew_removal_preview() {
+  emulate -L zsh
+  local manager="$1" operation output line
+  local -i probe_rc=0
+  local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+  local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+  for operation in autoremove cleanup; do
+    _sys_section "Homebrew $operation candidates (advisory)"
+    _sys_dim "\$ ${(q)manager} $operation --dry-run"
+    output=$(_sys_run_bounded_probe --merge-stderr 60 262144 \
+      "$manager" "$operation" --dry-run </dev/null) || probe_rc=$?
+    if (( probe_rc != 0 )); then
+      _sys_error "Homebrew $operation preview failed; refusing the update."
+      (( probe_rc == 130 || probe_rc == 143 )) && return "$probe_rc"
+      return 1
+    fi
+    if [[ -n "$output" ]]; then
+      for line in "${(@f)output}"; do _sys_dim "$line"; done
+    else
+      _sys_dim "No current candidates reported."
+    fi
+  done
+}
+
 # Return 0 and set REPLY to "run" or "help"; invalid arguments return 2.
 _sys_update_parse_no_args() {
   local command_name="$1"

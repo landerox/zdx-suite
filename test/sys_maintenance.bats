@@ -479,6 +479,24 @@ assert_no_privilege_network_or_signal() {
   [ ! -s "$MAINT_SIGNAL_LOG" ]
 }
 
+# Existing phase tests record mutations separately from the new passive
+# installed-owner review. Keep the version, root, and removal observations
+# inside the same sandbox executable that the real command fingerprints.
+prepare_brew_review_fixture() {
+  mkdir -p "$HOME/homebrew"
+  mv "$TEST_MOCK_BIN/brew" "$TEST_TEMP_DIR/brew-phase-body"
+  cat >"$TEST_MOCK_BIN/brew" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  --version) printf 'Homebrew 4.5.0\n'; exit 0 ;;
+  --prefix) printf '%s/homebrew\n' "$HOME"; exit 0 ;;
+  'autoremove --dry-run'|'cleanup --dry-run') exit 0 ;;
+esac
+EOF
+  cat "$TEST_TEMP_DIR/brew-phase-body" >>"$TEST_MOCK_BIN/brew"
+  chmod -- 700 "$TEST_MOCK_BIN/brew"
+}
+
 expected_apt_call() {
   printf '%s' \
     'apt-get -o Acquire::Retries=0 -o DPkg::Lock::Timeout=0' \
@@ -2705,6 +2723,8 @@ EOF
   printf '#!/usr/bin/env bash\nexit 97\n' > "$TEST_MOCK_BIN/pipx"
   chmod +x "$TEST_MOCK_BIN/brew" "$TEST_MOCK_BIN/pipx"
 
+  prepare_brew_review_fixture
+
   run run_maintenance_zsh '
     _sys_update_starship_applies() { return 1; }
     _sys_update_fzf_applies() { return 1; }
@@ -3556,9 +3576,16 @@ exit 96
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
 
+  prepare_brew_review_fixture
+
   run run_maintenance_zsh '
     _sys_brew_askpass_program() { REPLY="/usr/bin/false"; }
+    functions[_sys_test_phase_timeout]=$functions[_sys_run_with_timeout]
     _sys_run_with_timeout() {
+      if [[ "$1" != 120 ]]; then
+        _sys_test_phase_timeout "$@"
+        return $?
+      fi
       [[ "$1" == 120 \
         && "$2" == "$TEST_MOCK_BIN/brew" \
         && "$3" == "update" \
@@ -3569,7 +3596,7 @@ EOF
       print -r -- "bounded:$1:${(j: :)@[2,-1]}" >> "$MAINT_MUTATION_LOG"
       return 124
     }
-    update-brew
+    update-brew --yes
   ' brew unavailable darwin
 
   [ "$status" -eq 1 ]
@@ -3587,12 +3614,14 @@ exit 97
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
 
+  prepare_brew_review_fixture
+
   run run_maintenance_zsh '
     _sys_brew_askpass_program() {
       print -r -- "askpass:unavailable" >> "$MAINT_MUTATION_LOG"
       return 1
     }
-    update-brew
+    update-brew --yes
   ' brew unavailable darwin
 
   [ "$status" -eq 1 ]
@@ -3657,9 +3686,11 @@ exit 0
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
 
+  prepare_brew_review_fixture
+
   run run_maintenance_zsh '
     _sys_brew_askpass_trusted_false() { return 1; }
-    update-brew || return $?
+    update-brew --yes || return $?
     local -a leftovers=("$TMPDIR"/zdx-sys-askpass.*(N))
     (( ${#leftovers} == 0 )) || return 96
   ' brew unavailable darwin
@@ -3680,9 +3711,31 @@ EOF
   chmod 777 "$TEST_TEMP_DIR/shared-tmp"
   run run_maintenance_zsh '
     _sys_brew_askpass_trusted_false() { return 1; }
-    TMPDIR="$TEST_TEMP_DIR/shared-tmp" update-brew
+    TMPDIR="$TEST_TEMP_DIR/shared-tmp" update-brew --yes
   ' brew unavailable darwin
 
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Homebrew executable failed identity and checksum validation"* ]]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+
+  # A later temporary-root change must still reach the askpass refusal after
+  # successful executable checks. Preserve both real validation services.
+  run run_maintenance_zsh '
+    _sys_brew_askpass_trusted_false() { return 1; }
+    local -i _maint_after_consent=0
+    functions[_maint_native_owner_authorize]="${functions[_sys_update_owner_authorize]}"
+    functions[_maint_native_homebrew_prefix]="${functions[_sys_update_homebrew_prefix]}"
+    _sys_update_owner_authorize() {
+      _maint_native_owner_authorize "$@" || return
+      _maint_after_consent=1
+    }
+    _sys_update_homebrew_prefix() {
+      _maint_native_homebrew_prefix "$@" || return
+      (( ! _maint_after_consent )) || TMPDIR="$TEST_TEMP_DIR/shared-tmp"
+      return 0
+    }
+    update-brew --yes
+  ' brew unavailable darwin
   [ "$status" -eq 1 ]
   [[ "$output" == *"askpass guard is unavailable"* ]]
   [ ! -s "$MAINT_MUTATION_LOG" ]
@@ -3714,6 +3767,8 @@ EOF
   export HOMEBREW_NO_AUTO_UPDATE=1
   export SUDO_ASKPASS="$TEST_TEMP_DIR/host-askpass"
 
+  prepare_brew_review_fixture
+
   run run_maintenance_zsh '
     brew() {
       print -r -- "unexpected:brew-function:$*" >> "$MAINT_MUTATION_LOG"
@@ -3727,7 +3782,7 @@ EOF
       print -r -- "unexpected:askpass-guard" >> "$MAINT_MUTATION_LOG"
       return 97
     }
-    update-brew <<< "untrusted-brew-input"
+    update-brew --yes <<< "untrusted-brew-input"
   ' brew
 
   [ "$status" -eq 0 ]
@@ -3747,7 +3802,9 @@ EOF
   chmod +x "$TEST_MOCK_BIN/brew"
   export HOMEBREW_NO_ENV_HINTS=0
 
-  run run_maintenance_zsh 'update-brew' brew
+  prepare_brew_review_fixture
+
+  run run_maintenance_zsh 'update-brew --yes' brew
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
@@ -3763,6 +3820,7 @@ EOF
   cat <<'EOF' > "$TEST_MOCK_BIN/brew"
 #!/usr/bin/env bash
 case "$*" in
+  --version) printf 'Homebrew 4.5.0\n' ;;
   --prefix) printf '%s\n' "$MAINT_OWNED_BREW_PREFIX" ;;
   'list awscli'|'list starship') exit 0 ;;
   'upgrade --no-ask awscli'|'upgrade --no-ask starship')
@@ -3790,8 +3848,8 @@ EOF
 
   run run_maintenance_zsh '
     path=("$MAINT_OWNED_BREW_PREFIX/bin" $path)
-    update-awscli || return $?
-    update-starship
+    update-awscli --yes || return $?
+    update-starship --yes
   ' brew
 
   [ "$status" -eq 0 ]

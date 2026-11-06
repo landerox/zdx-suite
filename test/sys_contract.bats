@@ -238,6 +238,15 @@ assert_contract_matches() {
       [[ "$update_system_specs" == *"--verbose"* \
         && "$update_apt_specs" == *"--verbose"* ]] || return 7
 
+      local owner_command owner_specs nested_owner_specs
+      for owner_command in update-brew update-awscli update-starship; do
+        owner_specs=$(capture_specs "$owner_command" "")
+        nested_owner_specs=$(capture_specs sys-menu "$owner_command" "")
+        [[ "$owner_specs" == "$nested_owner_specs" \
+          && "$owner_specs" == *"--dry-run"* \
+          && "$owner_specs" == *"--yes"* ]] || return 9
+      done
+
       local clean_help_specs port_help_specs
       clean_help_specs=$(capture_specs \
         clean-system --quick --help "")

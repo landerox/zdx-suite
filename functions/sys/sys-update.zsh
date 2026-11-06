@@ -231,7 +231,7 @@ _sys_update_step_scope() {
       REPLY="Homebrew formulae and casks"
       _sys_has_capability "os:darwin" && REPLY+=" · sudo for casks"
       ;;
-    update-starship)      REPLY="Cargo-installed binary" ;;
+    update-starship)      REPLY="Installed owner · remote code" ;;
     update-fzf)           REPLY="Git checkout · remote code" ;;
     update-gcloud)        REPLY="gcloud components" ;;
     update-awscli)        REPLY="AWS CLI owner" ;;
@@ -248,7 +248,7 @@ _sys_update_step_scope() {
 # Returns 0 for entries that run mutable upstream code.
 _sys_update_step_remote_code() {
   case "${1:-}" in
-    update-fzf|update-omz|update-zsh-plugins) return 0 ;;
+    update-awscli|update-starship|update-fzf|update-omz|update-zsh-plugins) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -349,6 +349,9 @@ _sys_run_update_step() {
     (( verbose )) && apt_args+=(--verbose)
     "$command_name" "${apt_args[@]}"
   elif [[ "$command_name" == "update-snap" \
+    || "$command_name" == "update-brew" \
+    || "$command_name" == "update-awscli" \
+    || "$command_name" == "update-starship" \
     || "$command_name" == "update-fzf" \
     || "$command_name" == "update-omz" \
     || "$command_name" == "update-zsh-plugins" ]]; then
@@ -555,7 +558,7 @@ _sys_update_run_previews() {
   local -i preview_failures=0 index=0 preview_rc=0
   for entry in "$@"; do
     case "${entry#*;}" in
-      update-apt|update-snap|update-fzf|update-omz|update-zsh-plugins)
+      update-apt|update-snap|update-brew|update-awscli|update-starship|update-fzf|update-omz|update-zsh-plugins)
         previews+=("$entry")
         ;;
       _sys_update_platform_packages)
@@ -670,7 +673,7 @@ Options:
   --verbose, -v     Show complete APT invocations for operations that run.
   --include-phased-updates
                     Include APT phased updates in the authorized transaction.
-  --safe-only       Exclude mutable Git and script update workflows.
+  --safe-only       Exclude all update steps classified as remote code.
   --include-remote-code
                     Explicitly affirm their default inclusion.
   --help, -h        Show this help.

@@ -73,7 +73,7 @@ case "$subcommand" in
           '(-h --help -y --yes)'{-y,--yes}'[Confirm the aggregate update plan]' \
           '(-h --help -v --verbose)'{-v,--verbose}'[Show complete APT invocations for executed operations]' \
           '(-h --help --include-phased-updates)--include-phased-updates[Include APT phased updates in the transaction]' \
-          '(-h --help --safe-only --include-remote-code)--safe-only[Exclude mutable Git and script-owned update workflows]' \
+          '(-h --help --safe-only --include-remote-code)--safe-only[Exclude all steps classified as remote code]' \
           '(-h --help --safe-only --include-remote-code)--include-remote-code[Explicitly affirm default mutable-code inclusion]'
         ;;
       update-apt)
@@ -84,13 +84,13 @@ case "$subcommand" in
           '(-h --help -v --verbose)'{-v,--verbose}'[Show complete APT invocations for executed operations]' \
           '(-h --help --include-phased-updates)--include-phased-updates[Include phased updates in the APT transaction]'
         ;;
-      update-snap|update-fzf|update-omz|update-zsh-plugins)
+      update-snap|update-brew|update-awscli|update-starship|update-fzf|update-omz|update-zsh-plugins)
         _arguments \
           '(- *)'{-h,--help}'[Show command usage]' \
           '(-h --help --dry-run)--dry-run[Display the update plan without changing state]' \
           '(-h --help -y --yes)'{-y,--yes}'[Confirm the update plan]'
         ;;
-      update-brew|update-gcloud|update-awscli|update-starship|update-uv-system|update-pipx|update-node|update-rust)
+      update-gcloud|update-uv-system|update-pipx|update-node|update-rust)
         _arguments \
           '(- *)'{-h,--help}'[Show command usage]'
         ;;

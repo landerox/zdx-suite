@@ -490,10 +490,11 @@ automatically. Its contract covers:
   `--include-phased-updates` APT policy on the aggregate;
 - maximum-scope default execution of every applicable installed updater,
   including Git-owned fzf, Oh My Zsh, and custom Zsh plugin updates;
-- an explicit `--safe-only` mode that excludes those mutable-code origins,
+- an explicit `--safe-only` mode that excludes all five current `remote-code`
+  fixture entries: AWS CLI, Starship, fzf, Oh My Zsh, and custom Zsh plugins,
   while `--include-remote-code` remains an explicit affirmation of the default;
-- direct plan, dry-run, and confirmation controls for APT, Snap, Git-owned
-  fzf, Oh My Zsh, and custom Zsh plugin updates;
+- direct plan, dry-run, and confirmation controls for APT, Snap, Homebrew,
+  AWS CLI, Starship, Git-owned fzf, Oh My Zsh, and custom Zsh plugin updates;
 - fast-forward-only pulls for Git-owned update paths;
 - origin and current-commit display before executable-code updates;
 - one aggregate authorization over a frozen set of applicable step entries:
@@ -557,7 +558,7 @@ execution. `--yes` authorizes the displayed entries and their documented
 dynamic scopes; it does not bypass capability, dependency, owner, origin, or
 target validation. The interactive aggregate confirmation grants that same
 authorization, so entries do not prompt individually. The aggregate dry-run
-runs non-mutating detailed previews for APT, Snap, and applicable remote-code
+runs non-mutating detailed previews for APT, Snap, Homebrew, and applicable remote-code
 steps. A Snap preview error or deadline is a visible failed step, never a
 successful "no pending updates" result. Direct update commands that do not
 advertise `--dry-run` retain their narrower command-specific interface; the
@@ -936,6 +937,26 @@ Homebrew's `Hide these hints with HOMEBREW_NO_ENV_HINTS=1` advice and its
 cleanup hint while Homebrew's normal output stays visible. Every `update-brew`
 phase also sets `HOMEBREW_CURL_RETRIES=0`, and the metadata refresh has a
 120-second deadline.
+
+`update-brew [--dry-run] [-y|--yes]` reviews the native Homebrew owner and
+canonical installation prefix and prints the fixed `update`,
+`upgrade --no-ask`, `autoremove`, and `cleanup` arguments before execution.
+Its passive preview includes bounded `autoremove --dry-run` and
+`cleanup --dry-run` observations. Failed observations block the update.
+These removal candidates are advisory: Homebrew owns final package, unused
+dependency, stale-download, and superseded-version selection after refresh
+and upgrade. Confirmation authorizes that disclosed dynamic native scope.
+Without an available terminal, execution requires `--yes`. The command keeps
+the fixture's `mutating` native package-backend classification; it has no
+exemption from review and confirmation for its removal phases.
+
+The installed updater path, canonical target, owner, writable mode, file
+identity, and SHA-256 content are frozen before review and revalidated before
+delegation. `sha256sum` or `shasum` is required for this observation. Homebrew's
+prefix must remain the reviewed prefix, and each subsequent Homebrew mutation
+revalidates the reviewed executable again. A missing Homebrew installation is
+never installed, and a failed version or identity probe blocks delegation.
+
 Every Homebrew phase also receives `/dev/null` as stdin. That variable disables
 only curl-level retries. Homebrew 6 retains
 internal `DownloadQueue` retry behavior and download-lock waiting, with no
@@ -1058,6 +1079,28 @@ bundle installation and points to AWS's detached-signature procedure.
 `update-starship` updates only a Homebrew- or Cargo-owned installation and
 refuses an installation whose owner cannot be established. Neither command
 downloads and executes an unverified installer script.
+
+Both commands accept `[--dry-run] [-y|--yes]`, display the active program,
+installed owner, canonical installation scope, current versions, and exact
+fixed owner arguments, and require an explicit trust decision. Dry-run is
+passive. Their active program and manager use the same identity and SHA-256
+freeze and immediate revalidation as Homebrew. Failed version probes block
+delegation. After consent, both reviewed executables are compared before
+ownership observations, and again immediately before mutation. A changed
+manager cannot run a prefix or inventory probe first. Successful updates
+re-prove the newly active executable's owner before version reporting.
+Non-interactive execution requires `--yes`; a declined interactive review
+succeeds as a cancellation. The aggregate forwards its authorization
+as `--yes` and forwards `--dry-run` for detailed previews. The installed owner
+retains upstream artifact selection, transport, and release-verification
+responsibility under the development contract's remote-code exception.
+
+The five current fixture classifications are the bounded safe-only policy,
+checked against the aggregate predicate by regression tests. They do not
+establish compliance for every legacy vendor self-updater currently classified
+as `mutating`. That classification and control gap remains audit work; future
+dynamic vendor self-updaters must satisfy the complete remote-code delegation
+exception in `development.md` rather than inheriting an implicit exemption.
 
 `update-node` resolves an external fnm to one absolute path, or uses an
 already-loaded nvm installation. Installation, default selection, and activation
