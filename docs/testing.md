@@ -347,6 +347,10 @@ fallback; a genuinely missing tracking ref still uses the actual remote.
 command canaries in status and plans, grouped option replacement and checking,
 preserved unrelated option operands, and rejection of missing option values.
 
+`git_temporary_safety.bats` exercises local record and fingerprint allocation
+under unsafe leaves and writable ancestors, message staging after amend
+confirmation, trusted aliases, standalone validation, and cleanup.
+
 | File | Covered boundary |
 | --- | --- |
 | `git_contract.bats` | Frozen 21-command fixture; module, function, menu, help, dispatcher, nested-completion, and direct-completion parity, including a `git-push` grammar without a tag mode, the stash action grammars, `git-discard --include-untracked` only after `--all`, the amend and unstage flags, the exclusive `git-switch` change modes, and `--json` only on read-only commands |

@@ -43,7 +43,11 @@ _git_changes_diff_fingerprint() {
   local index_hash=""
   local -i command_code=0
 
-  temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-state.XXXXXX") || {
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe temporary directory."
+    return 1
+  }
+  temp_dir=$(command mktemp -d "$REPLY/zdx-git-state.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }
@@ -92,7 +96,11 @@ _git_changes_path_fingerprint() {
   local fingerprint=""
   local -i command_code=0
 
-  temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-path.XXXXXX") || {
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe temporary directory."
+    return 1
+  }
+  temp_dir=$(command mktemp -d "$REPLY/zdx-git-path.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }
@@ -1658,8 +1666,12 @@ git-amend() {
   local -i command_code=0
   {
     if [[ "$message_given" == "yes" ]]; then
+      _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+        _git_error "Unsafe temporary directory."
+        return 1
+      }
       message_dir=$(umask 077; command mktemp -d \
-        "${TMPDIR:-/tmp}/zdx-git-amend.XXXXXX" 2>/dev/null) || {
+        "$REPLY/zdx-git-amend.XXXXXX" 2>/dev/null) || {
         _git_error "Unable to create a private temporary directory."
         return 1
       }
