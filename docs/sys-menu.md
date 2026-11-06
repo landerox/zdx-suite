@@ -441,6 +441,13 @@ so `sys-ports` resolves only listener targets.
 
 ### Resource identity and privilege controls
 
+The process browser obtains its PID, UID, command and normalized start value
+in one bounded native batch. Its private selection record binds that observed
+identity; selection cannot adopt a replacement process's fresh fingerprint.
+The public six-field `--list` format stays unchanged. Port ownership is
+rescanned after authentication, before the last process fingerprint check,
+including selection without an explicit public port operand.
+
 Process mutations capture a fingerprint containing the PID, UID, start value,
 and command name. The complete fingerprint is compared again after
 confirmation and immediately before signaling. PID 1, the current shell, and
@@ -1141,6 +1148,14 @@ as `mutating`. That classification and control gap remains audit work; future
 dynamic vendor self-updaters must satisfy the complete remote-code delegation
 exception in `development.md` rather than inheriting an implicit exemption.
 
+Their Homebrew mutations run only the reviewed absolute manager with
+invocation-local retry, analytics, hint and auto-update controls. An inherited
+`SUDO_ASKPASS` is removed. Darwin requires the fixed failing askpass guard,
+released through `always` even on failure or interruption; child status is
+preserved. Both reviewed executable fingerprints are renewed after guard
+setup and immediately before delegation. This guard does not replace
+installation-owner checks.
+
 `update-node` resolves an external fnm to one absolute path, or uses an
 already-loaded nvm installation. Installation, default selection, and activation
 are checked separately. A failed default or activation phase preserves the
@@ -1274,6 +1289,14 @@ Cleanup and telemetry follow the destructive-operation and persisted-state
 contracts in [`development.md`](development.md).
 
 ### Cleanup
+
+Direct Snap, journal, APT-cache and foreign-owner AWS cleanup announce their
+exact narrow operations before authenticating once. Each consumer rechecks
+its backend or resource after authentication, then uses only `sudo -n`.
+AWS binds the same root, current version and owner before discovering removal
+candidates. Aggregate cleanup makes one authentication attempt and keeps
+nested privilege nonprompting. Ordinary authentication failure may leave
+confirmed user-owned cleanup available; `130` or `143` stops later work.
 
 `clean-system` calculates and displays its applicable steps before
 execution. It accepts `--quick` or `--deep`, `--dry-run`, and `--yes`; without

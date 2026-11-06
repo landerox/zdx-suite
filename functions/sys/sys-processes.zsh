@@ -98,37 +98,53 @@ _sys_processes_backend() {
   esac
 }
 
-# stdout TSV: process, PID, UID, CPU percent, memory percent, command name.
-_sys_processes_records() {
+# One bounded native snapshot; the private browser form adds a start value.
+_sys_processes_collect_records() {
   emulate -L zsh
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
+  local -i include_start="${1:-0}"
   local process_backend
   process_backend=$(_sys_processes_backend) || return $?
 
-  local process_output
+  local process_output fields=""
   case "$process_backend" in
     procps)
+      fields=pid=,uid=,pcpu=,pmem=
+      (( include_start )) && fields+=,lstart=
+      fields+=,comm=
       process_output=$(
         _sys_run_with_timeout 5 env LC_ALL=C \
-          ps -eo pid=,uid=,pcpu=,pmem=,comm= --sort=-pcpu 2>/dev/null
+          ps -eo "$fields" --sort=-pcpu 2>/dev/null
       ) || return $?
       ;;
     bsd-ps)
       # -r sorts BSD ps output by current CPU usage, like procps --sort=-pcpu.
+      fields=pid=,uid=,%cpu=,%mem=
+      (( include_start )) && fields+=,lstart=
+      fields+=,comm=
       process_output=$(
         _sys_run_with_timeout 5 env LC_ALL=C \
-          ps -axro pid=,uid=,%cpu=,%mem=,comm= 2>/dev/null
+          ps -axro "$fields" 2>/dev/null
       ) || return $?
       ;;
   esac
 
   local line raw_pid process_uid cpu_percent memory_percent command_name pid
+  local weekday month day clock year start_value
   local -a process_lines=()
   [[ -n "$process_output" ]] && process_lines=("${(@f)process_output}")
   for line in "${process_lines[@]}"; do
-    read -r raw_pid process_uid cpu_percent memory_percent command_name \
-      <<< "$line"
+    if (( include_start )); then
+      read -r raw_pid process_uid cpu_percent memory_percent \
+        weekday month day clock year command_name <<< "$line"
+      [[ -n "$weekday" && -n "$month" && "$day" == <-> \
+        && -n "$clock" && "$year" == <-> && -n "$command_name" ]] || return 1
+      start_value="$weekday $month $day $clock $year"
+    else
+      read -r raw_pid process_uid cpu_percent memory_percent command_name \
+        <<< "$line"
+    fi
     pid=$(_sys_processes_normalize_pid "$raw_pid") || continue
     _sys_processes_uid_valid "$process_uid" || continue
     [[ "$cpu_percent" =~ '^[0-9]+([.][0-9]+)?$' ]] \
@@ -137,10 +153,19 @@ _sys_processes_records() {
       || memory_percent="0.0"
     command_name=$(_sys_processes_safe_text "${command_name:-unknown}")
 
-    printf 'process\t%s\t%s\t%s\t%s\t%s\n' \
-      "$pid" "$process_uid" "$cpu_percent" "$memory_percent" "$command_name"
+    if (( include_start )); then
+      printf 'process\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$pid" "$process_uid" "$cpu_percent" "$memory_percent" "$command_name" "$start_value"
+    else
+      printf 'process\t%s\t%s\t%s\t%s\t%s\n' \
+        "$pid" "$process_uid" "$cpu_percent" "$memory_percent" "$command_name"
+    fi
   done
 }
+
+# Public six-field data remains unchanged; start is private to the browser.
+_sys_processes_records() { _sys_processes_collect_records 0; }
+_sys_processes_snapshot() { _sys_processes_collect_records 1; }
 
 # stdout TSV: process, PID, UID, stable start value, command name.
 _sys_processes_fingerprint() {
@@ -165,8 +190,9 @@ _sys_processes_fingerprint() {
     _sys_run_with_timeout 3 env LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null
   ) || return 1
 
-  start_value=$(_sys_processes_safe_text "$start_value")
-  final_start=$(_sys_processes_safe_text "$final_start")
+  local -a start_words=( ${=start_value} ) final_words=( ${=final_start} )
+  start_value="${(j: :)start_words}"
+  final_start="${(j: :)final_words}"
   command_name=$(_sys_processes_safe_text "$command_name")
   [[ -n "$start_value" && "$start_value" == "$final_start" \
     && -n "$command_name" ]] || return 1
@@ -201,6 +227,9 @@ _sys_processes_fingerprint_matches() {
 _sys_processes_signal_validated() {
   local expected_fingerprint="${1:-}"
   local signal_name="${2:-TERM}"
+  local -a revalidate=("${@:3}")
+  (( ${#revalidate} == 0 )) \
+    || [[ "${revalidate[1]}" == _sys_ports_signal_target_matches ]] || return 2
 
   case "$signal_name" in
     TERM|KILL) ;;
@@ -216,6 +245,9 @@ _sys_processes_signal_validated() {
 
   _sys_info "Planned operation: send SIG${signal_name} to PID $pid ($command_name)."
   if (( EUID == 0 )) || [[ "$process_uid" == "$EUID" ]]; then
+    if (( ${#revalidate} )); then
+      "${revalidate[@]}" || return $?
+    fi
     _sys_processes_fingerprint_matches "$expected_fingerprint" || {
       _sys_error "Process identity changed before signaling PID $pid; no signal was sent."
       return 1
@@ -230,14 +262,21 @@ _sys_processes_signal_validated() {
       _sys_error "PID $pid belongs to UID $process_uid and sudo is unavailable."
       return 1
     fi
-    _sys_info "Privileged operation: sudo kill -s $signal_name $pid"
+    _sys_info "Privileged operation: sudo -n kill -s $signal_name $pid"
     _sys_processes_fingerprint_matches "$expected_fingerprint" || {
       _sys_error "Process identity changed before requesting privilege; no signal was sent."
       return 1
     }
+    if (( ${#revalidate} )); then
+      "${revalidate[@]}" || return $?
+    fi
     if ! sudo -v >&2; then
       _sys_error "sudo authentication failed; no signal was sent."
       return 1
+    fi
+    # Socket discovery may take time; bind the PID again after that query.
+    if (( ${#revalidate} )); then
+      "${revalidate[@]}" || return $?
     fi
     _sys_processes_fingerprint_matches "$expected_fingerprint" || {
       _sys_error "Process identity changed during authentication; no signal was sent."
@@ -257,6 +296,7 @@ _sys_processes_terminate() {
   local raw_pid="${1:-}"
   local force_signal="${2:-0}"
   local assume_yes="${3:-0}"
+  local selected_fingerprint="${4:-}"
   local pid
 
   pid=$(_sys_processes_normalize_pid "$raw_pid") || {
@@ -265,11 +305,21 @@ _sys_processes_terminate() {
   }
   _sys_processes_validate_signal_target "$pid" || return $?
 
-  local fingerprint
-  fingerprint=$(_sys_processes_fingerprint "$pid") || {
-    _sys_error "PID $pid does not identify a stable running process."
-    return 1
-  }
+  local fingerprint="$selected_fingerprint"
+  if [[ -n "$fingerprint" ]]; then
+    _sys_processes_validate_fingerprint "$fingerprint" || return 2
+    local -a selected_fields=("${(@ps:\t:)fingerprint}")
+    [[ "${selected_fields[2]}" == "$pid" ]] \
+      && _sys_processes_fingerprint_matches "$fingerprint" || {
+      _sys_error "The selected process changed; no signal was sent."
+      return 1
+    }
+  else
+    fingerprint=$(_sys_processes_fingerprint "$pid") || {
+      _sys_error "PID $pid does not identify a stable running process."
+      return 1
+    }
+  fi
 
   _sys_processes_validate_fingerprint "$fingerprint" || return 1
   local -a fingerprint_fields=("${(@ps:\t:)fingerprint}")
@@ -302,7 +352,7 @@ _sys_processes_interactive() {
   fi
 
   local records_output
-  records_output=$(_sys_processes_records) || return $?
+  records_output=$(_sys_processes_snapshot) || return $?
   local -a process_records=()
   [[ -n "$records_output" ]] && process_records=("${(@f)records_output}")
   if (( ${#process_records} == 0 )); then
@@ -311,11 +361,11 @@ _sys_processes_interactive() {
   fi
 
   local -a fzf_records=()
-  local record record_type pid process_uid cpu_percent memory_percent command_name
+  local record record_type pid process_uid cpu_percent memory_percent command_name start_value
   local display_label
   for record in "${process_records[@]}"; do
     IFS=$'\t' read -r \
-      record_type pid process_uid cpu_percent memory_percent command_name \
+      record_type pid process_uid cpu_percent memory_percent command_name start_value \
       <<< "$record"
     [[ "$record_type" == "process" && "$pid" == <-> \
       && "$process_uid" == <-> ]] || continue
@@ -358,7 +408,7 @@ _sys_processes_interactive() {
   }
   selected_record="${selected_record#*$'\t'}"
   IFS=$'\t' read -r \
-    record_type pid process_uid cpu_percent memory_percent command_name \
+    record_type pid process_uid cpu_percent memory_percent command_name start_value \
     <<< "$selected_record"
   [[ "$record_type" == "process" && "$pid" == <-> \
     && "$process_uid" == <-> ]] || {
@@ -366,12 +416,18 @@ _sys_processes_interactive() {
     return 1
   }
 
+  local selected_fingerprint="process"$'\t'"$pid"$'\t'"$process_uid"$'\t'"$start_value"$'\t'"$command_name"
+  _sys_processes_fingerprint_matches "$selected_fingerprint" || {
+    _sys_error "The selected process changed; no signal was sent."
+    return 1
+  }
+
   case "$selected_key" in
     ctrl-t)
-      _sys_processes_terminate "$pid" 0 0
+      _sys_processes_terminate "$pid" 0 0 "$selected_fingerprint"
       ;;
     ctrl-k)
-      _sys_processes_terminate "$pid" 1 0
+      _sys_processes_terminate "$pid" 1 0 "$selected_fingerprint"
       ;;
     "")
       local fingerprint

@@ -1468,6 +1468,34 @@ _sys_update_preauthenticate() {
   return 0
 }
 
+# Announce an authorized narrow scope, authenticate once, and return only the
+# final nonprompting prefix. The caller revalidates its resource after this.
+# An aggregate scopes _SYS_PRIVILEGE_NONINTERACTIVE=1 after its authentication.
+_sys_privilege_authorize() {
+  emulate -L zsh
+  (( $# > 0 )) || return 2
+  local operation
+  local -a prefix=()
+  _sys_resolve_privilege_prefix || return $?
+  prefix=("${reply[@]}")
+  (( ${#prefix} )) && prefix=(sudo -n)
+  local label="${(j: :)prefix}"
+  for operation in "$@"; do
+    _sys_info "Privileged operation: ${label:+$label }$operation"
+  done
+  if (( ${#prefix} )) && [[ "${_SYS_PRIVILEGE_NONINTERACTIVE:-0}" == 0 ]]; then
+    _sys_info "Privileged authentication: sudo -v"
+    local -i authentication_rc=0
+    command sudo -v </dev/null >&2 || authentication_rc=$?
+    if (( authentication_rc != 0 )); then
+      _sys_error "sudo authentication failed; no privileged mutation was started."
+      return "$authentication_rc"
+    fi
+  fi
+  _sys_capabilities_refresh || return 1
+  reply=("${prefix[@]}")
+}
+
 # --- Sudo timestamp refresher -----------------------------------------------
 # sudo keeps its timestamp per terminal session by default (sudoers
 # timestamp_type=tty): a refresh counts only when it runs on the controlling

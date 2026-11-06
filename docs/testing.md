@@ -326,6 +326,14 @@ An early loader write failure preserves both targets and its actual status. Tran
 platform mappings are fixtures; no upstream executable or native package
 transaction is used.
 
+`sys_resources.bats` binds selected process UID, command and start value, and
+rescans port ownership after authentication before the final process check.
+`sys_privilege_transactions.bats` covers direct/aggregate authentication,
+post-authentication backend and AWS-root changes, independent user cleanup,
+returned `130`/`143`, and guarded AWS/Starship Homebrew lifecycles. Exact
+recorders intercept all signals and privileged mutations; Darwin askpass is
+modeled, not native host acceptance.
+
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, the absence of package-lock polling and process-name lock helpers, Homebrew analytics and environment-hint regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, bounded probes that merge stderr within the same bound, the active-tool resolver's usable, absent, world-writable, WSL Windows, and macOS placeholder results, closed-stdin bounded/redacted command capture announced as `$ <command>` that keeps the caller's umask, the core duration format with its standalone fallback, color policy, and advisory menu dependency annotations |

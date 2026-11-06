@@ -254,7 +254,7 @@ EOF
 } >> "$PRIVILEGE_APT_LOG"
 EOF
   chmod +x "$TEST_MOCK_BIN/apt-get"
-  export MOCK_SUDO_ALLOW="apt-get"
+  export MOCK_SUDO_ALLOW="__validate__,apt-get"
 
   run run_zsh "
     _SYS_CAPABILITIES=(
@@ -262,6 +262,7 @@ EOF
       privilege direct
     )
     _SYS_CAPABILITIES_READY=1
+    _sys_capabilities_refresh() { return 0; }
     _sys_clean_step_apt_cache
   "
 
@@ -277,6 +278,7 @@ EOF
       privilege sudo
     )
     _SYS_CAPABILITIES_READY=1
+    _sys_capabilities_refresh() { return 0; }
     _sys_clean_step_apt_cache
   "
 
@@ -285,7 +287,7 @@ EOF
   if (( EUID == 0 )); then
     [ ! -s "$MOCK_SUDO_LOG" ]
   else
-    [ "$(cat "$MOCK_SUDO_LOG")" = "sudo apt-get clean" ]
+    [ "$(cat "$MOCK_SUDO_LOG")" = $'sudo -v\nsudo -n apt-get clean' ]
   fi
 }
 

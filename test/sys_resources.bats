@@ -20,6 +20,10 @@ setup() {
 set -u
 
 args=" $* "
+if [[ ( "$args" == *" -eo "* || "$args" == *" -axro "* ) && "$args" == *lstart=* ]]; then
+  printf '4242 %s 1.5 0.2 Fri Jul 24 12:00:00 2026 node\n4343 %s 0.5 0.1 Fri Jul 24 12:00:00 2026 worker\n' "$MOCK_PROCESS_UID" "$MOCK_PROCESS_UID"
+  exit 0
+fi
 if [[ "$args" == *" -eo "* ]]; then
   printf '%s\n' \
     "4242 ${MOCK_PROCESS_UID} 1.5 0.2 node" \
@@ -172,10 +176,19 @@ EOF
 cat <<'EOF' > "$TEST_MOCK_BIN/sudo"
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*" >> "$RESOURCE_LOG"
-if [[ "${1:-}" == "-v" ]]; then
-  : > "$SUDO_AUTH_MARKER"
-fi
-[[ "${MOCK_SUDO_FAIL:-0}" != "1" ]]
+[[ "${MOCK_SUDO_FAIL:-0}" != "1" ]] || exit 1
+case "$*" in
+  -v)
+    (( $# == 1 )) || exit 98
+    : > "$SUDO_AUTH_MARKER"
+    ;;
+  '-n kill -s TERM 4242'|'-n kill -s KILL 4242'|\
+  '-n systemctl start -- demo.service'|'-n systemctl stop -- demo.service'|\
+  '-n systemctl restart -- demo.service') ;;
+  *) exit 98 ;;
+esac
+# Deliberately record only; never execute a real signal or service operation.
+exit 0
 EOF
   chmod +x "$TEST_MOCK_BIN/sudo"
 
@@ -632,4 +645,164 @@ MOCK
   '
   [ "$status" -eq 0 ]
   [ "$output" = "lsof" ]
+}
+
+# One native ps batch binds the private browser record's start value. All PIDs
+# are synthetic and every signal remains intercepted by run_resources_zsh.
+write_selected_process_ps() {
+  export PICKER_MARKER="$TEST_TEMP_DIR/picked" PROCESS_BATCH_LOG="$TEST_TEMP_DIR/process-batch.log"
+  : > "$PROCESS_BATCH_LOG"
+  cat > "$TEST_MOCK_BIN/ps" <<'MOCK'
+#!/usr/bin/env bash
+args=" $* "
+if [[ "$args" == *' -eo '* || "$args" == *' -axro '* ]]; then
+  printf 'batch\n' >> "$PROCESS_BATCH_LOG"
+  if [[ "$args" == *lstart=* ]]; then
+    printf '4242 %s 1.5 0.2 Fri Jul 24 12:00:00 2026 node\n' "$MOCK_PROCESS_UID"
+  else
+    printf '4242 %s 1.5 0.2 node\n' "$MOCK_PROCESS_UID"
+  fi
+  exit 0
+fi
+[[ "$args" == *' -p 4242 '* ]] || exit 97
+phase=before
+[[ ! -e "$PICKER_MARKER" ]] || phase=after
+printf 'fingerprint:%s\n' "$phase" >> "$PROCESS_BATCH_LOG"
+case "$args" in
+  *' -o uid='*)
+    value="$MOCK_PROCESS_UID"
+    [[ "$phase:${MOCK_PICK_REPLACE:-}" != after:uid ]] || value=$((value + 1))
+    printf '%s\n' "$value" ;;
+  *' -o comm='*)
+    value=node
+    [[ "$phase:${MOCK_PICK_REPLACE:-}" != after:command ]] || value=other
+    printf '%s\n' "$value" ;;
+  *' -o lstart='*)
+    value='Fri Jul 24 12:00:00 2026'
+    [[ "$phase:${MOCK_PICK_REPLACE:-}" != after:start ]] || value='Fri Jul 24 12:00:01 2026'
+    printf '%s\n' "$value" ;;
+  *) exit 97 ;;
+esac
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/ps"
+}
+
+@test "sys privilege transactions: browser identity changes fail before confirmation" {
+  write_selected_process_ps
+  local replacement
+  for replacement in command uid start; do
+    export MOCK_PICK_REPLACE="$replacement"
+    rm -f "$PICKER_MARKER"
+    : > "$RESOURCE_LOG"
+    : > "$PROCESS_BATCH_LOG"
+    run run_resources_zsh '
+      _sys_fzf_capture() {
+        local selected=""
+        IFS= read -r selected || return 90
+        : > "$PICKER_MARKER"
+        REPLY=$'"'"'ctrl-t\n'"'"'"$selected"
+      }
+      _sys_confirm() { print unexpected >> "$RESOURCE_LOG"; return 0; }
+      sys-processes
+    '
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"selected process changed"* ]]
+    [ ! -s "$RESOURCE_LOG" ]
+    [ "$(grep -c '^batch$' "$PROCESS_BATCH_LOG")" -eq 1 ]
+    run grep -F 'fingerprint:before' "$PROCESS_BATCH_LOG"
+    [ "$status" -eq 1 ]
+  done
+}
+
+@test "sys privilege transactions: a frozen process record cannot be replaced by a fresh occupant" {
+  write_selected_process_ps
+  export MOCK_PICK_REPLACE=start
+  : > "$PICKER_MARKER"
+  run run_resources_zsh '
+    local selected=$'"'"'process\t4242\t'"'"'"$MOCK_PROCESS_UID"$'"'"'\tFri Jul 24 12:00:00 2026\tnode'"'"'
+    _sys_processes_terminate 4242 0 1 "$selected"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"selected process changed"* ]]
+  [ ! -s "$RESOURCE_LOG" ]
+}
+
+@test "sys privilege transactions: an unchanged frozen process remains signalable" {
+  write_selected_process_ps
+  run run_resources_zsh '
+    local selected=$'"'"'process\t4242\t'"'"'"$MOCK_PROCESS_UID"$'"'"'\tFri Jul 24 12:00:00 2026\tnode'"'"'
+    _sys_processes_terminate 4242 0 1 "$selected"
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RESOURCE_LOG")" = '-s TERM 4242' ]
+}
+
+@test "sys privilege transactions: listener closure after sudo authentication prevents signaling" {
+  export MOCK_PROCESS_UID="$(( $(id -u) + 1 ))"
+  cat > "$TEST_MOCK_BIN/lsof" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == *-iTCP* && ! -e "$SUDO_AUTH_MARKER" ]] || exit 1
+printf 'p4242\ncnode\nPTCP\nn127.0.0.1:3000\n'
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/lsof"
+  run run_resources_zsh 'sys-ports --kill-port 3000 --yes'
+  [ "$status" -eq 1 ]
+  [ "$(cat "$RESOURCE_LOG")" = 'sudo -v' ]
+  [[ "$output" == *"listener"*"no signal was sent"* || "$output" == *"one visible owner"* ]]
+}
+
+@test "sys privilege transactions: a second socket owner appearing during authentication prevents signaling" {
+  export MOCK_PROCESS_UID="$(( $(id -u) + 1 ))"
+  cat > "$TEST_MOCK_BIN/lsof" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == *-iTCP* ]] || exit 1
+printf 'p4242\ncnode\nPTCP\nn127.0.0.1:3000\n'
+[[ ! -e "$SUDO_AUTH_MARKER" ]] || printf 'p4343\ncworker\nPTCP\nn127.0.0.1:3000\n'
+exit 0
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/lsof"
+  run run_resources_zsh 'sys-ports --kill-port 3000 --yes'
+  [ "$status" -eq 1 ]
+  [ "$(cat "$RESOURCE_LOG")" = 'sudo -v' ]
+}
+
+@test "sys privilege transactions: an interactive listener keeps unique ownership across authentication" {
+  export MOCK_PROCESS_UID="$(( $(id -u) + 1 ))"
+  cat > "$TEST_MOCK_BIN/lsof" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == *-iTCP* ]] || exit 1
+printf 'p4242\ncnode\nPTCP\nn127.0.0.1:3000\n'
+[[ ! -e "$SUDO_AUTH_MARKER" ]] || printf 'p4343\ncworker\nPTCP\nn127.0.0.1:3000\n'
+exit 0
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/lsof"
+  run run_resources_zsh '
+    _sys_ports_terminate_record $'"'"'port\ttcp\t3000\t127.0.0.1\t4242\tnode'"'"' 0 1
+  '
+  [ "$status" -eq 1 ]
+  [ "$(cat "$RESOURCE_LOG")" = 'sudo -v' ]
+}
+
+@test "sys privilege transactions: an unchanged foreign listener remains signalable after authentication" {
+  export MOCK_PROCESS_UID="$(( $(id -u) + 1 ))"
+  run run_resources_zsh 'sys-ports --kill-port 3000 --yes'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RESOURCE_LOG")" = $'sudo -v\nsudo -n kill -s TERM 4242' ]
+}
+
+@test "sys privilege transactions: identity changed during the post-authentication socket probe is never signaled" {
+  write_selected_process_ps
+  export MOCK_PROCESS_UID="$(( $(id -u) + 1 ))" MOCK_PICK_REPLACE=start
+  cat > "$TEST_MOCK_BIN/lsof" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$*" == *-iTCP* ]] || exit 1
+[[ ! -e "$SUDO_AUTH_MARKER" ]] || : > "$PICKER_MARKER"
+printf 'p4242\ncnode\nPTCP\nn127.0.0.1:3000\n'
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/lsof"
+  run run_resources_zsh 'sys-ports --kill-port 3000 --yes'
+  [ "$status" -eq 1 ]
+  [ -e "$PICKER_MARKER" ]
+  [ "$(cat "$RESOURCE_LOG")" = 'sudo -v' ]
+  [[ "$output" == *"identity changed"*"no signal was sent"* ]]
 }

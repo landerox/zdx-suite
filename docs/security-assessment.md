@@ -992,6 +992,20 @@ through `sudo`, or a keepalive outlives its operation.
   the owned descriptor state is cleared. `sys_session_safety.bats` exercises
   the failed-unlock branch with separate streams; it performs no host update.
 
+- The process browser freezes native start identity in its private snapshot;
+  public list records retain their six fields. Port signaling rescans socket
+  ownership after authentication and before the final process fingerprint.
+  Direct Snap, journal, APT-cache and foreign-owner AWS cleanup announce and
+  authenticate once, then perform resource-specific revalidation before
+  nonprompting elevation. Aggregate cleanup retains independent user work
+  after ordinary authentication failure and stops after `130` or `143`.
+  AWS and Starship Homebrew calls clear inherited askpass, require the fixed
+  failing Darwin guard and release it through `always` while preserving
+  child status. Both reviewed executable fingerprints are renewed after
+  guard setup and before execution. These are confined fixture controls; native start-time
+  resolution, final signal races and external package transactions remain
+  residual boundaries.
+
 - Privileged operations generally call `sudo` only when required.
 - System resource actions retain per-operation authentication without a
   keepalive. The update aggregate is the bounded exception: after

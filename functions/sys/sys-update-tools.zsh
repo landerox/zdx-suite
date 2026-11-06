@@ -396,16 +396,38 @@ _sys_update_owned_tool() {
   local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1 CARGO_NET_RETRY=0
   local -x CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
   [[ "$owner" == Cargo ]] && CARGO_HOME="$owner_prefix"
-  _sys_update_program_revalidate "$tool" "$active_program" "$active_fingerprint" || {
-    _sys_update_owner_failure "$?" "The reviewed $subject executable changed; refusing delegation."
-    return $?
+  local askpass_program=""
+  {
+    if [[ "$owner" == Homebrew ]]; then
+      local SUDO_ASKPASS
+      unset SUDO_ASKPASS
+      if _sys_has_capability "os:darwin"; then
+        _sys_brew_askpass_program || {
+          _sys_update_owner_failure "$?" "The fixed Homebrew askpass guard is unavailable."
+          return $?
+        }
+        askpass_program="$REPLY"
+        local -x SUDO_ASKPASS="$askpass_program"
+      fi
+    fi
+    # Guard setup can observe mutable files too. Renew both reviewed programs
+    # afterward, immediately before the already authorized native owner call.
+    _sys_update_program_revalidate "$tool" "$active_program" "$active_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed $subject executable changed; refusing delegation."
+      return $?
+    }
+    _sys_update_program_revalidate "${manager_program:t}" \
+      "$manager_program" "$manager_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed $owner owner changed; refusing delegation."
+      return $?
+    }
+    "$manager_program" "${owner_args[@]}" </dev/null >&2 || operation_rc=$?
+  } always {
+    if [[ "$owner" == Homebrew && -n "$askpass_program" ]]; then
+      _sys_brew_askpass_release "$askpass_program" \
+        || _sys_warn "Could not remove the private Homebrew askpass guard."
+    fi
   }
-  _sys_update_program_revalidate "${manager_program:t}" \
-    "$manager_program" "$manager_fingerprint" || {
-    _sys_update_owner_failure "$?" "The reviewed $owner owner changed; refusing delegation."
-    return $?
-  }
-  "$manager_program" "${owner_args[@]}" </dev/null >&2 || operation_rc=$?
   if (( operation_rc != 0 )); then
     _sys_update_owner_failure "$operation_rc" "$owner failed to update $subject."
     return $?

@@ -5764,6 +5764,7 @@ EOF
 }
 
 @test "sys maintenance: aggregate cleanup continues and reports partial failure" {
+  export MOCK_SUDO_ALLOW='__validate__'
   run run_maintenance_zsh '
     _sys_clean_plan() {
       printf "%s\n" \
@@ -5812,7 +5813,10 @@ EOF
   [[ "$output" == *"✘ [2/8] npm cache — failed: status 41"* ]]
   [[ "$output" == *"Retry after resolving the errors above:"* ]]
   [ "$(grep -c 'sys-menu clean-system --quick' <<< "$output")" -eq 1 ]
-  assert_no_privilege_network_or_signal
+  [ "$(cat "$MOCK_SUDO_LOG")" = 'sudo -v' ]
+  [ ! -s "$MAINT_NETWORK_LOG" ]
+  [ ! -s "$MAINT_SHELL_LOG" ]
+  [ ! -s "$MAINT_SIGNAL_LOG" ]
 }
 
 @test "sys maintenance: cleanup plan numbers follow the execution order" {

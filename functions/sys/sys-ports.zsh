@@ -322,6 +322,33 @@ _sys_ports_resolve_port() {
 
 # A port target (optional fourth and fifth arguments) is resolved again after
 # confirmation so its exactly-one-visible-owner rule holds at signal time.
+# Revalidate the socket record and unique owner after any authentication.
+_sys_ports_signal_target_matches() {
+  local listener_record="$1" port_target="${2:-}" port_protocol="${3:-}"
+  _sys_ports_validate_record "$listener_record" || return 2
+  local -a fields=("${(@ps:\t:)listener_record}")
+  local current=""
+  if [[ -z "$port_target" ]]; then
+    port_target="${fields[3]}"
+    port_protocol="${fields[2]}"
+  fi
+  if [[ -n "$port_target" ]]; then
+    current=$(_sys_ports_resolve_port "$port_target" "$port_protocol") || {
+      _sys_error "The listener no longer has one visible owner; no signal was sent."
+      return 1
+    }
+    local -a current_fields=("${(@ps:\t:)current}")
+    [[ "${current_fields[5]:-}" == "${fields[5]:-}" ]] || {
+      _sys_error "The listener changed owner; no signal was sent."
+      return 1
+    }
+  fi
+  _sys_ports_record_is_current "$listener_record" || {
+    _sys_error "The selected listener changed; no signal was sent."
+    return 1
+  }
+}
+
 _sys_ports_terminate_record() {
   local listener_record="${1:-}"
   local force_signal="${2:-0}"
@@ -394,7 +421,8 @@ _sys_ports_terminate_record() {
     _sys_error "Process identity changed for PID $process_pid; no signal was sent."
     return 1
   }
-  _sys_processes_signal_validated "$fingerprint" "$signal_name"
+  _sys_processes_signal_validated "$fingerprint" "$signal_name" \
+    _sys_ports_signal_target_matches "$listener_record" "$port_target" "$port_protocol"
 }
 
 _sys_ports_interactive() {

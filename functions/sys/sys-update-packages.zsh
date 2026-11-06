@@ -278,8 +278,12 @@ update-snap() {
   fi
 
   local -a privilege_prefix=()
-  _sys_resolve_privilege_prefix || return 1
+  _sys_privilege_authorize "snap refresh" || return $?
   privilege_prefix=("${reply[@]}")
+  _sys_snap_ready || {
+    _sys_error "snapd changed during authentication; no refresh was started."
+    return 1
+  }
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \
     && privilege_label="${(j: :)privilege_prefix} "
