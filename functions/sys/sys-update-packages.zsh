@@ -14,20 +14,65 @@ fi
 update-brew() {
   emulate -L zsh
   local REPLY
-  _sys_update_parse_no_args update-brew "$@" || return $?
+  local -a reply=()
+  _sys_update_parse_plan_flags update-brew "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
-  _sys_header "Updating Homebrew"
+  local -i dry_run="${reply[1]}" assume_yes="${reply[2]}" authorization_rc=0
 
   if ! command -v brew &>/dev/null; then
     _sys_report_result skipped "not installed" "Homebrew not installed, skipping."
     return 0
   fi
 
-  local brew_program
-  brew_program=$(whence -p brew 2>/dev/null) \
-    && [[ "$brew_program" == /* \
-      && "$brew_program" != *[[:cntrl:]]* ]] || {
+  local brew_program brew_fingerprint brew_version brew_prefix
+  _sys_tool_program brew || {
     _sys_error "Homebrew did not resolve to an executable path."
+    return 1
+  }
+  brew_program="$REPLY"
+  _sys_update_program_fingerprint "$brew_program" || {
+    _sys_update_owner_failure "$?" "Homebrew executable failed identity and checksum validation."
+    return $?
+  }
+  brew_fingerprint="$REPLY"
+  _sys_update_probe_version 5 "$brew_program" --version || {
+    _sys_update_owner_failure "$?" "Homebrew version probe failed; refusing delegation."
+    return $?
+  }
+  brew_version="$REPLY"
+  _sys_update_homebrew_prefix "$brew_program" || {
+    _sys_update_owner_failure "$?" "Homebrew installation prefix could not be verified."
+    return $?
+  }
+  brew_prefix="$REPLY"
+  _sys_header "Homebrew Update Plan"
+  _sys_label "Owner:" "$brew_program ($brew_version)"
+  _sys_label "Prefix:" "$brew_prefix"
+  _sys_label "Scope:" "Dynamic native Homebrew transaction for installed formulae and casks"
+  _sys_label "Command:" "${(q)brew_program} update"
+  _sys_label "Command:" "${(q)brew_program} upgrade --no-ask"
+  _sys_label "Command:" "${(q)brew_program} autoremove"
+  _sys_label "Command:" "${(q)brew_program} cleanup"
+  _sys_warn "Homebrew selects current package candidates, unused dependencies, and old versions at execution time."
+  _sys_dim "Removal scope: Homebrew-owned unused dependencies and superseded versions; package candidates are not an immutable transaction."
+  _sys_update_brew_removal_preview "$brew_program" || return $?
+  if (( dry_run )); then
+    _sys_report_result planned "Homebrew phases; no mutation executed"
+    return 0
+  fi
+  _sys_update_owner_authorize "$assume_yes" Homebrew || authorization_rc=$?
+  (( authorization_rc == 3 )) && return 0
+  (( authorization_rc == 0 )) || return "$authorization_rc"
+  _sys_update_program_revalidate brew "$brew_program" "$brew_fingerprint" || {
+    _sys_update_owner_failure "$?" "The reviewed Homebrew executable changed; refusing delegation."
+    return $?
+  }
+  _sys_update_homebrew_prefix "$brew_program" || {
+    _sys_update_owner_failure "$?" "Homebrew prefix revalidation failed."
+    return $?
+  }
+  [[ "$REPLY" == "$brew_prefix" ]] || {
+    _sys_error "The reviewed Homebrew prefix changed; refusing delegation."
     return 1
   }
   local -x HOMEBREW_CURL_RETRIES=0
@@ -50,7 +95,7 @@ update-brew() {
       "Homebrew's askpass is a private script that always fails; /usr/bin/false did not pass validation."
   fi
   {
-    _sys_brew_update_phases "$brew_program"
+    _sys_brew_update_phases "$brew_program" "$brew_fingerprint"
   } always {
     _sys_brew_askpass_release "$askpass_program" \
       || _sys_warn "Could not remove the private askpass script: $askpass_program"
@@ -60,8 +105,14 @@ update-brew() {
 # The refresh, upgrade, autoremove, and cleanup phases of update-brew, run
 # with the policy update-brew exported. Usage: _sys_brew_update_phases <brew>
 _sys_brew_update_phases() {
-  local brew_program="${1:-}" REPLY
+  local brew_program="${1:-}" brew_fingerprint="${2:-}" REPLY
   [[ "$brew_program" == /* ]] || return 2
+  if [[ -n "$brew_fingerprint" ]]; then
+    _sys_update_program_revalidate brew "$brew_program" "$brew_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed Homebrew executable changed; refusing refresh."
+      return $?
+    }
+  fi
   _sys_info "Fetching latest formulae..."
   _sys_verbose_dim \
     "The metadata refresh is bounded to 120s with Homebrew curl retries disabled."
@@ -99,6 +150,12 @@ _sys_brew_update_phases() {
     outdated_names=("${(@)outdated_names:#}")
   fi
   _sys_info "Upgrading packages..."
+  if [[ -n "$brew_fingerprint" ]]; then
+    _sys_update_program_revalidate brew "$brew_program" "$brew_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed Homebrew executable changed; refusing upgrade."
+      return $?
+    }
+  fi
   if "$brew_program" upgrade --no-ask </dev/null >&2; then
     :
   else
@@ -109,6 +166,12 @@ _sys_brew_update_phases() {
   fi
 
   _sys_info "Removing unused dependencies..."
+  if [[ -n "$brew_fingerprint" ]]; then
+    _sys_update_program_revalidate brew "$brew_program" "$brew_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed Homebrew executable changed; refusing autoremove."
+      return $?
+    }
+  fi
   if "$brew_program" autoremove </dev/null >&2; then
     :
   else
@@ -119,6 +182,12 @@ _sys_brew_update_phases() {
   fi
 
   _sys_info "Cleaning up old versions..."
+  if [[ -n "$brew_fingerprint" ]]; then
+    _sys_update_program_revalidate brew "$brew_program" "$brew_fingerprint" || {
+      _sys_update_owner_failure "$?" "The reviewed Homebrew executable changed; refusing cleanup."
+      return $?
+    }
+  fi
   if "$brew_program" cleanup </dev/null >&2; then
     :
   else

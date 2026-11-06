@@ -941,8 +941,9 @@ substitute, or insert steps after authorization. `--yes` authorizes those
 entries and their documented dynamic scopes; it does not freeze package
 candidates or bypass capability, dependency, owner, origin, or target
 validation. By default each authorized entry is attempted once;
-`--fail-fast` stops after the first failure. `--safe-only` excludes mutable
-Git and script origins. `--include-remote-code` explicitly
+`--fail-fast` stops after the first failure. `--safe-only` excludes the five
+current remote-code entries: AWS CLI, Starship, fzf, Oh My Zsh and custom Zsh
+plugins. `--include-remote-code` explicitly
 affirms the maximum default. `--include-phased-updates` is separate and reaches
 only APT. It is off by default, which preserves APT's normal phased rollout;
 it does not disable phased updates. When explicitly present, the APT preview
@@ -1284,6 +1285,16 @@ AWS CLI and Starship ownership follows the active canonical executable and
 the owning manager's inventory. An installed formula cannot claim another
 binary earlier in PATH. fzf likewise updates only the safe checkout containing
 the active executable, and refuses if that executable changes after review.
+
+Review these installed-owner transactions with `update-awscli --dry-run`,
+`update-starship --dry-run`, or `update-brew --dry-run`. Each plan names the
+active program, owner, canonical installation scope and fixed arguments.
+Execution requires confirmation or explicit `--yes`; it refuses a changed
+executable or installation root after review. Homebrew's removal previews
+are advisory: its installed manager resolves the final package, dependency
+and cache transaction. The manager also owns upstream artifact selection,
+transport and verification. A dry run never installs a missing manager or
+downloads an installer.
 
 The aggregate avoids updating one installation twice. Homebrew-owned AWS CLI,
 Starship, fzf, uv, and Google Cloud SDK installations are handled by

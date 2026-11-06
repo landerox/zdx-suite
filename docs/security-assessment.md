@@ -1318,6 +1318,22 @@ in a compromised release channel and then installed, potentially as root.
   Installed managers, their libraries and upstream artifacts remain trusted;
   these checks retain a final revalidation-to-execution race.
 
+- System safe-only derives its bounded policy from the five current
+  remote-code fixture entries, including AWS CLI and Starship. Their installed
+  owner updates require an explicit trust decision and passive dry-run plans.
+  Homebrew retains its native mutation classification with reviewed dynamic
+  package, dependency and cache scopes. Program paths, canonical targets,
+  ownership, write modes, file identities, SHA256 and installation roots are
+  frozen before review and checked again before delegation. After consent,
+  frozen executable comparisons precede owner observations as well as mutation,
+  so a replaced manager cannot execute its prefix or inventory query first.
+  Failed previews or identity observations block execution. Trust fixtures cover substitution,
+  failed probes and interrupted phases. Installed managers retain artifact,
+  transport, library and interpreter trust; a final check-to-execution race
+  remains. Legacy vendor self-updaters classified as mutating retain a
+  classification/control audit gap: this bounded change grants no exemption
+  from the development remote-code delegation contract.
+
 - Downloads use HTTPS and generally fail on HTTP errors.
 - Without a Homebrew or Snap owner, `update-awscli` refuses automatic bundle
   installation and points to AWS's detached-signature verification procedure.

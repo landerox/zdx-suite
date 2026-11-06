@@ -13,10 +13,15 @@ setup() {
 #!/usr/bin/env bash
 name=${0##*/}
 phase=${1:-}
-if [[ "$name" == brew && "$phase" == cleanup && "${SCOPE_CHECK_POLICY:-0}" == 1 ]]; then
+if [[ "$name" == brew && "$phase" == cleanup && "${2:-}" != --dry-run && "${SCOPE_CHECK_POLICY:-0}" == 1 ]]; then
   [[ "${HOMEBREW_NO_AUTO_UPDATE:-}" == 1 && "${SUDO_ASKPASS:-}" == /usr/bin/false ]] || exit 96
 fi
 case "$name:$*" in
+  'brew:--version') printf 'Homebrew 4.5.0\n'; exit 0 ;;
+  'cargo:--version') printf 'cargo 1.80.0\n'; exit 0 ;;
+  'aws:--version') printf 'aws-cli/2.30.0 Python/3.12\n'; exit 0 ;;
+  'starship:--version') printf 'starship 1.0.0\n'; exit 0 ;;
+  'brew:autoremove --dry-run'|'brew:cleanup --dry-run') exit 0 ;;
   'brew:--prefix') printf '%s\n' "$HOME/homebrew"; exit 0 ;;
   'snap:list aws-cli') [[ "$SCOPE_BACKEND" == snap ]]; exit $? ;;
   'fnm:current') printf 'v24.22.0\n'; exit 0 ;;
@@ -435,7 +440,7 @@ scope_failure() {
     for interrupt in 130 143; do
       export SCOPE_STATUS="$interrupt" SCOPE_FAIL_PHASE="$phase"
       : > "$SCOPE_LOG"
-      run run_zsh 'source "$HOME/scope-context.zsh" || exit 90; update-brew'
+      run run_zsh 'source "$HOME/scope-context.zsh" || exit 90; update-brew --yes'
       [ "$status" -eq "$interrupt" ] || scope_failure
       if [ "$phase" = upgrade ]; then
         [ "$(tail -1 "$SCOPE_LOG")" = 'brew upgrade --no-ask' ]
@@ -456,7 +461,7 @@ scope_failure() {
     for interrupt in 130 143; do
       export SCOPE_STATUS="$interrupt"
       : > "$SCOPE_LOG"
-      run run_zsh 'source "$HOME/scope-context.zsh" || exit 90; "$SCOPE_COMMAND"'
+      run run_zsh 'source "$HOME/scope-context.zsh" || exit 90; if [[ "$SCOPE_COMMAND" == update-uv-system ]]; then "$SCOPE_COMMAND"; else "$SCOPE_COMMAND" --yes; fi'
       [ "$status" -eq "$interrupt" ] || scope_failure
     done
   done

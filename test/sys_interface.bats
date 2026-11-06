@@ -50,7 +50,7 @@ teardown() {
   [ ! -s "$HOME/subcommand-help.stdout" ]
   [ ! -s "$HOME/invalid-help.stdout" ]
   grep -q "Usage: update-brew" "$HOME/subcommand-help.stderr"
-  grep -q "Unknown or extra argument" "$HOME/invalid-help.stderr"
+  grep -q -- "--help accepts no additional options or arguments" "$HOME/invalid-help.stderr"
 }
 
 @test "sys interface: nested invalid arguments reach the public parser before probes" {

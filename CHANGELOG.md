@@ -37,6 +37,11 @@ verification, and remaining limitations.
   executable, refuse unsafe manager probes, freeze executable identity and
   content before reviewed fzf updates, and use trusted absolute cleanup tools.
 
+- System: require reviewed trust decisions for AWS CLI and Starship owners
+  and reviewed native Homebrew transactions, with passive dry runs and frozen
+  executable identities. Safe-only excludes all five current remote-code
+  fixture entries; unverified installer downloads remain refused.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

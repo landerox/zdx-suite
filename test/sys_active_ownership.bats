@@ -13,6 +13,8 @@ setup() {
 #!/usr/bin/env bash
 tool=${0##*/}
 case "$tool:$*" in
+  'brew:--version') printf 'Homebrew 4.5.0\n'; exit 0 ;;
+  'cargo:--version') printf 'cargo 1.80.0\n'; exit 0 ;;
   'brew:--prefix') printf '%s\n' "$OWN_PREFIX"; exit 0 ;;
   'brew:list awscli'|'brew:list starship') [[ "$OWN_BREW_INSTALLED" == 1 ]]; exit $? ;;
   'brew:list fzf') exit 1 ;;
@@ -158,14 +160,14 @@ ownership_failure() {
 }
 
 @test "sys active ownership: inactive Homebrew AWS formula never owns an independent executable" {
-  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-awscli'
+  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-awscli --yes'
   [ "$status" -eq 1 ] || ownership_failure
   run grep -F 'brew upgrade' "$OWN_LOG"
   [ "$status" -eq 1 ]
 }
 
 @test "sys active ownership: inactive Homebrew Starship formula never owns an independent executable" {
-  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-starship'
+  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-starship --yes'
   [ "$status" -eq 1 ] || ownership_failure
   run grep -F 'brew upgrade' "$OWN_LOG"
   [ "$status" -eq 1 ]
@@ -178,7 +180,7 @@ ownership_failure() {
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$HOME/.cargo/bin" $path)
     _sys_update_starship_applies || exit 91
-    update-starship
+    update-starship --yes
   '
   [ "$status" -eq 0 ] || ownership_failure
   grep -Fqx 'cargo install --locked starship' "$OWN_LOG"
@@ -188,7 +190,7 @@ ownership_failure() {
 
 @test "sys active ownership: Cargo inventory cannot own a different active Starship" {
   export OWN_BREW_INSTALLED=0
-  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-starship'
+  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-starship --yes'
   [ "$status" -eq 1 ] || ownership_failure
   run grep -F 'cargo install --locked' "$OWN_LOG"
   [ "$status" -eq 1 ]
@@ -196,7 +198,7 @@ ownership_failure() {
 
 @test "sys active ownership: refused AWS is never probed or delegated to an inactive formula" {
   chmod -- 777 "$TEST_MOCK_BIN/aws"
-  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-awscli'
+  run run_zsh 'source "$HOME/ownership-context.zsh" || exit 90; update-awscli --yes'
   [ "$status" -eq 1 ] || ownership_failure
   [ ! -s "$OWN_LOG" ]
 }
@@ -241,8 +243,8 @@ ownership_failure() {
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$OWN_PREFIX/bin" $path)
     _sys_update_starship_applies && exit 91
-    update-awscli || exit $?
-    update-starship
+    update-awscli --yes || exit $?
+    update-starship --yes
   '
   [ "$status" -eq 0 ] || ownership_failure
   grep -Fqx 'brew upgrade --no-ask awscli' "$OWN_LOG"
@@ -260,7 +262,7 @@ ownership_failure() {
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$OWN_PREFIX/Cellar/starship/1.0/bin" $path)
     _sys_update_starship_applies && exit 91
-    update-starship
+    update-starship --yes
   '
   [ "$status" -eq 1 ] || ownership_failure
   [ ! -s "$OWN_LOG" ]
@@ -316,7 +318,7 @@ ownership_failure() {
     run run_zsh '
       source "$HOME/ownership-context.zsh" || exit 90
       path=("$HOME/.cargo/bin" $path)
-      update-starship
+      update-starship --yes
     '
     [ "$status" -eq 1 ] || ownership_failure
     [ ! -s "$OWN_LOG" ]
@@ -369,7 +371,7 @@ MOCK
   run run_zsh '
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$OWN_PREFIX/Cellar/starship/1.0/bin" $path)
-    update-starship
+    update-starship --yes
   '
   [ "$status" -eq 1 ] || ownership_failure
   [ ! -s "$OWN_LOG" ]
@@ -382,7 +384,7 @@ MOCK
   run run_zsh '
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$HOME/.cargo/bin" $path)
-    update-starship
+    update-starship --yes
   '
   [ "$status" -eq 1 ] || ownership_failure
   [ ! -s "$OWN_LOG" ]
