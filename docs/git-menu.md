@@ -643,7 +643,8 @@ rule in [`development.md`](development.md).
 Git 2.31 or newer is required: pull and fetch transactions use
 `git fetch --atomic --no-write-fetch-head --no-auto-maintenance`, path
 commands use `git rev-parse --path-format=absolute`, forced pushes use
-`--force-if-includes`, and identity planning uses `git config --show-scope`.
+explicit local-branch integration proofs, and identity planning uses
+`git config --show-scope`.
 Ubuntu 20.04's Git 2.25 is too old, while Apple's Git in current Command Line
 Tools is new enough. The check runs `git --version` once for each Git
 executable and repeats it when the executable is replaced or upgraded. A Git
@@ -979,19 +980,35 @@ symbolic after review. These gaps remain:
 - A Git release that lets a create-only `--no-deref` update replace a
   dangling symbolic ref would replace an alias created in the same moment
   with the `git-recover` branch; Git 2.56 refuses that write instead.
-- `clean-remote-merged` and the remote deletions of `git-tag-delete` refuse
+- `git-push`, required branch publication by `git-pr-create`,
+  `clean-remote-merged`, and the remote deletions of `git-tag-delete` refuse
   every remote that does not answer with protocol v2: an SSH server that
   does not accept `GIT_PROTOCOL` through `SendEnv` (the stock OpenSSH
   `sshd_config`), `plink` or `ssh.variant=simple`, and dumb HTTP.
 - A remote branch, a remote tag, or a local ref that a fetch refspec maps the
   pushed ref to, that becomes symbolic between the last check and the push,
   is still followed.
-- `git-push` does not check aliases on the server: an exact-lease
-  fast-forward of a branch that is symbolic there moves its target. A later
-  change tracks this.
 
 History rewriting and force pushing show both old and intended commits. The
 default force mode is an exact `--force-with-lease=<ref>:<oid>` transaction.
+The leased remote tip must be reachable from the frozen local branch tip or
+an entry in that branch's reflog. Remote-tracking reflogs do not establish
+integration. The proof is repeated after confirmation, and absent, expired,
+or unreadable integration evidence fails closed. Git's `--force-if-includes`
+does not enforce this condition with an explicit lease, so the suite checks
+it directly. Publication fast-forward, branch-cleanup merged, and force
+integration proofs ignore replacement refs and disable legacy grafts for the
+individual Git invocation. Reflog integration uses one traversal over the
+union of branch reflog histories. Rebase pulls override `rebase.updateRefs=false` so other local branches
+cannot be rewritten by that setting.
+Branch publication checks protocol-v2 server aliases before review and
+immediately before each push, with a bounded nonprompting query. An observed
+alias or an unavailable protocol-v2 answer is
+refused with server configuration guidance.
+The protocol does not advertise a dangling server-side alias. An absence
+lease can therefore create that alias's unseen target rather than the named
+ref. This server-operator trust limit remains alongside the final-query-to-push
+race; protocol-v2 observation cannot prove that every absent ref is direct.
 Normal pushes also use frozen source OIDs and exact OID-or-absence leases, and
 must prove a fast-forward before execution. Raw `--force` is unsupported.
 Push planning rejects multiple push URLs and uses the one frozen URL for
@@ -1125,6 +1142,11 @@ regressing.
 | User documentation advertises behavior the suite does not provide | [`user-guide.md`](user-guide.md) lists only Git-owned commands, direct pull-request-number checkout, and redacted authentication status, and changes with the code |
 
 ## Verification files
+
+`test/git_remote_proofs.bats` exercises replacement-ref and legacy-graft ancestry attacks,
+local-branch reflog integration and expiration, stacked rebase refs, exact PR
+head queries, server-side aliases before and after review, protocol-v2
+refusal, and interrupted observations using disposable local remotes.
 
 | File | Contract boundary |
 | --- | --- |

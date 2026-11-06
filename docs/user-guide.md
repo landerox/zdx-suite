@@ -691,7 +691,15 @@ you manage with `git-menu`:
   deleted only with `--include-untracked`, and ignored files never.
 - `git-pull` — Choose pull with merge, rebase, or fast-forward, fetch the
   upstream branch, or fetch all branches and prune; each mode shows its plan
-  before asking.
+  before asking. Rebase keeps other local branches at their existing refs,
+  even when `rebase.updateRefs` is enabled in Git configuration.
+- `git-push --force-with-lease` — Rewrite only after the exact leased remote
+  tip was integrated into the local branch or its retained reflog. Fetching
+  alone does not authorize discarding another contributor's work; integrate
+  it before retrying. Branch publication, including a required PR head push,
+  needs protocol-v2 observations that report no alias. A server that does
+  not accept `GIT_PROTOCOL` must enable that capability, or publication must
+  be reviewed and performed manually on the server.
 - `git-pr-checkout [NUMBER]` — Check out the reviewed head of a pull request in
   detached mode; the suite fetches it from a configured remote for the
   repository, with that remote's Git credentials, and refuses a head that

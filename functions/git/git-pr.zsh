@@ -459,7 +459,7 @@ _git_gh_remote_head_oid() {
   local branch="$2"
   local output=""
   local -i ls_rc=0
-  output=$(command git ls-remote --exit-code --heads \
+  output=$(command git ls-remote --exit-code --heads -- \
     "$remote_url" "refs/heads/$branch" 2>/dev/null) || ls_rc=$?
   if (( ls_rc == 2 )); then
     REPLY=""
@@ -700,7 +700,7 @@ git-pr-create() {
   local -i needs_push=0
   [[ "$remote_head_oid" != "$expected_head" ]] && needs_push=1
   if (( needs_push )) && [[ -n "$remote_head_oid" ]] \
-    && ! command git merge-base --is-ancestor \
+    && ! GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor \
       "$remote_head_oid" "$expected_head" 2>/dev/null; then
     _git_error \
       "Remote branch '$remote_branch' is not an ancestor of HEAD; fetch and integrate it first."
@@ -711,6 +711,8 @@ git-pr-create() {
   # the ref it points to.
   if (( needs_push )); then
     _git_require_direct_tracking_refs "$remote" "refs/heads/${remote_branch}" \
+      || return $?
+    _git_require_direct_remote_branch "$remote_url" "refs/heads/${remote_branch}" \
       || return $?
   fi
 
@@ -776,6 +778,8 @@ git-pr-create() {
     # absence); follow-tags and submodule recursion stay off so only the
     # reviewed head is published.
     _git_require_direct_tracking_refs "$remote" "refs/heads/${remote_branch}" \
+      || return $?
+    _git_require_direct_remote_branch "$remote_url" "refs/heads/${remote_branch}" \
       || return $?
     command git push --no-follow-tags --recurse-submodules=no \
       "--force-with-lease=refs/heads/${remote_branch}:${remote_head_oid}" \

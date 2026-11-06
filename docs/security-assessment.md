@@ -501,6 +501,19 @@ wrong base directory causes deletion or overwrite outside the intended scope.
 
 **Current controls.**
 
+- Git publication and cleanup proofs ignore replacement refs and disable
+  legacy grafts for each proof invocation. Explicit force
+  leases require integration of the leased tip into the current local branch
+  or its reflog, repeated after review; remote-tracking observations alone
+  cannot authorize rewriting. Rebase disables automatic updates of other
+  branches. Branch publication refuses observable server aliases before
+  review and immediately before push, and fails closed without protocol v2.
+  `git_remote_proofs.bats` exercises these boundaries with disposable remotes.
+  A server alias created after the last query remains a check-to-write race.
+  The protocol also hides dangling server aliases; an absence lease can
+  create an unseen alias target. That server-operator trust limit is recorded
+  separately from observable alias refusal.
+
 - GitHub write tests use a strict complete-argv recorder with NUL-delimited
   evidence and a file-only disposable transport. They exercise exact head
   publication, creation and verification partial failures, changed repository

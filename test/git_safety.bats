@@ -193,6 +193,8 @@ export_real_git() {
     _git_gh_remote_head_oid() {
       REPLY=""
     }
+    # This fake transport has no server; model a direct protocol-v2 head.
+    _git_remote_symbolic_refs() { reply=(); REPLY=v2; }
 
     git-pr-create --base main --fill --dry-run \
       >"$HOME/pr.stdout" 2>"$HOME/pr.stderr"
@@ -410,6 +412,8 @@ MOCK
     }
     _git_gh_base_oid() { REPLY="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; }
     _git_gh_remote_head_oid() { REPLY=""; }
+    # Identity resolution is under test, with no real SSH server to inspect.
+    _git_remote_symbolic_refs() { reply=(); REPLY=v2; }
 
     git-pr-create --base main --fill --dry-run \
       >"$HOME/pr.stdout" 2>"$HOME/pr.stderr"

@@ -383,6 +383,9 @@ MOCK
     _git_gh_base_oid() { REPLY="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; }
     _git_gh_remote_head_oid() { REPLY=""; }
 
+    # This identity fixture has no SSH server; model a direct protocol-v2 head.
+    _git_remote_symbolic_refs() { reply=(); REPLY=v2; }
+
     git-pr-create --base main --fill --dry-run \
       >"$HOME/default.stdout" 2>"$HOME/default.stderr" && return 10
 

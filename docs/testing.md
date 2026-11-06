@@ -323,6 +323,16 @@ core-package and optional-tool success/failure/not-run totals.
 
 ### Git coverage
 
+`git_remote_proofs.bats` covers replacement-ref and legacy-graft ancestry, explicit force-lease
+integration through the local branch's reflog, expired proof after review,
+stacked rebase refs, PR head argument boundaries, server-side branch aliases,
+unsupported protocol observations, and interruption propagation. Server
+behavior uses disposable file-protocol remotes, not live GitHub or SSH.
+The 26 cases also exercise rooted and merged branch histories, one-traversal
+reflog proof failures and interrupts, and partial progress in a private
+multi-record apply plan. The public force grammar remains single-ref.
+An empty successful reflog observation refuses without walking remote history.
+
 | File | Covered boundary |
 | --- | --- |
 | `git_contract.bats` | Frozen 21-command fixture; module, function, menu, help, dispatcher, nested-completion, and direct-completion parity, including a `git-push` grammar without a tag mode, the stash action grammars, `git-discard --include-untracked` only after `--all`, the amend and unstage flags, the exclusive `git-switch` change modes, and `--json` only on read-only commands |
