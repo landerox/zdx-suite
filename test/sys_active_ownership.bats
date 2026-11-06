@@ -104,6 +104,9 @@ ownership_failure() {
   run run_zsh '
     source "$HOME/ownership-context.zsh" || exit 90
     path=("$HOME/.local/share/fzf/bin" $path)
+    # Release integrity is covered by its complete fixture; this control owns
+    # active-checkout routing and keeps the real pre/post ownership guards.
+    _sys_update_fzf_verified_release() { return 0; }
     update-fzf --yes
   '
   [ "$status" -eq 0 ] || ownership_failure

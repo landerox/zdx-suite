@@ -1055,9 +1055,48 @@ and mutation uses `git pull --ff-only origin`. Naming the displayed remote
 makes Git refuse a branch whose upstream is another remote or a bare URL,
 instead of fetching from a source the plan never showed. The transport exports
 an empty `GIT_ASKPASS`, which also disables a configured `core.askPass`. The
-fzf integration installer must be an owned, singly linked executable whose
-content matches the checked-out Git blob. Oh My Zsh does not execute the
+fzf installer is read only as owned, singly linked metadata matching its
+checked-out Git blob; ZDX never executes it. Oh My Zsh does not execute the
 mutable `tools/upgrade.sh` helper.
+
+After the authorized fast-forward, fzf's one strict `version=MAJOR.MINOR.PATCH`
+record selects an exact official release. On Linux/WSL and macOS, x86-64 and
+ARM64 map to the corresponding upstream tarball. Other architectures require
+official manual installation. The plan discloses the fixed upstream publisher,
+checksum-first policy, checkout `bin/fzf`, and `$HOME/.fzf.zsh` publication.
+
+ZDX obtains `fzf_<version>_checksums.txt` before requesting an executable
+archive and requires exactly one valid SHA-256 entry for the exact asset.
+Missing, malformed, duplicate, or unmatched metadata blocks the archive
+request and prints official manual guidance. Requests ignore curlrc, permit
+only HTTPS, use explicit publisher/CDN redirect validation with five redirects
+at most, and enforce time and byte limits. SHA-256 is checked before any tar
+operation or executable observation. The verified archive must contain only
+one regular member named `fzf`; linked, additional, or differently named
+members are refused. Its staged executable must report the exact selected
+version before publication. There is no installer, wget, or Go-build fallback.
+
+The binary and Zsh loader use separate same-directory staged replacements.
+Each new stage must be an empty, owned, single-link regular file with mode
+`0600` in its exact expected namespace before writing or accepting cleanup
+authority. Writes use a no-follow descriptor whose identity matches the path.
+Owned parent, target, and staged-file identities and bytes are revalidated
+immediately before replacement. A failed loader write stops before either
+publication and preserves its first failure or interruption status.
+Metadata/checksum failure preserves the old
+binary and integration, although the authorized Git fast-forward may already
+have completed. If the verified binary is installed but integration publication
+fails, the command reports that partial result. Ordinary release/publication
+failures return `1`. Transfer, archive inspection/extraction, staged-version,
+loader-write and replacement operations preserve `130` or `143`.
+
+Zsh integration is generated offline from the checked-out, owned,
+content-validated `shell/completion.zsh` and `shell/key-bindings.zsh` sources.
+The generated loader quotes canonical paths as data. It does not edit shell
+startup files, Bash integration, fish state, or other shell configuration.
+Checksums attest the downloaded archive against upstream release metadata;
+the authorized Git origin, publisher release contents, GitHub HTTPS/CDN, and
+installed observation tools remain trust boundaries.
 
 There is one non-mutating discovery exception for the installation layout
 created when the ZDX installer runs from a local checkout. An exact

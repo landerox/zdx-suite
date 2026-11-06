@@ -316,6 +316,16 @@ replacements cannot run prefix or inventory observations before rejection.
 Confined recording managers establish these branches; they do not attest
 upstream artifacts or real-host package transactions.
 
+`sys_fzf_integrity.bats` exercises exact checkout-version releases, checksum
+metadata before executable requests, bounded publisher/CDN redirects,
+malformed and duplicate proofs, checksum mismatch, narrow archive extraction,
+exact staged versions, changed stages and integration, partial publication,
+interruption, cleanup, and quoted offline Zsh integration. Unexpected binary
+and integration stage paths retain their original bytes, mode and identity.
+An early loader write failure preserves both targets and its actual status. Transport and
+platform mappings are fixtures; no upstream executable or native package
+transaction is used.
+
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, the absence of package-lock polling and process-name lock helpers, Homebrew analytics and environment-hint regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, bounded probes that merge stderr within the same bound, the active-tool resolver's usable, absent, world-writable, WSL Windows, and macOS placeholder results, closed-stdin bounded/redacted command capture announced as `$ <command>` that keeps the caller's umask, the core duration format with its standalone fallback, color policy, and advisory menu dependency annotations |
