@@ -963,7 +963,7 @@ _sys_apt_refresh_indexes() {
     tail="$REPLY"
     (( ${#apt_key_pending} == 0 )) \
       || _sys_apt_key_settle "$update_rc" "$tail"
-    if (( update_rc != 0 && renewal )); then
+    if (( update_rc != 0 && update_rc != 130 && update_rc != 143 && renewal )); then
       _sys_apt_key_renew_reported "$tail"
       if (( ${#apt_key_pending} > 0 )); then
         _sys_info "Retrying the APT index update once to verify the renewed key."
@@ -1076,6 +1076,10 @@ update-apt() {
       "$apt_env_program" -i "${apt_environment[@]}" \
       apt-get "${apt_policy[@]}" -s full-upgrade </dev/null 2>/dev/null
   ) || simulation_rc=$?
+  if (( simulation_rc == 130 || simulation_rc == 143 )); then
+    _sys_warn "APT candidate inspection interrupted (status $simulation_rc)."
+    return $simulation_rc
+  fi
   if (( simulation_rc == 0 )); then
     local upgrade_count
     upgrade_count=$(print -r -- "$simulation" | command awk '
@@ -1197,6 +1201,9 @@ update-apt() {
         "${reply[4]}"
       result_detail="$REPLY"
       transaction_rc=1
+      if (( phase_status[1] == 130 || phase_status[1] == 143 )); then
+        transaction_rc=${phase_status[1]}
+      fi
     fi
     if (( transaction_rc == 0 )); then
       _sys_apt_announce_operation "$verbose" "$privilege_label" \
@@ -1212,6 +1219,9 @@ update-apt() {
         _sys_error "APT full-upgrade failed."
         result_detail="full-upgrade failed (status ${phase_status[1]})"
         transaction_rc=1
+        if (( phase_status[1] == 130 || phase_status[1] == 143 )); then
+          transaction_rc=${phase_status[1]}
+        fi
       fi
     fi
     if (( transaction_rc == 0 )); then
@@ -1228,6 +1238,9 @@ update-apt() {
         _sys_error "APT autoremove failed."
         result_detail="autoremove failed (status ${phase_status[1]})"
         transaction_rc=1
+        if (( phase_status[1] == 130 || phase_status[1] == 143 )); then
+          transaction_rc=${phase_status[1]}
+        fi
       fi
     fi
 
@@ -1241,7 +1254,12 @@ update-apt() {
       _sys_apt_report_reboot_requirement
       reboot_state="$REPLY"
     else
-      transaction_rc=1
+      if (( transaction_rc != 130 && transaction_rc != 143 )); then
+        transaction_rc=1
+        if (( post_audit_rc == 130 || post_audit_rc == 143 )); then
+          transaction_rc=$post_audit_rc
+        fi
+      fi
       [[ -n "$result_detail" ]] \
         || result_detail="package state needs manual review"
     fi

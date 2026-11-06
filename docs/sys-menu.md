@@ -568,6 +568,12 @@ regardless of `--fail-fast`. The summary reports the interruption and
 remaining not-run counts, and preserves that status instead of treating it as
 an ordinary partial failure.
 
+Tool installation, activation, default selection and package migration also
+preserve these interruption statuses and stop later mutation phases. Homebrew
+stops between refresh, upgrade, autoremove and cleanup. APT stops after an
+interrupted advisory simulation or index refresh; its required post-mutation
+audit still runs but cannot replace an already recorded interruption status.
+
 APT's pre-refresh simulation is advisory. If it fails or times out, the plan
 labels package candidates as unavailable and an authorized execution can still
 refresh the indexes and resolve the real transaction. A dry run returns `1`
@@ -1225,6 +1231,13 @@ repository there is none, and Git is not run. The plan reports a refused npm,
 uv, or Go cache in one warning that carries the reason; a step that meets a
 refused directory fails with the error.
 
+When HOME is a trusted symbolic alias, descendant checks walk from whichever
+literal or canonical HOME spelling contains the candidate. Neither spelling
+allows an inner symbolic link. Deep Homebrew cleanup runs only
+`cleanup --prune=all`, with closed stdin and automatic update disabled, under
+the existing non-interactive askpass policy. Dependency removal belongs to
+`update-brew` and is never added to this cache cleanup.
+
 No process-name scan gates the cleanup. `apt-get clean` takes APT's own
 non-blocking locks, so while another APT process holds them only the APT cache
 step fails, with APT's message; the remaining steps still run. An idle service
@@ -1286,7 +1299,7 @@ warning.
   apply. `update-awscli` names this cleanup after its manual-update guidance.
 - **nvm runtimes.** Below `${NVM_DIR:-~/.nvm}/versions/node`, a runtime is
   superseded when it is older than the default on the default's major release
-  line, no nvm alias other than `default` selects it, no `.nvmrc`,
+  line, no nvm alias other than the root `alias/default` selects it, no `.nvmrc`,
   `.node-version`, or `package.json` `"node"` entry of a repository directly
   below `$WS_BASE_DIR/<platform>/<identity>/` pins it, this shell's `PATH` does
   not use it, and the default runtime already holds all of its global npm
@@ -1298,6 +1311,14 @@ warning.
   deletes the validated runtime directory and leaves nvm's download cache to
   `nvm cache clear`. With `ZDX_VERBOSE=1`, the plan names the reason that each
   candidate runtime stays.
+
+All nested alias files count, including nested aliases named `default`.
+Discovery requires a complete bounded NUL-terminated inventory, searchable
+directories and successful reads of readable regular alias files. An uncertain
+or interrupted observation retains the runtimes; it never authorizes a partial
+inventory. The protected-runtime observation is renewed before each removal.
+Release and runtime removal loops stop on `130` or `143`, report completed
+names and planned names not run, and preserve the interruption status.
 
 A version that a running process uses always stays. On Linux the suite reads
 each `/proc/<pid>/exe` link of the user's processes; elsewhere it asks a

@@ -541,6 +541,15 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   Final check-to-mutation races remain, and an uncomputable historical
   conversion may require a manual merge or rebase after preserving local data.
 
+- System runtime cleanup requires a complete recursive nvm alias inventory,
+  retains versions on failed observations and renews protection before every
+  removal. Both HOME spellings enforce inner-link refusal. Homebrew cleanup
+  removes caches only; dependency removal remains an updater operation.
+  Cleanup and updater mutation phases preserve interruption statuses and stop
+  later targets with partial progress reported. Isolated cleanup-scope tests
+  cover these controls; final path-check-to-removal races and package-manager
+  transaction ownership remain residual boundaries.
+
 - High-risk workflows commonly request confirmation.
 - `zdx-plugins` removal accepts only a validated identifier, so no name can
   leave the canonical plugin root, and refuses a linked or foreign plugin

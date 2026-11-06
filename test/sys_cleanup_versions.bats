@@ -462,20 +462,20 @@ EOF
   run run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Node.js runtimes|$HOME/.nvm/versions/node|v22.0.0"* ]]
+  [[ "$output" != *"Node.js runtimes|"* ]]
+  [[ "$output" == *"Keeping v22.0.0: the nvm alias lts/jod selects it."* ]]
   [[ "$output" == *"Keeping v22.0.5: the nvm alias work selects it."* ]]
   [[ "$output" == *"Keeping v22.0.7: v22.1.0 lacks its global packages (only-old)."* ]]
 
   run run_cleanup_zsh 'clean-system --quick --yes'
 
   [ "$status" -eq 0 ]
-  [ ! -e "$HOME/.nvm/versions/node/v22.0.0" ]
   local kept
-  for kept in v20.5.0 v22.0.5 v22.0.7 v22.1.0 v22.2.0; do
+  for kept in v20.5.0 v22.0.0 v22.0.5 v22.0.7 v22.1.0 v22.2.0; do
     [ -d "$HOME/.nvm/versions/node/$kept" ]
   done
-  [[ "$output" == *"Node.js runtimes — done: 1 superseded runtime removed"* ]]
-  [[ "$output" == *"Open shells that still use a planned Node.js runtime need nvm use default afterwards."* ]]
+  [[ "$output" != *"Node.js runtimes — done:"* ]]
+  [[ "$output" != *"Open shells that still use a planned Node.js runtime need nvm use default afterwards."* ]]
 }
 
 @test "sys cleanup versions: nvm keeps pinned, active, and running runtimes" {
@@ -523,7 +523,7 @@ EOF
   run run_cleanup_zsh 'ZDX_VERBOSE=1 _sys_clean_plan quick'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"the nvm default version could not be determined."* ]]
+  [[ "$output" == *"the nvm default or complete alias inventory could not be determined."* ]]
   [[ "$output" != *"Node.js runtimes|"* ]]
 
   run run_cleanup_zsh '

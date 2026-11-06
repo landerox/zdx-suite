@@ -78,6 +78,7 @@ _sys_brew_update_phases() {
     return 1
   elif (( refresh_rc != 0 )); then
     _sys_error "Homebrew update failed."
+    (( refresh_rc == 130 || refresh_rc == 143 )) && return $refresh_rc
     return 1
   fi
 
@@ -98,20 +99,32 @@ _sys_brew_update_phases() {
     outdated_names=("${(@)outdated_names:#}")
   fi
   _sys_info "Upgrading packages..."
-  if ! "$brew_program" upgrade --no-ask </dev/null >&2; then
+  if "$brew_program" upgrade --no-ask </dev/null >&2; then
+    :
+  else
+    local -i mutation_rc=$?
     _sys_error "Homebrew upgrade failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 
   _sys_info "Removing unused dependencies..."
-  if ! "$brew_program" autoremove </dev/null >&2; then
+  if "$brew_program" autoremove </dev/null >&2; then
+    :
+  else
+    local -i mutation_rc=$?
     _sys_error "Homebrew autoremove failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 
   _sys_info "Cleaning up old versions..."
-  if ! "$brew_program" cleanup </dev/null >&2; then
+  if "$brew_program" cleanup </dev/null >&2; then
+    :
+  else
+    local -i mutation_rc=$?
     _sys_error "Homebrew cleanup failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 

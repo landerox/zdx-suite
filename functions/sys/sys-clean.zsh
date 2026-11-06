@@ -107,6 +107,7 @@ _sys_clean_protected_roots() {
 # path and the reason, for the caller's single warning.
 # Usage: _sys_clean_validate_user_path [--quiet] <path>
 _sys_clean_validate_user_path() {
+  emulate -L zsh
   local -i quiet=0
   [[ "${1:-}" == --quiet ]] && { quiet=1; shift; }
   local candidate="${1:-}"
@@ -144,7 +145,17 @@ _sys_clean_validate_user_path() {
     return 1
   done
 
-  relative_path="${candidate#$HOME/}"
+  if [[ "$candidate" == "$HOME"/* ]]; then
+    relative_path="${candidate#$HOME/}"
+  elif [[ "$candidate" == "$home_abs"/* ]]; then
+    current="$home_abs"
+    relative_path="${candidate#$home_abs/}"
+  else
+    _sys_clean_path_refused $quiet "$candidate" \
+      "Cleanup target is outside the protected user boundary." \
+      "is outside the protected user boundary."
+    return 1
+  fi
   local component
   for component in "${(@s:/:)relative_path}"; do
     current+="/$component"
@@ -723,7 +734,7 @@ _sys_clean_nvm_default_version() {
   alias_file="$nvm_dir/alias/default"
   [[ -f "$alias_file" && ! -L "$alias_file" && -r "$alias_file" ]] \
     || return 1
-  alias_value="$(<"$alias_file")"
+  alias_value="$(<"$alias_file")" || return 1
   alias_value="${alias_value%%$'\n'*}"
   if [[ "$alias_value" == v<->.<->.<-> ]]; then
     resolved="$alias_value"
@@ -746,25 +757,47 @@ _sys_clean_nvm_default_version() {
 _sys_clean_nvm_candidates() {
   emulate -L zsh
   local nvm_dir="${1:-}" root="${2:-}" default_version entry version
-  local alias_file alias_target running
+  local alias_file alias_target alias_inventory running
+  local -a alias_files=() alias_targets=()
+  local -i alias_index=0 observation_rc=0
   local -a candidates=() default_packages=() packages=() missing=()
   local -a running_executables=()
   reply=()
-  _sys_clean_nvm_default_version "$nvm_dir" || return 1
+  _sys_clean_nvm_default_version "$nvm_dir" || return $?
   default_version="$REPLY"
   _sys_nvm_global_packages "$root/$default_version" || return 1
   default_packages=("${reply[@]}")
+  reply=()
+  # A partial alias inventory cannot prove that a runtime is unselected.
+  # find reports failed directory reads; a recursive glob silently omits them.
+  alias_inventory=$(_sys_run_bounded_probe 5 1048576 find \
+    "$nvm_dir/alias" -print0 </dev/null 2>/dev/null) || observation_rc=$?
+  (( observation_rc == 130 || observation_rc == 143 )) && return $observation_rc
+  (( observation_rc == 0 )) || return 1
+  [[ "$alias_inventory" == *$'\0' ]] || return 1
+  alias_inventory="${alias_inventory%$'\0'}"
+  for alias_file in "${(@0)alias_inventory}"; do
+    [[ ! -L "$alias_file" ]] || return 1
+    if [[ -d "$alias_file" ]]; then
+      [[ -r "$alias_file" && -x "$alias_file" ]] || return 1
+      continue
+    fi
+    [[ -f "$alias_file" && -r "$alias_file" ]] || return 1
+    [[ "$alias_file" != "$nvm_dir/alias/default" ]] || continue
+    alias_target="$(<"$alias_file")" || return 1
+    alias_files+=("$alias_file")
+    alias_targets+=("${alias_target%%$'\n'*}")
+  done
   for entry in "$root"/v<->.<->.<->(Nn/); do
     version="${entry:t}"
     [[ ! -L "$entry" && -O "$entry" ]] || continue
     [[ "${${version#v}%%.*}" == "${${default_version#v}%%.*}" ]] || continue
     _sys_clean_nvm_version_older "$version" "$default_version" || continue
-    for alias_file in "$nvm_dir"/alias/*(N.); do
-      [[ "${alias_file:t}" != default && -r "$alias_file" ]] || continue
-      alias_target="$(<"$alias_file")"
+    for (( alias_index = 1; alias_index <= ${#alias_targets}; ++alias_index )); do
+      alias_file="${alias_files[alias_index]}"
       if _sys_nvm_pin_selects "$version" "$default_version" \
-        "${alias_target%%$'\n'*}"; then
-        _sys_verbose_dim "Keeping $version: the nvm alias $(_sys_display_escape "${alias_file:t}") selects it."
+        "${alias_targets[alias_index]}"; then
+        _sys_verbose_dim "Keeping $version: the nvm alias $(_sys_display_escape "${alias_file#"$nvm_dir/alias/"}") selects it."
         continue 2
       fi
     done
@@ -820,13 +853,15 @@ _sys_clean_nvm_targets() {
   _sys_clean_nvm_candidates "$nvm_dir" "$root" || candidates_rc=$?
   case $candidates_rc in
     0) ;;
+    130|143) return $candidates_rc ;;
     3)
       _sys_warn "Skipping Node.js runtimes: running programs cannot be inspected on this host."
       return 1
       ;;
     *)
-      _sys_verbose_dim "Skipping Node.js runtimes: the nvm default version could not be determined."
+      _sys_warn "Skipping Node.js runtimes: the nvm default or complete alias inventory could not be determined."
       reply=()
+      return 1
       ;;
   esac
   REPLY="$root"
@@ -876,7 +911,9 @@ _sys_remove_disabled_snap_revisions() {
     && command -v sudo &>/dev/null; then
     _sys_info "Privileged authentication: sudo -v"
     sudo -v >&2 || {
+      local -i auth_rc=$?
       _sys_error "sudo authentication failed; no Snap revision was removed."
+      (( auth_rc == 130 || auth_rc == 143 )) && return $auth_rc
       return 1
     }
     privilege_prefix=(sudo -n)
@@ -889,8 +926,9 @@ _sys_remove_disabled_snap_revisions() {
     && privilege_label="${(j: :)privilege_prefix} "
   local -a snap_records=("${(@f)disabled_snaps}")
   local record name rev current_disabled current_record
-  local -i failures=0
+  local -i failures=0 revision_index=0
   for record in "${snap_records[@]}"; do
+    (( ++revision_index ))
     read -r name rev <<< "$record"
     [[ "$name" =~ '^[[:alnum:]][[:alnum:]._-]*$' \
       && "$rev" =~ '^[0-9]+$' ]] || {
@@ -900,7 +938,9 @@ _sys_remove_disabled_snap_revisions() {
     }
 
     current_disabled=$(_sys_disabled_snap_revisions) || {
+      local -i inspection_rc=$?
       _sys_error "Unable to revalidate $name revision $rev."
+      (( inspection_rc == 130 || inspection_rc == 143 )) && return $inspection_rc
       (( failures++ ))
       continue
     }
@@ -932,7 +972,14 @@ _sys_remove_disabled_snap_revisions() {
       "Privileged operation: ${privilege_label}snap remove $name --revision=$rev"
     "${privilege_prefix[@]}" \
       snap remove "$name" --revision="$rev" >&2 2>/dev/null || {
+        local -i removal_rc=$?
         _sys_error "Failed to remove $name revision $rev."
+        if (( removal_rc == 130 || removal_rc == 143 )); then
+          if (( revision_index < ${#snap_records} )); then
+            _sys_label "Not run:" "${(j:, :)${(@V)snap_records[revision_index+1,-1]}}"
+          fi
+          return $removal_rc
+        fi
         (( failures++ ))
       }
   done
@@ -964,8 +1011,24 @@ _sys_clean_step_homebrew() {
   fi
 
   _sys_dim "May take several minutes on large Homebrew installs."
-  _sys_brew autoremove >&2 || return $?
-  _sys_brew cleanup --prune=all >&2
+  local REPLY askpass_program=""
+  local SUDO_ASKPASS
+  unset SUDO_ASKPASS
+  local -x HOMEBREW_NO_AUTO_UPDATE=1
+  if _sys_has_capability "os:darwin"; then
+    _sys_brew_askpass_program || {
+      _sys_error "The trusted Homebrew askpass guard is unavailable."
+      return 1
+    }
+    askpass_program="$REPLY"
+    local -x SUDO_ASKPASS="$askpass_program"
+  fi
+  {
+    _sys_brew cleanup --prune=all </dev/null >&2
+  } always {
+    _sys_brew_askpass_release "$askpass_program" \
+      || _sys_warn "Could not remove the private askpass script: $askpass_program"
+  }
 }
 
 _sys_clean_step_snap_revisions() {
@@ -983,7 +1046,10 @@ _sys_clean_step_snap_revisions() {
   local disabled_snaps
   disabled_snaps=$(_sys_disabled_snap_revisions)
   local rc=$?
-  if (( rc == 124 )); then
+  if (( rc == 130 || rc == 143 )); then
+    _sys_warn "Snap revision inspection interrupted (status $rc)."
+    return $rc
+  elif (( rc == 124 )); then
     _sys_warn "Timed out while listing disabled snap revisions."
     return 124
   elif (( rc != 0 )); then
@@ -1133,7 +1199,7 @@ _sys_clean_split_version_scope() {
 _sys_clean_step_releases() {
   local label="${1:-}" REPLY expected_root name target
   local -a reply=() names=() current=() removed=()
-  local -i failures=0
+  local -i failures=0 plan_index=0
   _sys_clean_split_version_scope "${2:-}" || {
     _sys_error "Invalid $label plan record."
     return 1
@@ -1151,6 +1217,7 @@ _sys_clean_step_releases() {
   current=("${reply[@]}")
 
   for name in "${names[@]}"; do
+    (( ++plan_index ))
     target="$expected_root/$name"
     [[ -e "$target" || -L "$target" ]] || continue
     if (( ! ${current[(Ie)$target]} )); then
@@ -1161,6 +1228,15 @@ _sys_clean_step_releases() {
     if command rm -rf -- "$target"; then
       removed+=("${name:t}")
     else
+      local -i remove_rc=$?
+      if (( remove_rc == 130 || remove_rc == 143 )); then
+        _sys_warn "$label cleanup interrupted (status $remove_rc): $(_sys_display_escape "$name")"
+        (( ${#removed} == 0 )) || _sys_label "Removed before interruption:" "${(j:, :)${(@V)removed}}"
+        if (( plan_index < ${#names} )); then
+          _sys_label "Not run:" "${(j:, :)${(@V)names[plan_index+1,-1]}}"
+        fi
+        return $remove_rc
+      fi
       (( ++failures ))
     fi
   done
@@ -1250,12 +1326,18 @@ _sys_clean_step_awscli_bundles() {
       _sys_resolve_privilege_prefix || return 1
       privilege_prefix=("${reply[@]}")
     fi
+    local -i remove_rc=0
     if (( ${#privilege_prefix} > 0 )); then
       _sys_dim "Privileged operation: ${(j: :)privilege_prefix} rm -rf -- $(_sys_display_escape "${(j: :)targets}")"
-      "${privilege_prefix[@]}" rm -rf -- "${targets[@]}" >&2
+      "${privilege_prefix[@]}" rm -rf -- "${targets[@]}" >&2 || remove_rc=$?
     else
-      command rm -rf -- "${targets[@]}" >&2
-    fi || (( ++failures ))
+      command rm -rf -- "${targets[@]}" >&2 || remove_rc=$?
+    fi
+    if (( remove_rc == 130 || remove_rc == 143 )); then
+      _sys_warn "AWS CLI bundle cleanup interrupted (status $remove_rc); inspect the planned bundle paths before retrying."
+      return $remove_rc
+    fi
+    (( remove_rc == 0 )) || (( ++failures ))
     for target in "${targets[@]}"; do
       [[ ! -e "$target" && ! -L "$target" ]] || {
         _sys_error "A superseded AWS CLI bundle version remains: $(_sys_display_escape "$target")"
@@ -1284,24 +1366,15 @@ _sys_clean_step_awscli_bundles() {
 _sys_clean_step_nvm_runtimes() {
   local REPLY expected_root name target
   local -a reply=() names=() current=() removed=()
-  local -i failures=0
+  local -i failures=0 plan_index=0
   _sys_clean_split_version_scope "${1:-}" || {
     _sys_error "Invalid Node.js runtimes plan record."
     return 1
   }
   expected_root="$REPLY"
   names=("${reply[@]}")
-  if ! _sys_clean_nvm_targets; then
-    _sys_error "The confirmed nvm runtime directory is no longer available."
-    return 1
-  fi
-  [[ "$REPLY" == "$expected_root" ]] || {
-    _sys_error "nvm runtime path changed after confirmation."
-    return 1
-  }
-  current=("${reply[@]}")
-
   for name in "${names[@]}"; do
+    (( ++plan_index ))
     target="$expected_root/$name"
     if [[ "$name" != v<->.<->.<-> ]]; then
       _sys_error "Refusing an unexpected Node.js runtime name: $(_sys_display_escape "$name")"
@@ -1309,6 +1382,24 @@ _sys_clean_step_nvm_runtimes() {
       continue
     fi
     [[ -e "$target" || -L "$target" ]] || continue
+    local -i targets_rc=0
+    _sys_clean_nvm_targets || targets_rc=$?
+    if (( targets_rc != 0 )); then
+      if (( targets_rc == 130 || targets_rc == 143 )); then
+        _sys_warn "Node.js runtime revalidation interrupted (status $targets_rc)."
+      else
+        _sys_error "The confirmed nvm runtime protection could not be revalidated."
+      fi
+      (( ${#removed} == 0 )) || _sys_label "Removed before stopping:" "${(j:, :)${(@V)removed}}"
+      _sys_label "Not run:" "${(j:, :)${(@V)names[plan_index,-1]}}"
+      (( targets_rc == 130 || targets_rc == 143 )) && return $targets_rc
+      return 1
+    fi
+    [[ "$REPLY" == "$expected_root" ]] || {
+      _sys_error "nvm runtime path changed after confirmation."
+      return 1
+    }
+    current=("${reply[@]}")
     if (( ! ${current[(Ie)$name]} )); then
       _sys_error "Node.js $name is no longer superseded; it was kept."
       (( ++failures ))
@@ -1317,6 +1408,15 @@ _sys_clean_step_nvm_runtimes() {
     if command rm -rf -- "$target"; then
       removed+=("$name")
     else
+      local -i remove_rc=$?
+      if (( remove_rc == 130 || remove_rc == 143 )); then
+        _sys_warn "Node.js runtimes cleanup interrupted (status $remove_rc): $(_sys_display_escape "$name")"
+        (( ${#removed} == 0 )) || _sys_label "Removed before interruption:" "${(j:, :)${(@V)removed}}"
+        if (( plan_index < ${#names} )); then
+          _sys_label "Not run:" "${(j:, :)${(@V)names[plan_index+1,-1]}}"
+        fi
+        return $remove_rc
+      fi
       (( ++failures ))
     fi
   done
@@ -1373,7 +1473,9 @@ _sys_clean_step_cargo_cache() {
     cache_size=$(command du -sh -- "$cargo_cache" 2>/dev/null \
       | command awk '{print $1}')
     command rm -rf -- "$cargo_cache"/*(ND) || {
+      local -i cleanup_rc=$?
       _sys_error "Some cargo registry cache entries could not be removed."
+      (( cleanup_rc == 130 || cleanup_rc == 143 )) && return $cleanup_rc
       return 1
     }
     _sys_report_result done "freed ${cache_size:-some space}" \
@@ -1548,7 +1650,10 @@ _sys_clean_plan() {
         ;;
     esac
   fi
-  if _sys_clean_nvm_targets && (( ${#reply} > 0 )); then
+  local -i nvm_targets_rc=0
+  _sys_clean_nvm_targets || nvm_targets_rc=$?
+  (( nvm_targets_rc == 130 || nvm_targets_rc == 143 )) && return $nvm_targets_rc
+  if (( nvm_targets_rc == 0 && ${#reply} > 0 )); then
     print -r -- "Node.js runtimes|$REPLY|${(j: :)reply}"
   fi
   _sys_has_systemd \
@@ -1564,7 +1669,7 @@ _sys_clean_plan() {
 
   if [[ "$mode" == "deep" ]]; then
     command -v brew &>/dev/null \
-      && print -r -- "Homebrew cleanup|brew autoremove and cleanup --prune=all"
+      && print -r -- "Homebrew cleanup|brew cleanup --prune=all"
     if command -v rustup &>/dev/null \
       && [[ -d "${RUSTUP_HOME:-$HOME/.rustup}/downloads" ]]; then
       _sys_clean_validate_user_path \
@@ -1823,7 +1928,11 @@ _sys_clean_system_main() {
   _sys_clean_protected_ready=1
 
   local plan_output
-  plan_output=$(_sys_clean_plan "$mode") || return 1
+  plan_output=$(_sys_clean_plan "$mode") || {
+    local -i plan_rc=$?
+    (( plan_rc == 130 || plan_rc == 143 )) && return $plan_rc
+    return 1
+  }
   local -a plan_records=()
   [[ -n "$plan_output" ]] && plan_records=("${(@f)plan_output}")
   _sys_header "${(C)mode} Cleanup Plan"
@@ -2026,7 +2135,10 @@ clean-snaps() {
   local disabled_snaps
   disabled_snaps=$(_sys_disabled_snap_revisions)
   local rc=$?
-  if (( rc == 124 )); then
+  if (( rc == 130 || rc == 143 )); then
+    _sys_warn "Snap revision inspection interrupted (status $rc)."
+    return $rc
+  elif (( rc == 124 )); then
     _sys_warn "Timed out while querying disabled snap revisions."
     return 1
   elif (( rc != 0 )); then
@@ -2068,7 +2180,7 @@ clean-snaps() {
     _sys_blank
   fi
 
-  _sys_remove_disabled_snap_revisions "$disabled_snaps" || return 1
+  _sys_remove_disabled_snap_revisions "$disabled_snaps" || return $?
   _sys_success "Disabled snap revisions cleaned."
 }
 

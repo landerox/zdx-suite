@@ -28,6 +28,11 @@ verification, and remaining limitations.
   helpers, and create bounded diagnostic captures only below the canonical
   trusted root. Unsafe roots are refused before allocation or child execution.
 
+- System: retain runtimes selected by nested nvm aliases, refuse incomplete
+  alias observations and inner links under either HOME spelling, keep Homebrew
+  cleanup limited to caches, and stop cleanup and updater mutations on
+  interruption with completed and not-run targets reported.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

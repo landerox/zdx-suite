@@ -5756,7 +5756,7 @@ EOF
         "APT cache|apt-get clean" \
         "npm cache|$HOME/.npm" \
         "Journal logs|journal entries older than 3 days" \
-        "Homebrew cleanup|brew autoremove and cleanup --prune=all" \
+        "Homebrew cleanup|brew cleanup --prune=all" \
         "Rust downloads|$HOME/.rustup/downloads"
     }
     clean-system --deep --dry-run
