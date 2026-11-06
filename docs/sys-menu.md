@@ -595,6 +595,27 @@ status `1`; an all-failed plan remains an ordinary failure.
 
 ### Aggregate output
 
+Owner discovery follows the canonical active executable. fzf selects only the
+safe discovered Git checkout containing that executable; another inactive
+checkout cannot claim or block it. The launcher, target, file identity, write
+mode and SHA256 are frozen before review and revalidated before pulling. A
+post-pull version probe uses only the trusted active executable while it still
+belongs to that checkout.
+
+Homebrew owns active AWS CLI or Starship only when the executable is below
+the corresponding formula in its resolved prefix and its trusted native
+manager lists that formula. Starship belongs to Cargo only when its active
+executable matches the canonical `${CARGO_HOME:-$HOME/.cargo}/bin/starship`
+and trusted absolute Cargo reports Starship in a bounded inventory. Manager
+identity, permissions and content are checked before ownership probes. A
+refused manager cannot run a prefix or inventory command, and an interrupted
+Homebrew observation never falls through to Cargo. Direct updates execute
+the exact absolute owner and check active ownership again afterward.
+An applicability probe interrupted with status `130` or `143` stops aggregate
+planning before authorization or any mutation; ordinary inapplicable steps
+remain omitted. An unowned AWS CLI receives manual guidance and only a trusted bounded version
+probe. Formula presence alone never proves ownership.
+
 The `update-system` plan considers 14 entries in this fixed order: APT, the
 native package backend, Snap, Homebrew, Starship, fzf, Google Cloud SDK, AWS
 CLI, uv, pipx, Node.js, Rust, Oh My Zsh, and Zsh plugins. Planning omits each
@@ -1216,6 +1237,12 @@ through the timeout service with a byte limit, and must still be the file
 that was checked, so a name swapped for a FIFO cannot block even a dry run.
 Any other directory is omitted from the plan with one warning that names it,
 and execution checks the signature again before the clean.
+
+uv and Go resolve to trusted native absolute executables for discovery and
+execution. Cargo and rustup pass the same trust gate before contributing
+cleanup targets or running a cleanup step. A refused tool is never executed,
+including during a dry run; neutral-directory and cache-boundary checks still
+apply.
 
 Every cache path, root, and store must be a user-owned directory below `HOME`,
 never `HOME` itself, that no symbolic link reaches, and it must not be or

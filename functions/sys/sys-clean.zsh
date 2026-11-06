@@ -235,9 +235,11 @@ _sys_clean_npm_cache_dir() {
 
 # Usage: _sys_clean_uv_cache_dir [--quiet]
 _sys_clean_uv_cache_dir() {
-  local cache_dir
+  local REPLY cache_dir program
+  _sys_tool_program uv || return 1
+  program="$REPLY"
   cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
-    uv cache dir 2>/dev/null) || return 1
+    "$program" cache dir 2>/dev/null) || return 1
   _sys_clean_print_validated "$@" "$cache_dir"
 }
 
@@ -324,9 +326,11 @@ _sys_clean_pip_cache_dir() {
 # toolchain: a toolchain line can never make cleanup download or switch one.
 # Usage: _sys_clean_go_cache_dir [--quiet]
 _sys_clean_go_cache_dir() {
-  local cache_dir
+  local REPLY cache_dir program
+  _sys_tool_program go || return 1
+  program="$REPLY"
   cache_dir=$(_sys_clean_in_neutral_dir _sys_run_with_timeout 5 \
-    env GOTOOLCHAIN=local go env GOMODCACHE 2>/dev/null) || return 1
+    env GOTOOLCHAIN=local "$program" env GOMODCACHE 2>/dev/null) || return 1
   _sys_clean_print_validated "$@" "$cache_dir"
 }
 
@@ -1098,11 +1102,13 @@ _sys_clean_step_npm_cache() {
 
 _sys_clean_step_uv_cache() {
   local REPLY
-  if ! command -v uv &>/dev/null; then
+  if ! _sys_tool_available uv; then
     _sys_report_result skipped "not installed" "uv not installed, skipping."
     return 0
   fi
 
+  _sys_tool_program uv || return 1
+  local uv_program="$REPLY"
   local expected_cache="${1:-}"
   local cache_dir
   cache_dir=$(_sys_clean_uv_cache_dir) || return 1
@@ -1121,7 +1127,7 @@ _sys_clean_step_uv_cache() {
     return 1
   }
   _sys_run_logged "uv cache clean" _sys_clean_in_neutral_dir \
-    command env UV_CACHE_DIR="$cache_dir" uv cache clean
+    command env UV_CACHE_DIR="$cache_dir" "$uv_program" cache clean
 }
 
 _sys_clean_step_pip_cache() {
@@ -1438,7 +1444,7 @@ _sys_clean_step_nvm_runtimes() {
 
 _sys_clean_step_rust_downloads() {
   local REPLY
-  if ! command -v rustup &>/dev/null; then
+  if ! _sys_tool_available rustup; then
     _sys_report_result skipped "not installed" "rustup not installed, skipping."
     return 0
   fi
@@ -1460,7 +1466,7 @@ _sys_clean_step_rust_downloads() {
 
 _sys_clean_step_cargo_cache() {
   local REPLY
-  if ! command -v cargo &>/dev/null; then
+  if ! _sys_tool_available cargo; then
     _sys_report_result skipped "not installed" "cargo not installed, skipping."
     return 0
   fi
@@ -1488,11 +1494,13 @@ _sys_clean_step_cargo_cache() {
 
 _sys_clean_step_go_modcache() {
   local REPLY
-  if ! command -v go &>/dev/null; then
+  if ! _sys_tool_available go; then
     _sys_report_result skipped "not installed" "Go not installed, skipping."
     return 0
   fi
 
+  _sys_tool_program go || return 1
+  local go_program="$REPLY"
   _sys_dim "May take several minutes for large module caches."
   local expected_cache="${1:-}"
   local cache_dir
@@ -1512,7 +1520,7 @@ _sys_clean_step_go_modcache() {
     return 1
   }
   _sys_clean_in_neutral_dir command env GOTOOLCHAIN=local \
-    GOMODCACHE="$cache_dir" go clean -modcache >&2
+    GOMODCACHE="$cache_dir" "$go_program" clean -modcache >&2
 }
 
 _sys_clean_step_journal() {
@@ -1596,7 +1604,7 @@ _sys_clean_plan() {
   # this host's npm.
   _sys_tool_available npm \
     && _sys_clean_plan_cache "npm cache" _sys_clean_npm_cache_dir
-  command -v uv &>/dev/null \
+  _sys_tool_available uv \
     && _sys_clean_plan_cache "uv cache" _sys_clean_uv_cache_dir \
       _sys_clean_uv_cache_layout "uv CACHEDIR.TAG"
   if _sys_clean_pip_command; then
@@ -1613,7 +1621,7 @@ _sys_clean_plan() {
       _sys_warn "Skipping pre-commit cache: its directory could not be resolved."
     fi
   fi
-  if command -v cargo &>/dev/null \
+  if _sys_tool_available cargo \
     && [[ -d "${CARGO_HOME:-$HOME/.cargo}/registry/cache" ]]; then
     _sys_clean_validate_user_path \
       "${CARGO_HOME:-$HOME/.cargo}/registry/cache" || return 1
@@ -1670,13 +1678,13 @@ _sys_clean_plan() {
   if [[ "$mode" == "deep" ]]; then
     command -v brew &>/dev/null \
       && print -r -- "Homebrew cleanup|brew cleanup --prune=all"
-    if command -v rustup &>/dev/null \
+    if _sys_tool_available rustup \
       && [[ -d "${RUSTUP_HOME:-$HOME/.rustup}/downloads" ]]; then
       _sys_clean_validate_user_path \
         "${RUSTUP_HOME:-$HOME/.rustup}/downloads" || return 1
       print -r -- "Rust downloads|$REPLY"
     fi
-    command -v go &>/dev/null \
+    _sys_tool_available go \
       && _sys_clean_plan_cache "Go module cache" _sys_clean_go_cache_dir \
         _sys_clean_go_cache_layout "cache/download directory"
   fi

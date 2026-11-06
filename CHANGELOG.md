@@ -33,6 +33,10 @@ verification, and remaining limitations.
   cleanup limited to caches, and stop cleanup and updater mutations on
   interruption with completed and not-run targets reported.
 
+- System: bind fzf, AWS CLI and Starship ownership to the canonical active
+  executable, refuse unsafe manager probes, freeze executable identity and
+  content before reviewed fzf updates, and use trusted absolute cleanup tools.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

@@ -382,29 +382,43 @@ _sys_update_fzf_install_revalidate() {
   }
 }
 
+# REPLY: the discovered safe checkout containing the active fzf. Inactive
+# checkouts never claim ownership or block another active installation.
 _sys_update_fzf_git_dir() {
+  local active_fzf="${1:-}" candidate_dir
+  local -i unsafe_owner=0
+  if [[ -z "$active_fzf" ]]; then
+    _sys_tool_program fzf || return 1
+    active_fzf="$REPLY"
+  fi
   local -a candidate_dirs=(
     "$HOME/.fzf"
     "${XDG_DATA_HOME:-$HOME/.local/share}/fzf"
     "$HOME/.local/opt/fzf"
   )
-  local candidate_dir
   for candidate_dir in "${candidate_dirs[@]}"; do
     [[ -e "$candidate_dir/.git" || -L "$candidate_dir/.git" ]] || continue
-    _sys_update_git_fingerprint "$HOME" "$candidate_dir" || return 2
+    _sys_update_fzf_active_in_git_dir "$candidate_dir" "$active_fzf" \
+      || continue
+    if ! _sys_update_git_fingerprint "$HOME" "$candidate_dir" 2>/dev/null; then
+      unsafe_owner=1
+      continue
+    fi
     REPLY="${reply[1]}"
     return 0
   done
+  (( unsafe_owner )) && return 2
   return 1
 }
 
-# Returns 0 when the active fzf executable lives in the discovered Git
-# checkout. An installed but shadowed package must not hide that checkout.
+# Returns 0 only for the checkout containing this active native executable.
 _sys_update_fzf_active_in_git_dir() {
-  local fzf_dir="${1:-}"
-  local active_fzf=""
+  local fzf_dir="${1:-}" active_fzf="${2:-}"
   [[ -n "$fzf_dir" ]] || return 1
-  active_fzf=$(builtin whence -p fzf 2>/dev/null) || return 1
+  if [[ -z "$active_fzf" ]]; then
+    _sys_tool_program fzf || return 1
+    active_fzf="$REPLY"
+  fi
   [[ "$active_fzf" == /* && "$active_fzf" != *[[:cntrl:]]* ]] || return 1
   [[ "${active_fzf:A}" == "${fzf_dir:A}"/* ]]
 }
@@ -418,17 +432,17 @@ update-fzf() {
   local -i dry_run="${reply[1]}" assume_yes="${reply[2]}"
   _sys_header "Updating fzf"
 
-  if ! command -v fzf &>/dev/null; then
-    _sys_report_result skipped "not installed" "fzf not installed, skipping."
-    return 0
-  fi
-
+  local -i program_rc=0
+  _sys_update_tool_program fzf fzf || program_rc=$?
+  (( program_rc == 3 )) && return 0
+  (( program_rc == 0 )) || return 1
+  local fzf_program="$REPLY"
   local fzf_dir=""
   local -i discovery_rc=0 active_git_owned=0
-  _sys_update_fzf_git_dir || discovery_rc=$?
+  _sys_update_fzf_git_dir "$fzf_program" || discovery_rc=$?
   if (( discovery_rc == 0 )); then
     fzf_dir="$REPLY"
-    _sys_update_fzf_active_in_git_dir "$fzf_dir" && active_git_owned=1
+    active_git_owned=1
   fi
 
   if (( ! active_git_owned )); then
@@ -463,6 +477,11 @@ update-fzf() {
     local expected_git_device="${reply[6]}"
     local expected_git_inode="${reply[7]}"
     local expected_fingerprint="$REPLY"
+    _sys_update_program_fingerprint "$fzf_program" || {
+      _sys_error "The active fzf executable could not be bound to this plan."
+      return 1
+    }
+    local expected_program_fingerprint="$REPLY"
     _sys_info "Git-owned fzf update plan:"
     _sys_label "Repository:" "${fzf_dir/#$HOME/~}"
     _sys_label "Origin:" "$(_sys_display_escape "$origin")"
@@ -490,6 +509,12 @@ update-fzf() {
     _sys_update_git_revalidate \
       "$HOME" "$fzf_dir" "$expected_fingerprint" || return 1
 
+    _sys_update_program_revalidate fzf "$fzf_program" \
+      "$expected_program_fingerprint" \
+      && _sys_update_fzf_active_in_git_dir "$fzf_dir" "$fzf_program" || {
+      _sys_error "The active fzf executable changed after the update plan."
+      return 1
+    }
     if _sys_update_git_logged -C "$fzf_dir" pull --ff-only origin; then
       _sys_update_git_revalidate_stable \
         "$HOME" "$fzf_dir" "$fzf_dir" "$origin" \
@@ -514,9 +539,15 @@ update-fzf() {
       else
         _sys_dim "No tracked fzf integration installer was present."
       fi
+      _sys_tool_program fzf \
+        && _sys_update_fzf_active_in_git_dir "$fzf_dir" "$REPLY" || {
+        _sys_error "fzf updated, but the active executable no longer belongs to this checkout."
+        return 1
+      }
+      fzf_program="$REPLY"
       local version_output updated_version
       version_output=$(
-        _sys_run_bounded_probe 3 65536 fzf --version 2>/dev/null
+        _sys_run_bounded_probe 3 65536 "$fzf_program" --version 2>/dev/null
       ) || version_output=""
       updated_version="${version_output%%[[:space:]]*}"
       [[ -n "$updated_version" ]] || updated_version="unknown"
@@ -540,7 +571,7 @@ update-fzf() {
       "No Git-owned fzf update applies."
     return 0
   }
-  _sys_warn "fzf is installed, but its package manager could not be determined."
+  _sys_warn "fzf is installed, but its installation owner could not be determined."
   _sys_dim "Update it using the same method you originally used to install it."
   _sys_report_result skipped "installation owner unknown"
 }
@@ -847,12 +878,13 @@ update-zsh-plugins() {
 
 _sys_update_fzf_applies() {
   local REPLY
-  command -v fzf &>/dev/null && _sys_update_fzf_git_dir || return 1
-  _sys_update_fzf_active_in_git_dir "$REPLY" && return 0
-  ! { command -v brew &>/dev/null \
-      && _sys_brew list fzf &>/dev/null 2>&1; } \
-    && ! { command -v dpkg &>/dev/null \
-      && dpkg -s fzf &>/dev/null; }
+  local -a reply=()
+  _sys_update_tool_applies fzf || return 1
+  # An unsafe active executable applies only to report the blocked result.
+  _sys_tool_program fzf || return 0
+  local -i discovery_rc=0
+  _sys_update_fzf_git_dir "$REPLY" || discovery_rc=$?
+  (( discovery_rc == 0 || discovery_rc == 2 ))
 }
 
 _sys_update_omz_applies() {

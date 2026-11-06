@@ -17,6 +17,8 @@ if [[ "$name" == brew && "$phase" == cleanup && "${SCOPE_CHECK_POLICY:-0}" == 1 
   [[ "${HOMEBREW_NO_AUTO_UPDATE:-}" == 1 && "${SUDO_ASKPASS:-}" == /usr/bin/false ]] || exit 96
 fi
 case "$name:$*" in
+  'brew:--prefix') printf '%s\n' "$HOME/homebrew"; exit 0 ;;
+  'snap:list aws-cli') [[ "$SCOPE_BACKEND" == snap ]]; exit $? ;;
   'fnm:current') printf 'v24.22.0\n'; exit 0 ;;
   'uv:--version') printf 'uv 0.9.0\n'; exit 0 ;;
   'brew:list starship'|'brew:list awscli') [[ "$SCOPE_BACKEND" == brew ]]; exit $? ;;
@@ -39,10 +41,17 @@ fi
 exit 0
 MOCK
   local name
-  for name in fnm uv pipx rustup gcloud brew cargo snap; do
+  for name in fnm uv pipx rustup gcloud brew cargo snap aws starship; do
     cp "$HOME/tool-mock" "$TEST_MOCK_BIN/$name"
     chmod -- 700 "$TEST_MOCK_BIN/$name"
   done
+  mkdir -p "$HOME/homebrew/Cellar/awscli/2.30.0/bin" \
+    "$HOME/homebrew/Cellar/starship/1.0.0/bin" "$HOME/.cargo/bin"
+  cp "$HOME/tool-mock" "$HOME/homebrew/Cellar/awscli/2.30.0/bin/aws"
+  cp "$HOME/tool-mock" "$HOME/homebrew/Cellar/starship/1.0.0/bin/starship"
+  cp "$HOME/tool-mock" "$HOME/.cargo/bin/starship"
+  chmod -- 700 "$HOME/homebrew/Cellar/awscli/2.30.0/bin/aws" \
+    "$HOME/homebrew/Cellar/starship/1.0.0/bin/starship" "$HOME/.cargo/bin/starship"
   cat > "$TEST_MOCK_BIN/rm" <<'MOCK'
 #!/usr/bin/env bash
 for arg in "$@"; do
@@ -77,10 +86,17 @@ _sys_resolve_privilege_prefix() { reply=(); }
 _sys_update_step_requires_privilege() { return 1; }
 _sys_update_probe_version() { REPLY=1.0.0; }
 _sys_update_pipx_inventory() { print -r -- $'demo\t1.0'; }
-_sys_update_tool_program() { REPLY="$TEST_MOCK_BIN/$1"; }
+_sys_update_tool_program() { _sys_tool_program "$1"; }
+functions[_scope_native_tool_program]="${functions[_sys_tool_program]}"
 _sys_tool_program() {
   [[ "$1" != fnm || "$SCOPE_BACKEND" != nvm ]] || return 1
-  REPLY="$TEST_MOCK_BIN/$1"
+  case "$1:$SCOPE_BACKEND" in
+    sha256sum:*|shasum:*) _scope_native_tool_program "$@" ;;
+    aws:brew) REPLY="$HOME/homebrew/Cellar/awscli/2.30.0/bin/aws" ;;
+    starship:brew) REPLY="$HOME/homebrew/Cellar/starship/1.0.0/bin/starship" ;;
+    starship:cargo) REPLY="$HOME/.cargo/bin/starship" ;;
+    *) REPLY="$TEST_MOCK_BIN/$1" ;;
+  esac
 }
 _sys_tool_available() { [[ "$1" == cargo ]]; }
 _sys_uv_resolved_program() { REPLY="$TEST_MOCK_BIN/uv"; }

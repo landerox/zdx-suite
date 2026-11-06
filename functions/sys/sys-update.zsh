@@ -716,6 +716,7 @@ EOF
   )
   local -a applicable_labels=() applicable_entries=()
   local entry label command_name
+  local -i applicability_rc=0
   for entry in "${plan_steps[@]}"; do
     label="${entry%%;*}"
     command_name="${entry#*;}"
@@ -723,10 +724,15 @@ EOF
       && _sys_update_step_remote_code "$command_name"; then
       continue
     fi
-    if _sys_step_applies "$command_name"; then
-      applicable_labels+=("$label")
-      applicable_entries+=("$entry")
-    fi
+    applicability_rc=0
+    _sys_step_applies "$command_name" || applicability_rc=$?
+    case "$applicability_rc" in
+      0)
+        applicable_labels+=("$label")
+        applicable_entries+=("$entry")
+        ;;
+      130|143) return "$applicability_rc" ;;
+    esac
   done
   (( ${#applicable_labels[@]} > 0 )) || {
     _sys_warn "No update steps apply to the detected host."

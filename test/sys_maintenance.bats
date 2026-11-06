@@ -3756,12 +3756,24 @@ EOF
 }
 
 @test "sys maintenance: Homebrew-owned AWS and Starship upgrades use no-ask" {
+  export MAINT_OWNED_BREW_PREFIX="$HOME/homebrew"
+  mkdir -p "$MAINT_OWNED_BREW_PREFIX/Cellar/awscli/2.15.0/libexec/bin" \
+    "$MAINT_OWNED_BREW_PREFIX/Cellar/starship/1.2.3/bin" \
+    "$MAINT_OWNED_BREW_PREFIX/bin"
   cat <<'EOF' > "$TEST_MOCK_BIN/brew"
 #!/usr/bin/env bash
-exit 97
+case "$*" in
+  --prefix) printf '%s\n' "$MAINT_OWNED_BREW_PREFIX" ;;
+  'list awscli'|'list starship') exit 0 ;;
+  'upgrade --no-ask awscli'|'upgrade --no-ask starship')
+    printf '%s\n' "$*" >> "$MAINT_MUTATION_LOG"
+    [[ "$3" != awscli ]] || : > "$HOME/awscli-upgraded"
+    ;;
+  *) exit 97 ;;
+esac
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
-  cat <<'EOF' > "$TEST_MOCK_BIN/aws"
+  cat <<'EOF' > "$MAINT_OWNED_BREW_PREFIX/Cellar/awscli/2.15.0/libexec/bin/aws"
 #!/usr/bin/env bash
 if [[ -e "$HOME/awscli-upgraded" ]]; then
   printf '%s\n' 'aws-cli/2.16.0 Python/3.12.0 Linux/6.8 exe/x86_64'
@@ -3769,31 +3781,22 @@ else
   printf '%s\n' 'aws-cli/2.15.0 Python/3.12.0 Linux/6.8 exe/x86_64'
 fi
 EOF
-  chmod +x "$TEST_MOCK_BIN/aws"
+  cp "$TEST_MOCK_BIN/starship" \
+    "$MAINT_OWNED_BREW_PREFIX/Cellar/starship/1.2.3/bin/starship"
+  chmod -- 700 "$MAINT_OWNED_BREW_PREFIX/Cellar/awscli/2.15.0/libexec/bin/aws" \
+    "$MAINT_OWNED_BREW_PREFIX/Cellar/starship/1.2.3/bin/starship"
+  ln -s ../Cellar/awscli/2.15.0/libexec/bin/aws "$MAINT_OWNED_BREW_PREFIX/bin/aws"
+  ln -s ../Cellar/starship/1.2.3/bin/starship "$MAINT_OWNED_BREW_PREFIX/bin/starship"
 
   run run_maintenance_zsh '
-    _sys_brew() {
-      print -r -- "${(j: :)@}" >> "$MAINT_MUTATION_LOG"
-      case "${1:-}" in
-        list) return 0 ;;
-        upgrade)
-          [[ "${2:-}" == "--no-ask" \
-            && ( "${3:-}" == "awscli" || "${3:-}" == "starship" ) \
-            && $# -eq 3 ]] || return 97
-          [[ "${3:-}" == "awscli" ]] && : > "$HOME/awscli-upgraded"
-          return 0
-          ;;
-        *) return 97 ;;
-      esac
-    }
-
+    path=("$MAINT_OWNED_BREW_PREFIX/bin" $path)
     update-awscli || return $?
     update-starship
   ' brew
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = \
-    $'list awscli\nupgrade --no-ask awscli\nlist starship\nupgrade --no-ask starship' ]
+    $'upgrade --no-ask awscli\nupgrade --no-ask starship' ]
   # Version evidence separates a real upgrade from an unchanged formula.
   [[ "$output" == *"AWS CLI updated through Homebrew: 2.15.0 → 2.16.0."* ]]
   [[ "$output" == *"Starship is already up to date (1.2.3)."* ]]
@@ -5056,7 +5059,12 @@ EOF
   rm "$fzf_repo/install"
   ln -s "$unsafe_installer" "$fzf_repo/install"
 
+  mkdir -p "$fzf_repo/bin"
+  printf '#!/usr/bin/env bash\nprintf "0.99.0 (fixture)\\n"\n' > "$fzf_repo/bin/fzf"
+  chmod -- 700 "$fzf_repo/bin/fzf"
+
   run run_maintenance_zsh '
+    path=("$HOME/.fzf/bin" $path)
     dpkg() { return 1; }
     _sys_run_logged() {
       print -r -- "$*" >> "$MAINT_MUTATION_LOG"
