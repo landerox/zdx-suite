@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- System: require a complete bounded APT source inventory before automatic
+  signing-key renewal, count every multi-valued or aliased keyring consumer, recognize
+  tab-separated deb822 types, and restore pending keys after interrupted
+  verification even when APT already printed a fetch line.
+
 - System: replace the fzf installer with an exact-version release download
   verified against upstream checksums before extraction or execution, publish
   only reviewed files, and generate Zsh integration offline. Missing proof

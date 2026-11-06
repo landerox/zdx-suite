@@ -1221,6 +1221,28 @@ with an inline key block such as a Launchpad PPA, a fingerprint or several
 keyrings, a keyring shared with another publisher's repository, and an
 unknown repository are never changed.
 
+Every absolute path in a multi-valued `signed-by` is still a consumer when
+proving that another source's keyring belongs to one publisher. One-line
+commas and deb822 whitespace are supported; `Types:` uses whitespace-delimited
+words, including tabs. Consumer device/inode identity catches dot-path and
+symbolic aliases to the same physical keyring; unresolved identities block
+renewal rather than establishing dedication. Source discovery must be complete: unreadable files or
+directories, nonregular inputs, changed metadata, files over 1 MiB, more than
+256 files or more than 2048 entries prevent automatic renewal. Each resolved
+source read is bounded by five seconds and a byte cap; parsing uses that
+captured snapshot. An incomplete inventory never becomes a partial set of
+authorized key changes. Read interruptions stop the plan or refresh path and
+retain their status through cleanup and the refresh result.
+
+Automatic renewal supports the documented literal option grammar. Quoted,
+escaped, percent-encoded or comment-bearing one-line option blocks are
+reported as incomplete before comment stripping; APT may accept these forms,
+but ZDX leaves their key maintenance manual. Unknown Signed-By tokens also
+block renewal. Unrecognized deb822 lines, including padded field names,
+and orphan continuation lines also make the inventory incomplete. Valid fingerprint-only selectors remain distinct from file
+consumers. Ordinary CRLF sources are normalized; other C0 controls and DEL,
+apart from TAB and LF, are refused before parsing rather than hiding an entry.
+
 One renewal is one transaction for one keyring:
 
 1. The plan facts are shown: repository, source file, keyring, key URL, the
@@ -1250,6 +1272,10 @@ One renewal is one transaction for one keyring:
    the previous keyring is reinstalled with the same argv and its previous
    mode, and ZDX reports that APT still cannot verify the repository. An
    interruption before that check also restores it.
+
+Statuses `130` and `143` always restore the previous keyring. A preceding
+`Get:` or `Hit:` line cannot prove verification after an interruption, and no
+renewed-key success is recorded for that transaction.
 
 Before `apt-get update`, ZDX renews every dedicated keyring of a known
 repository whose signing keys have all expired; that refresh is its

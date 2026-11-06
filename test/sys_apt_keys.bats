@@ -1,6 +1,116 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2016,SC2030,SC2031
 
+apt_inventory_refuses_renewal() {
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 1 ] || { printf '%s\n' "$output" >&2; false; }
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+  assert_no_key_workspace
+}
+
+@test "sys APT key scope: a comma-separated foreign consumer blocks renewal" {
+  printf 'deb [signed-by=%s,%s] https://apt.example.invalid stable main\n' \
+    "$APT_KEY_KEYRING" "$APT_KEY_ROOT/keyrings/other.gpg" \
+    > "$APT_KEY_ROOT/sources.list.d/other.list"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a multi-valued deb822 foreign consumer blocks renewal" {
+  printf 'Types: deb\nURIs: https://apt.example.invalid\nSuites: stable\nSigned-By: %s %s\n' \
+    "$APT_KEY_ROOT/keyrings/other.gpg" "$APT_KEY_KEYRING" \
+    > "$APT_KEY_ROOT/sources.list.d/other.sources"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: an unreadable source prevents automatic renewal" {
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' \
+    "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/other.list"
+  chmod -- 000 "$APT_KEY_ROOT/sources.list.d/other.list"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: an oversized source prevents automatic renewal" {
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' \
+    "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/other.list"
+  make_sized_file "$APT_KEY_ROOT/sources.list.d/other.list" 1048577
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a truncated source-file inventory prevents renewal" {
+  local index
+  for (( index=0; index<256; index++ )); do
+    printf '# fixture\n' > "$APT_KEY_ROOT/sources.list.d/zz-fixture-$index.list"
+  done
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a truncated source-entry inventory prevents renewal" {
+  local index
+  for (( index=0; index<2049; index++ )); do
+    printf 'deb https://apt.example.invalid stable main\n'
+  done > "$APT_KEY_ROOT/sources.list.d/zz-many.list"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: tab-separated deb822 Types include the binary source" {
+  rm -- "$APT_KEY_SOURCE"
+  printf 'Types: deb-src\tdeb\nURIs: https://cli.github.com/packages\nSuites: stable\nSigned-By: %s\n' \
+    "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/github.sources"
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$(cat "$APT_KEY_KEYRING")" = $'binary\nold-expired new-ghcli' ]
+  [ "$(cat "$APT_KEY_CURL_LOG")" = "$(expected_curl_call)" ]
+  assert_no_key_workspace
+}
+
+@test "sys APT key scope: an unreadable source directory prevents renewal" {
+  mv -- "$APT_KEY_SOURCE" "$APT_KEY_ROOT/sources.list"
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' \
+    "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/other.list"
+  chmod -- 000 "$APT_KEY_ROOT/sources.list.d"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a complete same-publisher consumer still permits renewal" {
+  printf 'fixture other key\n' > "$APT_KEY_ROOT/keyrings/other.gpg"
+  chmod -- 644 "$APT_KEY_ROOT/keyrings/other.gpg"
+  printf 'deb [signed-by=%s,%s] https://cli.github.com/packages other main\n' \
+    "$APT_KEY_KEYRING" "$APT_KEY_ROOT/keyrings/other.gpg" \
+    > "$APT_KEY_ROOT/sources.list.d/other.list"
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$(cat "$APT_KEY_KEYRING")" = $'binary\nold-expired new-ghcli' ]
+  assert_no_key_workspace
+}
+
+apt_settlement_interrupt_case() {
+  export APT_SETTLEMENT_INTERRUPT="$1"
+  cp "$APT_KEY_KEYRING" "$HOME/previous-keyring"
+  printf 'new key pending verification\n' > "$APT_KEY_KEYRING"
+  run run_apt_keys_zsh '
+    local -a privilege_prefix=(sudo -n) apt_key_renewed=()
+    local -A apt_key_context=(install "$TEST_MOCK_BIN/install") apt_key_outcomes=()
+    local -a apt_key_pending=("GitHub CLI"$'"'"'\t'"'"'"$APT_KEY_KEYRING"$'"'"'\t'"'"'"$HOME/previous-keyring"$'"'"'\t'"'"'"0644"$'"'"'\t'"'"'"7F38BBB59D064DBCB3D84D725612B36462313325"$'"'"'\t'"'"'"$APT_KEY_REPOSITORY")
+    _sys_apt_key_settle "$APT_SETTLEMENT_INTERRUPT" \
+      "Get:2 $APT_KEY_REPOSITORY InRelease [3917 B]" || return
+    (( ${#apt_key_renewed} == 0 && ${#apt_key_pending} == 0 )) || return 91
+  '
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  cmp "$HOME/previous-keyring" "$APT_KEY_KEYRING"
+  [[ "$output" != *'Renewed the'* ]]
+  [ -n "$(install_calls)" ]
+}
+
+@test "sys APT key scope: interrupted verification 130 restores the prior key despite Get output" {
+  apt_settlement_interrupt_case 130
+}
+
+@test "sys APT key scope: interrupted verification 143 restores the prior key despite Get output" {
+  apt_settlement_interrupt_case 143
+}
+
 # APT signing-key renewal for known repositories. APT, curl, gpg, sudo, and
 # install are mocks; the APT layout (sources and keyrings) lives in the
 # sandbox, owned by the test user in place of root.
@@ -50,6 +160,10 @@ EOF
   cat > "$TEST_MOCK_BIN/apt-key-env" <<'EOF'
 #!/usr/bin/env bash
 set -u
+[[ "$HOME" == "$TEST_TEMP_DIR/home" && "$APT_KEY_ROOT" == "$TEST_TEMP_DIR/apt" \
+  && "$TMPDIR" == "$TEST_TEMP_DIR/tmpdir" && ! -L "$HOME" && ! -L "$APT_KEY_ROOT" \
+  && ! -L "$TMPDIR" ]] || exit 98
+[[ "$APT_KEY_LOG" == "$TEST_TEMP_DIR/apt-key.log" ]] || exit 98
 [[ "${1:-}" == -i ]] || exit 97
 shift
 while [[ "${1:-}" == *=* ]]; do shift; done
@@ -90,6 +204,10 @@ EOF
 
   cat > "$TEST_MOCK_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
+[[ "$HOME" == "$TEST_TEMP_DIR/home" && "$APT_KEY_ROOT" == "$TEST_TEMP_DIR/apt" \
+  && "$TMPDIR" == "$TEST_TEMP_DIR/tmpdir" && ! -L "$HOME" && ! -L "$APT_KEY_ROOT" \
+  && ! -L "$TMPDIR" ]] || exit 98
+[[ "$APT_KEY_CURL_LOG" == "$TEST_TEMP_DIR/apt-key-curl.log"   && "$APT_KEY_DOWNLOAD" == "$TEST_TEMP_DIR/download.key"   && -f "$APT_KEY_DOWNLOAD" && ! -L "$APT_KEY_DOWNLOAD" ]] || exit 98
 { printf 'curl'; printf ' %s' "$@"; printf '\n'; } >> "$APT_KEY_CURL_LOG"
 if [[ "${APT_KEY_CURL_STATUS:-0}" != 0 ]]; then
   printf 'curl: (22) The requested URL returned error: 404\n' >&2
@@ -104,6 +222,10 @@ EOF
   cat > "$TEST_MOCK_BIN/gpg" <<'EOF'
 #!/usr/bin/env bash
 set -u
+[[ "$HOME" == "$TEST_TEMP_DIR/home" && "$APT_KEY_ROOT" == "$TEST_TEMP_DIR/apt" \
+  && "$TMPDIR" == "$TEST_TEMP_DIR/tmpdir" && ! -L "$HOME" && ! -L "$APT_KEY_ROOT" \
+  && ! -L "$TMPDIR" ]] || exit 98
+[[ "$APT_KEY_GPG_LOG" == "$TEST_TEMP_DIR/apt-key-gpg.log" ]] || exit 98
 { printf 'gpg'; printf ' %s' "$@"; printf '\n'; } >> "$APT_KEY_GPG_LOG"
 mode="" output="" homedir=""
 args=("$@")
@@ -117,6 +239,15 @@ for (( index = 0; index < ${#args[@]}; index++ )); do
 done
 [[ -d "$homedir" && "$homedir" != "$HOME/.gnupg" ]] || exit 96
 file="${args[${#args[@]} - 1]}"
+[[ -f "$file" && ! -L "$file" && "$file" == "$TEST_TEMP_DIR/"* ]] || exit 98
+file_parent=$(cd -P -- "${file%/*}" && pwd -P) || exit 98
+home_parent=$(cd -P -- "$homedir" && pwd -P) || exit 98
+[[ "$file_parent" == "$TEST_TEMP_DIR/"* && "$home_parent" == "$TMPDIR/"* ]] || exit 98
+if [[ -n "$output" ]]; then
+  [[ "$output" == "$TMPDIR/"* && ! -L "$output" ]] || exit 98
+  output_parent=$(cd -P -- "${output%/*}" && pwd -P) || exit 98
+  [[ "$output_parent" == "$TMPDIR/"* ]] || exit 98
+fi
 content=$(cat -- "$file") || exit 2
 case "$mode" in
   show)
@@ -161,6 +292,28 @@ case "$mode" in
 esac
 EOF
   chmod +x "$TEST_MOCK_BIN/gpg"
+
+  # Copy only the fixture's exact announced install argv inside its private tree.
+  cat > "$TEST_MOCK_BIN/install" <<'EOF'
+#!/usr/bin/env bash
+set -u
+[[ "$HOME" == "$TEST_TEMP_DIR/home" && "$APT_KEY_ROOT" == "$TEST_TEMP_DIR/apt" \
+  && "$TMPDIR" == "$TEST_TEMP_DIR/tmpdir" && ! -L "$HOME" && ! -L "$APT_KEY_ROOT" \
+  && ! -L "$TMPDIR" ]] || exit 98
+[[ $# == 8 && "$1" == -m && "$2" == 0644 && "$3" == -o && "$4" == 0 \
+  && "$5" == -g && "$6" == 0 ]] || exit 98
+source_file="$7" destination="$8"
+[[ "$source_file" == "$TEST_TEMP_DIR/"* && -f "$source_file" && ! -L "$source_file" \
+  && "$destination" == "$APT_KEY_ROOT/keyrings/"* && -f "$destination" \
+  && ! -L "$destination" ]] || exit 98
+source_parent=$(cd -P -- "${source_file%/*}" && pwd -P) || exit 98
+destination_parent=$(cd -P -- "${destination%/*}" && pwd -P) || exit 98
+[[ "$source_parent" == "$TEST_TEMP_DIR/"* \
+  && "$destination_parent" == "$APT_KEY_ROOT/keyrings" ]] || exit 98
+command cp -- "$source_file" "$destination" || exit
+command chmod -- 0644 "$destination"
+EOF
+  chmod -- 700 "$TEST_MOCK_BIN/install"
 }
 
 teardown() {
@@ -543,4 +696,192 @@ https://ppa.launchpadcontent.net/git-core/ppa/ubuntu|-" ]
 
   [ "$status" -eq 0 ]
   [ "$output" = $'key\tsigning key not installed (Missing key 7F38BBB59D064DBCB3D84D725612B36462313325)' ]
+}
+
+apt_inventory_interrupt_case() {
+  export APT_REVIEW_MODE="$1" APT_REVIEW_STATUS="$2" APT_REVIEW_REAL_CAT
+  APT_REVIEW_REAL_CAT=$(command -v cat)
+  cat > "$TEST_MOCK_BIN/inventory-cat" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == "-- $APT_KEY_SOURCE" ]]; then
+  printf 'bounded-source-read -> %s\n' "$APT_REVIEW_STATUS" >> "$HOME/inventory-interruption.log"
+  exit "$APT_REVIEW_STATUS"
+fi
+exec "$APT_REVIEW_REAL_CAT" "$@"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/inventory-cat"
+  run run_apt_keys_zsh '
+    functions[_review_original_tool_program]="${functions[_sys_tool_program]}"
+    _sys_tool_program() {
+      if [[ "$1" == cat ]]; then REPLY="$TEST_MOCK_BIN/inventory-cat"; return 0; fi
+      _review_original_tool_program "$@"
+    }
+    if [[ "$APT_REVIEW_MODE" == dry ]]; then
+      update-apt --dry-run --yes
+    else
+      update-apt --yes
+    fi
+  '
+  [ -s "$HOME/inventory-interruption.log" ]
+  if [ "$status" -ne "$APT_REVIEW_STATUS" ]; then
+    printf 'actual-public-status=%s output=%s\n' "$status" "$output" >&2
+    cat "$HOME/inventory-interruption.log" "$APT_KEY_LOG" >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_LOG")" = simulate ]
+  assert_no_key_workspace
+}
+
+@test "sys APT key scope: source interruption dry-run retains130" { apt_inventory_interrupt_case dry 130; }
+@test "sys APT key scope: source interruption dry-run retains143" { apt_inventory_interrupt_case dry 143; }
+@test "sys APT key scope: source interruption execution retains130 before index mutation" { apt_inventory_interrupt_case execute 130; }
+@test "sys APT key scope: source interruption execution retains143 before index mutation" { apt_inventory_interrupt_case execute 143; }
+
+apt_keyring_alias_consumer() {
+  export APT_REVIEW_ALIAS
+  if [ "$1" = traversal ]; then
+    APT_REVIEW_ALIAS="$APT_KEY_ROOT/keyrings/../keyrings/githubcli-archive-keyring.gpg"
+  else
+    APT_REVIEW_ALIAS="$APT_KEY_ROOT/keyrings/foreign-alias.gpg"
+    ln -s "$APT_KEY_KEYRING" "$APT_REVIEW_ALIAS"
+  fi
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' "$APT_REVIEW_ALIAS"     > "$APT_KEY_ROOT/sources.list.d/foreign-alias.list"
+  run run_apt_keys_zsh '
+    [[ "$APT_REVIEW_ALIAS" -ef "$APT_KEY_KEYRING" ]] || exit 91
+    print -u2 -r -- same-physical-keyring-proved
+    update-apt --yes
+  '
+  if [ "$status" -ne 1 ]; then
+    printf 'actual-public-status=%s output=%s\nkeyring-now=%s\n' "$status" "$output" "$(cat "$APT_KEY_KEYRING")" >&2
+    install_calls >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+}
+@test "sys APT key scope: a foreign dot-path consumer blocks renewal" { apt_keyring_alias_consumer traversal; }
+@test "sys APT key scope: a foreign symlink consumer blocks renewal" { apt_keyring_alias_consumer symlink; }
+
+@test "sys APT key scope: an unresolved consumer identity cannot authorize renewal" {
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' \
+    "$APT_KEY_ROOT/keyrings/missing.gpg" > "$APT_KEY_ROOT/sources.list.d/other.list"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a same-publisher physical alias still permits renewal" {
+  ln -s "$APT_KEY_KEYRING" "$APT_KEY_ROOT/keyrings/publisher-alias.gpg"
+  printf 'deb [signed-by=%s] https://cli.github.com/packages other main\n' \
+    "$APT_KEY_ROOT/keyrings/publisher-alias.gpg" > "$APT_KEY_ROOT/sources.list.d/other.list"
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$(cat "$APT_KEY_KEYRING")" = $'binary\nold-expired new-ghcli' ]
+  assert_no_key_workspace
+}
+
+apt_signed_by_lexical_consumer() {
+  case "$1" in
+    quoted-value) printf 'deb [signed-by="%s"] https://apt.example.invalid stable main\n' "$APT_KEY_KEYRING" ;;
+    quoted-option) printf 'deb ["signed-by=%s"] https://apt.example.invalid stable main\n' "$APT_KEY_KEYRING" ;;
+    encoded-root) printf 'deb [signed-by=%%2f%s] https://apt.example.invalid stable main\n' "${APT_KEY_KEYRING#/}" ;;
+  esac > "$APT_KEY_ROOT/sources.list.d/foreign-lexical.list"
+  run run_apt_keys_zsh 'update-apt --yes'
+  if [ "$status" -ne 1 ]; then
+    printf 'actual-public-status=%s output=%s\nkeyring-now=%s\n' "$status" "$output" "$(cat "$APT_KEY_KEYRING")" >&2
+    install_calls >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+  assert_no_key_workspace
+}
+@test "sys APT key scope: quoted value cannot hide foreign consumer" { apt_signed_by_lexical_consumer quoted-value; }
+@test "sys APT key scope: quoted assignment cannot hide foreign consumer" { apt_signed_by_lexical_consumer quoted-option; }
+@test "sys APT key scope: encoded root cannot hide foreign consumer" { apt_signed_by_lexical_consumer encoded-root; }
+
+@test "sys APT key scope: hash within option cannot hide foreign consumer" {
+  export APT_REVIEW_ALIAS="$APT_KEY_ROOT/keyrings/foreign#alias.gpg"
+  ln -s "$APT_KEY_KEYRING" "$APT_REVIEW_ALIAS"
+  printf 'deb [signed-by=%s] https://apt.example.invalid stable main\n' "$APT_REVIEW_ALIAS" > "$APT_KEY_ROOT/sources.list.d/foreign-comment.list"
+  run run_apt_keys_zsh '
+    [[ "$APT_REVIEW_ALIAS" -ef "$APT_KEY_KEYRING" ]] || exit 91
+    print -u2 -r -- same-physical-keyring-proved
+    update-apt --yes
+  '
+  if [ "$status" -ne 1 ]; then
+    printf 'actual-public-status=%s output=%s\nkeyring-now=%s\n' "$status" "$output" "$(cat "$APT_KEY_KEYRING")" >&2
+    install_calls >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+  assert_no_key_workspace
+}
+
+@test "sys APT key scope: unknown Signed-By tokens make the inventory incomplete" {
+  printf 'deb [signed-by=not-a-fingerprint] https://apt.example.invalid stable main\n' \
+    > "$APT_KEY_ROOT/sources.list.d/other.list"
+  apt_inventory_refuses_renewal
+}
+
+@test "sys APT key scope: a valid fingerprint-only consumer does not claim a file keyring" {
+  printf 'deb [signed-by=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA!] https://apt.example.invalid stable main\n' \
+    > "$APT_KEY_ROOT/sources.list.d/other.list"
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$(cat "$APT_KEY_KEYRING")" = $'binary\nold-expired new-ghcli' ]
+  assert_no_key_workspace
+}
+
+apt_deb822_ascii_separator() {
+  if [ "$1" = vt ]; then
+    printf 'Types: deb\vdeb-src\n'
+  elif [ "$1" = cr ]; then
+    printf 'Types: deb\rdeb-src\n'
+  else
+    printf 'Types: deb\fdeb-src\n'
+  fi > "$APT_KEY_ROOT/sources.list.d/foreign-control.sources"
+  printf 'URIs: https://apt.example.invalid\nSuites: stable\nSigned-By: %s\n' "$APT_KEY_KEYRING" >> "$APT_KEY_ROOT/sources.list.d/foreign-control.sources"
+  run run_apt_keys_zsh 'update-apt --yes'
+  if [ "$status" -ne 1 ]; then
+    printf 'actual-public-status=%s output=%s\nkeyring-now=%s\n' "$status" "$output" "$(cat "$APT_KEY_KEYRING")" >&2
+    install_calls >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+  assert_no_key_workspace
+}
+@test "sys APT key scope: VT-separated Types cannot hide foreign consumer" { apt_deb822_ascii_separator vt; }
+@test "sys APT key scope: FF-separated Types cannot hide foreign consumer" { apt_deb822_ascii_separator ff; }
+
+@test "sys APT key scope: interior CR cannot hide foreign consumer" { apt_deb822_ascii_separator cr; }
+
+@test "sys APT key scope: ordinary CRLF own-publisher source remains renewable" {
+  rm -- "$APT_KEY_SOURCE"
+  printf 'Types: deb\r\nURIs: https://cli.github.com/packages\r\nSuites: stable\r\nSigned-By: %s\r\n' "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/own-crlf.sources"
+  run run_apt_keys_zsh 'update-apt --yes'
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
+  [ "$(cat "$APT_KEY_KEYRING")" = $'binary\nold-expired new-ghcli' ]
+  [ "$(cat "$APT_KEY_CURL_LOG")" = "$(expected_curl_call)" ]
+  assert_no_key_workspace
+}
+
+@test "sys APT key scope: padded field names cannot hide a foreign consumer" {
+  printf 'Types : deb\nURIs: https://apt.example.invalid\nSuites: stable\nSigned-By: %s\n' "$APT_KEY_KEYRING" > "$APT_KEY_ROOT/sources.list.d/foreign-field-padding.sources"
+  run run_apt_keys_zsh 'update-apt --yes'
+  if [ "$status" -ne 1 ]; then
+    printf 'actual-public-status=%s output=%s\nkeyring-now=%s\n' "$status" "$output" "$(cat "$APT_KEY_KEYRING")" >&2
+    install_calls >&2
+    false
+  fi
+  [ ! -s "$APT_KEY_CURL_LOG" ]
+  [ -z "$(install_calls)" ]
+  [ "$(cat "$APT_KEY_KEYRING")" = 'fixture old-valid' ]
+  assert_no_key_workspace
 }
