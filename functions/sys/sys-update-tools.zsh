@@ -123,6 +123,69 @@ _sys_brew_prefix() {
   REPLY="${brew_prefix:A}"
 }
 
+# Homebrew owns a formula only when the active executable resolves inside
+# that formula below the resolved prefix and the same native manager lists it.
+# REPLY: canonical prefix; reply=(<active executable> <brew executable>).
+# Usage: _sys_update_homebrew_owns_program <formula> <active executable>
+_sys_update_homebrew_owns_program() {
+  local formula="${1:-}" program="${2:-}" manager="" brew_prefix=""
+  local -i probe_rc=0
+  [[ "$formula" == (awscli|starship) && "$program" == /* \
+    && "$program" != *[[:cntrl:]]* && -f "$program" && -x "$program" ]] \
+    || return 1
+  _sys_tool_program brew || return 1
+  manager="$REPLY"
+  _sys_update_program_fingerprint "$manager" || return $?
+  local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+  local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+  brew_prefix=$(_sys_run_bounded_probe 10 65536 "$manager" --prefix \
+    </dev/null 2>/dev/null) || probe_rc=$?
+  (( probe_rc == 0 )) || return "$probe_rc"
+  [[ "$brew_prefix" == /* && "$brew_prefix" != *[[:cntrl:]]* \
+    && -d "$brew_prefix" ]] || return 1
+  brew_prefix="${brew_prefix:A}"
+  [[ "${program:A}" == "$brew_prefix"/Cellar/"$formula"/* \
+    || "${program:A}" == "$brew_prefix"/opt/"$formula"/* ]] \
+    || return 1
+  _sys_run_bounded_probe 10 65536 "$manager" list "$formula" \
+    </dev/null >/dev/null 2>&1 || return $?
+  REPLY="$brew_prefix"
+  reply=("$program" "$manager")
+}
+
+# Ownership belongs to the active Starship, not another installed copy.
+# REPLY: homebrew or cargo; reply=(<active executable> <manager executable>).
+# Usage: _sys_update_starship_owner <active executable>
+_sys_update_starship_owner() {
+  local program="${1:-}" manager="" inventory="" line
+  local -i owner_rc=0
+  [[ "$program" == /* && "$program" != *[[:cntrl:]]* \
+    && -f "$program" && -x "$program" ]] || return 1
+  _sys_update_homebrew_owns_program starship "$program" || owner_rc=$?
+  if (( owner_rc == 0 )); then
+    REPLY=homebrew
+    return 0
+  fi
+  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+  local cargo_home="${CARGO_HOME:-$HOME/.cargo}" cargo_program=""
+  [[ "$cargo_home" == /* && "$cargo_home" != *[[:cntrl:]]* ]] || return 1
+  cargo_program="$cargo_home/bin/starship"
+  [[ -f "$cargo_program" && -x "$cargo_program" \
+    && "${program:A}" == "${cargo_program:A}" ]] || return 1
+  _sys_tool_program cargo || return 1
+  manager="$REPLY"
+  _sys_update_program_fingerprint "$manager" || return $?
+  inventory=$(_sys_run_bounded_probe 10 262144 "$manager" install --list \
+    </dev/null 2>/dev/null) || return $?
+  for line in "${(@f)inventory}"; do
+    [[ "$line" == 'starship v'*: ]] || continue
+    REPLY=cargo
+    reply=("$program" "$manager")
+    return 0
+  done
+  return 1
+}
+
 # True when Homebrew owns the active gcloud: the executable, or the file it
 # resolves to, lies in the gcloud-cli cask (formerly google-cloud-sdk) below
 # the Homebrew prefix, or in its share/google-cloud-sdk link.
@@ -217,28 +280,51 @@ update-gcloud() {
 update-awscli() {
   emulate -L zsh
   local REPLY
+  local -a reply=()
   _sys_update_parse_no_args update-awscli "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
   _sys_header "Updating AWS CLI v2"
 
-  if command -v brew &>/dev/null \
-    && _sys_brew list awscli &>/dev/null 2>&1; then
-    local aws_before="" aws_after=""
-    _sys_update_probe_version 5 aws --version && aws_before="$REPLY"
+  local -i program_rc=0
+  _sys_tool_program aws || program_rc=$?
+  local aws_program="$REPLY"
+  if (( program_rc != 0 && program_rc != 1 )); then
+    _sys_update_tool_program aws "AWS CLI" || program_rc=$?
+    (( program_rc == 3 )) && return 0
+    return 1
+  fi
+  local -i owner_rc=1
+  if (( program_rc == 0 )); then
+    owner_rc=0
+    _sys_update_homebrew_owns_program awscli "$aws_program" || owner_rc=$?
+  fi
+  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+  if (( owner_rc == 0 )); then
+    local manager="${reply[2]}" aws_before="" aws_after=""
+    _sys_update_probe_version 5 "$aws_program" --version && aws_before="$REPLY"
     _sys_info "AWS CLI is managed by Homebrew; upgrading that formula."
-    HOMEBREW_NO_AUTO_UPDATE=1 _sys_brew upgrade --no-ask awscli \
-      </dev/null >&2 || {
+    local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+    local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+    "$manager" upgrade --no-ask awscli </dev/null >&2 || {
       local -i mutation_rc=$?
       _sys_error "Homebrew failed to update AWS CLI."
       (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
-    _sys_update_probe_version 5 aws --version && aws_after="$REPLY"
+    owner_rc=0
+    _sys_tool_program aws \
+      && _sys_update_homebrew_owns_program awscli "$REPLY" || owner_rc=$?
+    (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+    if (( owner_rc != 0 )); then
+      _sys_error "Homebrew completed, but the active AWS CLI owner could not be verified."
+      return 1
+    fi
+    _sys_update_probe_version 5 "${reply[1]}" --version && aws_after="$REPLY"
     _sys_update_report_version "AWS CLI" "$aws_before" "$aws_after" Homebrew
     return 0
   fi
 
-  if command -v snap &>/dev/null \
+  if (( program_rc == 0 )) && command -v snap &>/dev/null \
     && command snap list aws-cli &>/dev/null 2>&1; then
     _sys_report_result delegated "Snap → sys-menu update-snap" \
       "AWS CLI is managed by Snap; run update-snap instead."
@@ -246,8 +332,10 @@ update-awscli() {
   fi
 
   local current_version="not installed"
-  command -v aws &>/dev/null \
-    && current_version=$(command aws --version 2>&1 | command awk '{print $1}')
+  if (( program_rc == 0 )) \
+    && _sys_update_probe_version 5 "$aws_program" --version; then
+    current_version="$REPLY"
+  fi
   _sys_label "Current:" "$current_version"
   _sys_error "Automatic AWS CLI bundle installation is disabled."
   _sys_dim "AWS publishes detached signatures rather than a pinned checksum."
@@ -261,6 +349,7 @@ update-awscli() {
 update-starship() {
   emulate -L zsh
   local REPLY
+  local -a reply=()
   _sys_update_parse_no_args update-starship "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
   _sys_header "Updating Starship"
@@ -269,50 +358,54 @@ update-starship() {
   _sys_update_tool_program starship Starship || program_rc=$?
   (( program_rc == 3 )) && return 0
   (( program_rc == 0 )) || return 1
+  local starship_program="$REPLY"
+  local -i owner_rc=0
+  _sys_update_starship_owner "$starship_program" || owner_rc=$?
+  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+  if (( owner_rc != 0 )); then
+    _sys_error "Starship's installation owner could not be verified."
+    _sys_dim "Update it with its original package manager."
+    _sys_dim "Official options: https://starship.rs/installing/"
+    _sys_report_result blocked "installation owner unknown"
+    return 1
+  fi
+  local owner="$REPLY" manager="${reply[2]}"
   local starship_before="" starship_after=""
-  _sys_update_probe_version 3 starship --version \
+  _sys_update_probe_version 3 "$starship_program" --version \
     && starship_before="$REPLY"
-
-  if command -v brew &>/dev/null \
-    && _sys_brew list starship &>/dev/null 2>&1; then
+  if [[ "$owner" == homebrew ]]; then
     _sys_info "Starship is managed by Homebrew."
-    HOMEBREW_NO_AUTO_UPDATE=1 _sys_brew upgrade --no-ask starship \
-      </dev/null >&2 || {
+    local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+    local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+    "$manager" upgrade --no-ask starship </dev/null >&2 || {
       local -i mutation_rc=$?
       _sys_error "Homebrew failed to update Starship."
       (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
-    _sys_update_probe_version 3 starship --version \
-      && starship_after="$REPLY"
-    _sys_update_report_version Starship "$starship_before" "$starship_after" \
-      Homebrew
-    return 0
-  fi
-
-  if _sys_tool_available cargo \
-    && command cargo install --list 2>/dev/null \
-      | command grep -q '^starship '; then
+  else
     _sys_info "Starship is managed by Cargo."
-    command env CARGO_NET_RETRY=0 \
-      cargo install --locked starship >&2 || {
+    local -x CARGO_NET_RETRY=0
+    "$manager" install --locked starship </dev/null >&2 || {
       local -i mutation_rc=$?
       _sys_error "Cargo failed to update Starship."
       (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
-    _sys_update_probe_version 3 starship --version \
-      && starship_after="$REPLY"
-    _sys_update_report_version Starship "$starship_before" "$starship_after" \
-      Cargo
-    return 0
   fi
-
-  _sys_error "Starship's installation owner could not be verified."
-  _sys_dim "Update it with its original package manager."
-  _sys_dim "Official options: https://starship.rs/installing/"
-  _sys_report_result blocked "installation owner unknown"
-  return 1
+  owner_rc=0
+  _sys_tool_program starship \
+    && _sys_update_starship_owner "$REPLY" || owner_rc=$?
+  (( owner_rc == 130 || owner_rc == 143 )) && return $owner_rc
+  if (( owner_rc != 0 )) \
+    || [[ "$REPLY" != "$owner" || "${reply[2]}" != "$manager" ]]; then
+    _sys_error "The update completed, but the active Starship owner could not be verified."
+    return 1
+  fi
+  _sys_update_probe_version 3 "${reply[1]}" --version \
+    && starship_after="$REPLY"
+  _sys_update_report_version Starship "$starship_before" "$starship_after" \
+    "${(C)owner}"
 }
 
 _sys_uv_resolved_program() {
@@ -780,12 +873,12 @@ _sys_update_awscli_applies() {
 }
 
 _sys_update_starship_applies() {
-  _sys_update_tool_applies starship \
-    && ! { command -v brew &>/dev/null \
-      && _sys_brew list starship &>/dev/null 2>&1; } \
-    && _sys_tool_available cargo \
-    && command cargo install --list 2>/dev/null \
-      | command grep -q '^starship '
+  local REPLY
+  local -a reply=()
+  _sys_update_tool_applies starship || return 1
+  # Keep an unsafe active executable visible as blocked, without probing it.
+  _sys_tool_program starship || return 0
+  _sys_update_starship_owner "$REPLY" && [[ "$REPLY" == cargo ]]
 }
 
 _sys_update_uv_applies() {

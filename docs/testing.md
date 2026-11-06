@@ -278,6 +278,10 @@ Apple Silicon runner. They do not replace acceptance of host-only behavior.
 
 ### System coverage
 
+`sys_active_ownership.bats` also drives the public aggregate planner through
+real bounded owner observations returning `130` or `143`, proving no later
+mutation or false success, with an ordinary inapplicable-step control.
+
 `sys_session_safety.bats` checks option isolation for the frozen public
 inventory and menu/dispatcher, direct and nested resource records under
 hostile array/splitting options, seeded and unset regex state, public
@@ -294,6 +298,13 @@ cache-only Homebrew cleanup, and interrupted removal and updater phases.
 Recording fixtures check completed and not-run targets. Returned interruption
 statuses are separate from the one disposable child that terminates itself
 with TERM; these fixtures do not establish native package-manager acceptance.
+
+`sys_active_ownership.bats` covers active versus inactive fzf checkouts,
+changed launchers and executable bytes, canonical Homebrew and Cargo ownership,
+unsafe managers refused before inventory probes, interrupted owner discovery,
+trusted cleanup tools, and standalone loading through confined recorders.
+Mocked ownership and native UID-sensitive fixture checks remain separate from
+real-host package-manager acceptance.
 
 | File | Covered boundary |
 | --- | --- |

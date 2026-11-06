@@ -1280,6 +1280,11 @@ be established and prints the official signature-verification path instead.
 `update-starship` similarly updates only a Homebrew- or Cargo-owned binary and
 refuses an unknown installation owner.
 
+AWS CLI and Starship ownership follows the active canonical executable and
+the owning manager's inventory. An installed formula cannot claim another
+binary earlier in PATH. fzf likewise updates only the safe checkout containing
+the active executable, and refuses if that executable changes after review.
+
 The aggregate avoids updating one installation twice. Homebrew-owned AWS CLI,
 Starship, fzf, uv, and Google Cloud SDK installations are handled by
 `update-brew`; their tool-specific aggregate steps are omitted. For uv, this
@@ -1377,6 +1382,9 @@ Homebrew cleanup removes caches through `cleanup --prune=all`; dependency
 removal belongs to `update-brew`. Both the literal and canonical HOME paths
 reject inner links. Interrupted removals stop later targets and report what
 was removed and what was not run.
+
+uv, Go, Cargo and rustup cleanup uses trusted native executable paths; a
+refused executable is never probed or run during a dry run.
 
 Superseded tool versions are old releases that a newer installation
 replaced: Codex, Cursor Agent, and Claude CLI releases, AWS CLI v2 bundles left

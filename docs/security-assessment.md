@@ -1309,6 +1309,15 @@ in a compromised release channel and then installed, potentially as root.
 
 **Current controls.**
 
+- System binds fzf checkout ownership and AWS CLI/Starship package ownership
+  to the canonical active executable. Trusted manager inventories cannot let
+  an inactive formula claim an unrelated binary. Executable identity, write
+  mode and SHA256 are checked before manager observations and renewed before
+  a reviewed fzf pull; refused cleanup tools never execute. Active-ownership
+  fixtures exercise changed targets, unsafe managers and interrupted discovery.
+  Installed managers, their libraries and upstream artifacts remain trusted;
+  these checks retain a final revalidation-to-execution race.
+
 - Downloads use HTTPS and generally fail on HTTP errors.
 - Without a Homebrew or Snap owner, `update-awscli` refuses automatic bundle
   installation and points to AWS's detached-signature verification procedure.

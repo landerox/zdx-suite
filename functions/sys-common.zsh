@@ -1003,6 +1003,109 @@ _sys_tool_program() {
   return 0
 }
 
+# Freeze the lexical entry and canonical executable, including their ownership
+# and identity. Root-owned sticky temporary ancestors are allowed, not writable
+# installation directories. REPLY is an opaque record for equality checks.
+_sys_update_program_state() {
+  emulate -L zsh
+  local program="${1:-}" target directory
+  local -A literal_state=() target_state=() directory_state=() root_state=()
+  [[ "$program" == /* && "$program" != *[[:cntrl:]]* \
+    && -f "$program" && -x "$program" ]] || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  zstat -H root_state / 2>/dev/null \
+    && zstat -L -H literal_state "$program" 2>/dev/null || return 1
+  (( literal_state[uid] == EUID \
+    || literal_state[uid] == root_state[uid] )) || return 1
+  target="${program:A}"
+  zstat -H target_state "$target" 2>/dev/null || return 1
+  (( (target_state[mode] & 8#170000) == 8#100000 \
+    && (target_state[mode] & 8#22) == 0 \
+    && (target_state[uid] == EUID \
+      || target_state[uid] == root_state[uid]) )) || return 1
+  for directory in "${program:h}" "${target:h}"; do
+    directory="${directory:A}"
+    while true; do
+      zstat -H directory_state "$directory" 2>/dev/null || return 1
+      (( directory_state[uid] == EUID \
+        || directory_state[uid] == root_state[uid] )) || return 1
+      if (( directory_state[mode] & 8#22 )); then
+        (( directory_state[uid] == root_state[uid] \
+          && (directory_state[mode] & 8#1000) != 0 )) || return 1
+      fi
+      [[ "$directory" == / ]] && break
+      directory="${directory:h}"
+    done
+  done
+  REPLY="$program|$target"
+  local field
+  for field in device inode uid gid mode nlink size mtime ctime; do
+    REPLY+="|${literal_state[$field]}:${target_state[$field]}"
+  done
+}
+
+# Bind an installed updater to its current bytes through an opened regular
+# file. The digest provider is itself an absolute, owner-validated executable.
+_sys_update_program_fingerprint() {
+  emulate -L zsh
+  local program="${1:-}" before after digest_program digest_state raw
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=() digest_args=()
+  local -A opened_state=() path_state=()
+  local -i10 input_fd=-1 digest_rc=0
+  _sys_update_program_state "$program" || return 1
+  before="$REPLY"
+  if _sys_tool_program sha256sum; then
+    digest_program="$REPLY"
+  elif _sys_tool_program shasum; then
+    digest_program="$REPLY"
+    digest_args=(-a 256)
+  else
+    _sys_error "sha256sum or shasum is required to review installed update executables."
+    return 1
+  fi
+  _sys_update_program_state "$digest_program" || return 1
+  digest_state="$REPLY"
+  zmodload zsh/system 2>/dev/null || return 1
+  sysopen -r -o nofollow,nonblock,cloexec -u input_fd \
+    -- "${program:A}" 2>/dev/null || return 1
+  {
+    zstat -H opened_state -f "$input_fd" 2>/dev/null \
+      && zstat -H path_state "${program:A}" 2>/dev/null || return 1
+    (( (opened_state[mode] & 8#170000) == 8#100000 \
+      && opened_state[device] == path_state[device] \
+      && opened_state[inode] == path_state[inode] )) || return 1
+    raw=$(_sys_run_bounded_probe 10 4096 \
+      "$digest_program" "${digest_args[@]}" <&$(( input_fd )) 2>/dev/null) \
+      || digest_rc=$?
+  } always {
+    exec {input_fd}<&-
+  }
+  (( digest_rc == 0 )) || return "$digest_rc"
+  raw="${raw%%[[:space:]]*}"
+  raw="${raw:l}"
+  [[ "$raw" =~ '^[0-9a-f]{64}$' ]] || return 1
+  _sys_update_program_state "$digest_program" || return 1
+  [[ "$REPLY" == "$digest_state" ]] || return 1
+  _sys_update_program_state "$program" || return 1
+  after="$REPLY"
+  [[ "$before" == "$after" ]] || return 1
+  REPLY="$after|$raw"
+}
+
+# Re-resolve the selected command so PATH changes and symlink retargeting are
+# rejected as well as changed bytes, inode, ownership, or writable mode.
+_sys_update_program_revalidate() {
+  emulate -L zsh
+  local name="$1" program="$2" expected="$3" REPLY
+  local -i validation_rc=0
+  _sys_tool_program "$name" \
+    && [[ "$REPLY" == "$program" ]] || return 1
+  _sys_update_program_fingerprint "$program" || validation_rc=$?
+  (( validation_rc == 0 )) || return "$validation_rc"
+  [[ "$REPLY" == "$expected" ]]
+}
+
 # True when the tool's active executable is usable (see _sys_tool_program).
 _sys_tool_available() {
   local REPLY
