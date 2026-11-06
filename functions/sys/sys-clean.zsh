@@ -843,6 +843,9 @@ _sys_disabled_snap_revisions() {
 }
 
 _sys_validate_disabled_snap_revisions() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local disabled_snaps="$1"
   [[ -n "$disabled_snaps" ]] || return 0
 
@@ -859,6 +862,9 @@ _sys_validate_disabled_snap_revisions() {
 }
 
 _sys_remove_disabled_snap_revisions() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local disabled_snaps="$1"
 
   [[ -z "$disabled_snaps" ]] && return 0
@@ -1910,6 +1916,7 @@ _sys_clean_system_main() {
 # =============================================================================
 
 clean-journal() {
+  emulate -L zsh
   local -i assume_yes=0 dry_run=0
   local -a reply=()
   while (( $# )); do
@@ -1982,6 +1989,7 @@ clean-journal() {
 }
 
 clean-snaps() {
+  emulate -L zsh
   local assume_yes=0 dry_run=0
 
   while (( $# )); do
@@ -2065,6 +2073,7 @@ clean-snaps() {
 }
 
 clean-system() {
+  emulate -L zsh
   local mode="" assume_yes=0 dry_run=0 choice
 
   while (( $# )); do

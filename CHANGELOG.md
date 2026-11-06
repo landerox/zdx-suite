@@ -76,6 +76,9 @@ verification, and remaining limitations.
   partial failure through a strict GitHub recorder, exact forced-push leases,
   and merge and rebase application against disposable local remotes.
 
+- System commands preserve caller options and regex match state, and failed
+  update-lock release no longer silences later shell diagnostics.
+
 - Distinguish bare master invocations from explicit empty arguments and reject
   direct colon routes with usage status `2` before execution. Diagnose empty
   doctor operands while preserving no-argument scans and literal owner arguments.

@@ -98,6 +98,9 @@ _sys_ports_lsof_output() {
 
 # stdout TSV: port, protocol, port number, local address, PID, command name.
 _sys_ports_lsof_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local lsof_output
   lsof_output=$(_sys_ports_lsof_output) || return $?
 
@@ -146,6 +149,9 @@ _sys_ports_lsof_records() {
 
 # stdout TSV: port, protocol, port number, local address, PID or -, command.
 _sys_ports_ss_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local ss_output
   ss_output=$(
     _sys_run_with_timeout 5 env LC_ALL=C ss -H -lntup 2>/dev/null
@@ -515,6 +521,7 @@ _sys_ports_parse_mutation() {
 }
 
 sys-ports() {
+  emulate -L zsh
   case "${1:-}" in
     "")
       _sys_ports_interactive

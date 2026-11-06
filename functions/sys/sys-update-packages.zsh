@@ -12,6 +12,7 @@ if [[ -n "${_SYS_UPDATE_PACKAGES_SOURCED:-}" ]]; then
 fi
 
 update-brew() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-brew "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -132,6 +133,7 @@ _sys_brew_update_phases() {
 }
 
 update-snap() {
+  emulate -L zsh
   local REPLY
   local -a reply=()
   _sys_update_parse_plan_flags update-snap "$@" || return $?
@@ -218,6 +220,9 @@ _sys_dnf_resolve_trusted_program() {
 }
 
 _sys_dnf_major_version() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a mbegin=() mend=()
   local dnf_program="${1:-}"
   [[ "$dnf_program" == /* && "$dnf_program" != *[[:cntrl:]]* ]] \
     || return 2

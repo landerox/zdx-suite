@@ -34,6 +34,9 @@ _sys_telemetry_dir_safe() {
 }
 
 _sys_telemetry_format_ms() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local milliseconds="$1"
   if [[ ! "$milliseconds" =~ '^[0-9]+$' \
     || "$milliseconds" == 0[0-9]* \
@@ -57,6 +60,9 @@ _sys_telemetry_format_ms() {
 
 # Status: 0 readable, 1 unsafe/unreadable, 2 invalid limit, 3 empty, 4 too large.
 _sys_telemetry_validate_log() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local log_file="$1"
   local log_dir="${log_file:h}"
   local max_bytes="$SYS_TELEMETRY_MAX_READ_BYTES"
@@ -466,6 +472,7 @@ _sys_telemetry_menu_rows_build() {
 }
 
 sys-telemetry() {
+  emulate -L zsh
   case "${1:-}" in
     -h|--help)
       (( $# == 1 )) || {

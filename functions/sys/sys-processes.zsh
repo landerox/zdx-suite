@@ -100,6 +100,9 @@ _sys_processes_backend() {
 
 # stdout TSV: process, PID, UID, CPU percent, memory percent, command name.
 _sys_processes_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local process_backend
   process_backend=$(_sys_processes_backend) || return $?
 
@@ -395,6 +398,7 @@ _sys_processes_interactive() {
 }
 
 sys-processes() {
+  emulate -L zsh
   case "${1:-}" in
     "")
       _sys_processes_interactive

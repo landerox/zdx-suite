@@ -15,6 +15,7 @@ fi
 # program resolves to its external path, so no shell function can stand in.
 # Usage: _sys_update_probe_version <seconds> <program> [arguments...]
 _sys_update_probe_version() {
+  emulate -L zsh
   local seconds="${1:-3}" program="${2:-}" output="" line=""
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
@@ -51,6 +52,7 @@ _sys_update_report_version() {
 
 # Prints "name<TAB>version" records for installed pipx applications.
 _sys_update_pipx_inventory() {
+  emulate -L zsh
   local output="" line env_program="" MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
   env_program=$(builtin whence -p env 2>/dev/null) || return 1
@@ -169,6 +171,7 @@ _sys_gcloud_owner() {
 }
 
 update-gcloud() {
+  emulate -L zsh
   local REPLY
   local -a reply=()
   _sys_update_parse_no_args update-gcloud "$@" || return $?
@@ -210,6 +213,7 @@ update-gcloud() {
 }
 
 update-awscli() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-awscli "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -251,6 +255,7 @@ update-awscli() {
 }
 
 update-starship() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-starship "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -345,6 +350,7 @@ _sys_uv_updated_version() {
 }
 
 update-uv-system() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-uv-system "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -423,6 +429,7 @@ update-uv-system() {
 }
 
 update-pipx() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-pipx "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -556,6 +563,7 @@ _sys_nvm_migrate_global_packages() {
 }
 
 update-node() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-node "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0
@@ -693,6 +701,7 @@ update-node() {
 }
 
 update-rust() {
+  emulate -L zsh
   local REPLY
   _sys_update_parse_no_args update-rust "$@" || return $?
   [[ "$REPLY" == "help" ]] && return 0

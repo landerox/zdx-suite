@@ -84,6 +84,13 @@ Each command has one highest relevant risk:
 
 ## Loader and capabilities
 
+Public commands, the menu router and dispatcher isolate their owned logic
+with `emulate -L zsh`, retaining the caller's options after return. Internal
+regular-expression work localizes both scalar and array match parameters,
+including when the caller left them unset. Generic command-execution wrappers
+retain their documented inherited-option boundary. Update-lock release scopes
+descriptor-close redirections so a failed unlock cannot silence later stderr.
+
 The loader and the capability layer provide:
 
 - standalone `sys-menu.zsh` sourcing without requiring `functions.zsh`;

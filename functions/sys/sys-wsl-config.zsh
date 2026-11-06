@@ -57,6 +57,8 @@ _sys_wsl_usage() {
 # withholds it from the terminal and from JSON.
 _sys_wsl_value_sensitive() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local normalized="${(L)1-}"
   [[ "$normalized" == *(password|passwd|passphrase|token|secret|credential|bearer|api-key|api_key|apikey|access-key|access_key|private-key|private_key|cookie)* ]] \
     && return 0
@@ -89,6 +91,8 @@ _sys_wsl_options_have_metadata() {
 # written. The command is split into words and never evaluated.
 _sys_wsl_boot_mtu_pin() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local command_text="${1-}" word iface="" mtu=""
   reply=()
   [[ -n "$command_text" ]] || return 1
@@ -129,6 +133,8 @@ _sys_wsl_boot_mtu_pin() {
 # Usage: _sys_wsl_review_index <file-id> <records> <settings-array-name>
 _sys_wsl_review_index() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local file_id="$1" records="$2" settings_name="$3"
   local spec record line_number section key value lookup kind
   local -a spec_fields=() record_fields=()
@@ -426,6 +432,9 @@ _sys_wsl_review_findings() {
 # reply: the documented manual steps that compact the distribution's
 # ext4.vhdx from Windows. The review prints them and never runs them.
 _sys_wsl_compaction_steps() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local distribution="${1-}"
   [[ "$distribution" =~ '^[A-Za-z0-9._-]{1,64}$' ]] \
     || distribution="<distribution>"
@@ -797,6 +806,7 @@ _sys_wsl_review_json() {
 }
 
 sys-wsl() {
+  emulate -L zsh
   local -i json=0
   while (( $# > 0 )); do
     case "$1" in

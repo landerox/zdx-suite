@@ -342,6 +342,9 @@ _sys_diag_render_disk() {
 }
 
 _sys_diag_render_package_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local package_output collection_rc
   package_output=$(_sys_diag_package_records)
   collection_rc=$?
@@ -445,6 +448,8 @@ _sys_diag_json_disk_row() {
 # Prints one zdx.sys-info.v1 JSON document built from the same typed host
 # facts as the text report. Values that are unavailable are null.
 _sys_info_json() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
   local REPLY value
   local os_display kernel_release architecture environment_name
   os_display=$(_sys_diag_os_name 2>/dev/null) || os_display=""
@@ -628,6 +633,9 @@ _sys_info_json() {
 }
 
 sys-info() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local -i json=0
   case "${1:-}" in
     -h|--help)
@@ -844,6 +852,9 @@ _sys_diag_render_signaled_services() {
 }
 
 sys-health() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   case "${1:-}" in
     -h|--help)
       (( $# == 1 )) || {

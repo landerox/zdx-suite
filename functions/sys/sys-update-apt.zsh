@@ -998,6 +998,7 @@ _sys_apt_refresh_indexes() {
 }
 
 update-apt() {
+  emulate -L zsh
   local REPLY
   local -i assume_yes=0 dry_run=0 include_phased_updates=0 verbose=0
   local inherited_privilege_mode="${_SYS_PRIVILEGE_NONINTERACTIVE:-0}"
