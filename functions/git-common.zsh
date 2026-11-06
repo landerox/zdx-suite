@@ -392,6 +392,21 @@ _git_temp_parent_safe() {
   else
     return 1
   fi
+  local ancestor="${temp_parent:h}"
+  while true; do
+    parent_state=()
+    [[ -d "$ancestor" && ! -L "$ancestor" ]] \
+      && zstat -LH parent_state -- "$ancestor" 2>/dev/null || return 1
+    if (( (parent_state[uid] != root_state[uid] && parent_state[uid] != EUID) \
+      || ((parent_state[mode] & 8#22) != 0 \
+        && ! (parent_state[uid] == root_state[uid] \
+          && (parent_state[mode] & 8#1000) != 0 \
+          && (parent_state[mode] & 8#2) != 0)) )); then
+      return 1
+    fi
+    [[ "$ancestor" == / ]] && break
+    ancestor="${ancestor:h}"
+  done
   REPLY="$temp_parent"
 }
 
@@ -1077,7 +1092,11 @@ _git_capture_nul() {
   local -i command_code=0
   reply=()
 
-  temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-records.XXXXXX") || {
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe temporary directory."
+    return 1
+  }
+  temp_dir=$(command mktemp -d "$REPLY/zdx-git-records.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }

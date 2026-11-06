@@ -1765,6 +1765,13 @@ unintended targets.
   persistent locks, recoverable failures and option operands; concurrent
   configuration mutation remains a residual risk.
 
+- Git record capture, change and stash fingerprints, stash diffs, and amend
+  messages validate the canonical temporary root and every ancestor before
+  allocation, including standalone loading and message staging after review.
+  `git_temporary_safety.bats` covers unsafe leaves and ancestors, trusted
+  aliases, kept commit identity after refused staging, and cleanup. These
+  pathname checks do not eliminate a concurrent replacement after validation.
+
 - State is generally kept under the user's home.
 - Telemetry is opt-in.
 - The opt-in Git identity guard persists nothing: it remembers checked

@@ -204,7 +204,11 @@ _git_stash_state_fingerprint() {
     return 2
   fi
 
-  temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-stash-state.XXXXXX") || {
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe temporary directory."
+    return 1
+  }
+  temp_dir=$(command mktemp -d "$REPLY/zdx-git-stash-state.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }
@@ -749,7 +753,11 @@ _git_stash_page_full() {
     return 1
   }
 
-  temp_dir=$(command mktemp -d "${TMPDIR:-/tmp}/zdx-git-stash-diff.XXXXXX") || {
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe temporary directory."
+    return 1
+  }
+  temp_dir=$(command mktemp -d "$REPLY/zdx-git-stash-diff.XXXXXX") || {
     _git_error "Unable to create a private temporary directory."
     return 1
   }

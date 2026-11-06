@@ -20,6 +20,10 @@ verification, and remaining limitations.
   status and plans, replace grouped identity options consistently, and report
   incomplete rollback when configuration removal fails.
 
+- Git: validate canonical temporary roots and every ancestor before storing
+  record lists, change or stash fingerprints, stash diffs, and amend messages.
+  Unsafe roots are refused before allocation, including after confirmation.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

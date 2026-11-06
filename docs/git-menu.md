@@ -939,6 +939,13 @@ may conservatively refuse a complex historical conversion. Preserve ignored
 and untracked files and perform that merge or rebase manually; there is no
 bypass flag. Native old-Git acceptance is separate from capability-mocked tests.
 
+Git record capture, change and stash fingerprints, stash diffs, and amend
+messages allocate only below the canonical trusted temporary root. The root
+and every ancestor must have a trusted owner and safe write permissions;
+root-owned sticky shared directories are allowed. Standalone loading uses the
+same policy. Each allocation validates its root, including message staging
+after amend confirmation.
+
 Every selected identifier remains data. File discovery is NUL-delimited where
 Git supports `-z`; external commands receive arrays and an option terminator
 before user-controlled paths. Revisions, refs, remotes, stash references, and
@@ -1201,6 +1208,10 @@ They also exercise failed configuration and ref observations, preserved read
 interruptions, remote-selection precedence and detached-HEAD protection.
 Tracking-HEAD failure and interruption remain distinct from a missing ref;
 only the documented absence result permits the remote-default fallback.
+
+`test/git_temporary_safety.bats` checks unsafe temporary leaves and ancestors
+across local record and fingerprint paths, amend message staging after
+confirmation, standalone validation, trusted aliases, and allocation cleanup.
 
 | File | Contract boundary |
 | --- | --- |
