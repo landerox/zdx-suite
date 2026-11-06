@@ -151,6 +151,41 @@ _git_identity_ssh_option_selects() {
   [[ "${(L)1}" == (identityfile|identitiesonly)([[:space:]=]*|) ]]
 }
 
+# Decode one SSH option word without changing its shell quoting. The caller's
+# _git_identity_option_parts receives (option argument noarg_prefix consumes_next).
+# The first argument-taking option consumes the rest, including any i/o in it.
+_git_identity_ssh_option_word() {
+  emulate -L zsh
+  local option_word="${(Q)1}" next_word="${2-}"
+  local letter="" prefix="" argument=""
+  local -i letter_index=2 consumes_next=0
+  _git_identity_option_parts=("" "" "" 0)
+  [[ "$option_word" == -?* && "$option_word" != --* ]] || return 0
+  for (( ; letter_index <= ${#option_word}; letter_index++ )); do
+    letter="${option_word[letter_index]}"
+    case "$letter" in
+      B|b|c|D|E|e|F|I|i|J|L|l|m|O|o|P|p|Q|R|S|W|w)
+        argument="${option_word[letter_index + 1,-1]}"
+        if [[ -z "$argument" ]]; then
+          [[ -n "$next_word" ]] || return 1
+          argument="${(Q)next_word}"
+          consumes_next=1
+        fi
+        _git_identity_option_parts=("$letter" "$argument" "$prefix" "$consumes_next")
+        return 0
+        ;;
+      4|6|A|a|C|f|G|g|K|k|M|N|n|q|s|T|t|V|v|X|x|Y|y)
+        prefix+="$letter"
+        ;;
+      *)
+        # Unknown options remain opaque; do not guess which letters take data.
+        return 0
+        ;;
+    esac
+  done
+  return 0
+}
+
 # Splits an SSH command into shell words and removes the options that select
 # an identity: -i FILE (or -iFILE) and -o IdentityFile or IdentitiesOnly. Sets
 # reply to (program command selects): the unquoted program word after any
@@ -159,14 +194,17 @@ _git_identity_ssh_option_selects() {
 # -o IdentityAgent, stay.
 _git_identity_ssh_parts() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
 
   local -a ssh_words=("${(z)1}")
   local -a kept_words=()
+  local -a _git_identity_option_parts=()
   local ssh_word=""
   local plain_word=""
   local program_name=""
   local selects="no"
-  local -i word_index=1
+  local -i word_index=1 options_ended=0
 
   while (( word_index <= ${#ssh_words} )) \
     && [[ "${(Q)ssh_words[word_index]}" =~ '^[A-Za-z_][A-Za-z0-9_]*=' ]]; do
@@ -182,30 +220,25 @@ _git_identity_ssh_parts() {
   for (( ; word_index <= ${#ssh_words}; word_index++ )); do
     ssh_word="${ssh_words[word_index]}"
     plain_word="${(Q)ssh_word}"
-    case "$plain_word" in
-      -i)
+    [[ "$plain_word" == -- ]] && options_ended=1
+    if (( ! options_ended )); then
+      _git_identity_ssh_option_word "$ssh_word" "${ssh_words[word_index + 1]-}" \
+        || return 1
+      if [[ "${_git_identity_option_parts[1]}" == i ]] \
+        || { [[ "${_git_identity_option_parts[1]}" == o ]] \
+          && _git_identity_ssh_option_selects "${_git_identity_option_parts[2]}"; }; then
         selects="yes"
-        (( word_index++ ))
+        [[ -n "${_git_identity_option_parts[3]}" ]] \
+          && kept_words+=("-${_git_identity_option_parts[3]}")
+        (( word_index += _git_identity_option_parts[4] ))
         continue
-        ;;
-      -i?*)
-        selects="yes"
-        continue
-        ;;
-      -o)
-        if _git_identity_ssh_option_selects "${(Q)ssh_words[word_index + 1]-}"; then
-          selects="yes"
-          (( word_index++ ))
-          continue
-        fi
-        ;;
-      -o?*)
-        if _git_identity_ssh_option_selects "${plain_word#-o}"; then
-          selects="yes"
-          continue
-        fi
-        ;;
-    esac
+      fi
+      kept_words+=("$ssh_word")
+      if (( _git_identity_option_parts[4] )); then
+        kept_words+=("${ssh_words[++word_index]}")
+      fi
+      continue
+    fi
     kept_words+=("$ssh_word")
   done
 
@@ -280,7 +313,10 @@ _git_identity_plan_ssh() {
   _git_identity_ssh_value=""
   _git_identity_ssh_label="(default SSH selection)"
   if [[ -n "$source_value" ]]; then
-    _git_identity_ssh_parts "$source_value"
+    _git_identity_ssh_parts "$source_value" || {
+      _git_error "Unable to parse configured SSH options; identity unchanged."
+      return 1
+    }
     program_name="${reply[1]}"
     base_command="${reply[2]}"
     selects="${reply[3]}"
@@ -327,7 +363,7 @@ _git_identity_plan_ssh() {
   # The command selects another identity: keep only its program and options,
   # unless the scope inherits exactly that without a key anyway.
   if [[ -n "$inherited_value" ]]; then
-    _git_identity_ssh_parts "$inherited_value"
+    _git_identity_ssh_parts "$inherited_value" || return 1
     if [[ "${reply[3]}" == "no" && "${reply[2]}" == "$base_command" ]]; then
       _git_identity_ssh_label="(default SSH selection through the inherited core.sshCommand)"
       return 0
@@ -354,15 +390,20 @@ _git_identity_config_values() {
 }
 
 _git_identity_restore_config() {
+  emulate -L zsh
   local scope_flag="$1"
   local -a keys=("${(@P)2}")
   local present_name="$3"
   local values_name="$4"
   local key
-  local -i rollback_failed=0
+  local -i rollback_failed=0 unset_rc=0
 
   for key in "${keys[@]}"; do
-    command git config "$scope_flag" --unset-all "$key" &>/dev/null || true
+    unset_rc=0
+    command git config "$scope_flag" --unset-all "$key" &>/dev/null || unset_rc=$?
+    # Git returns 5 when the key is already absent. A lock/write error must
+    # not be treated as a successful restoration of that absence.
+    (( unset_rc == 0 || unset_rc == 5 )) || rollback_failed=1
     if (( ${${(P)present_name}[$key]:-0} )); then
       command git config "$scope_flag" --add \
         "$key" "${${(P)values_name}[$key]}" &>/dev/null \
@@ -370,6 +411,24 @@ _git_identity_restore_config() {
     fi
   done
   (( rollback_failed == 0 ))
+}
+
+# Display only the program and a key-selection label, never inherited shell
+# assignments or SSH option values such as ProxyCommand credentials.
+_git_identity_redact_ssh_command() {
+  emulate -L zsh
+  local -a reply=()
+  local program_name="" key_label="default"
+  REPLY="(not set)"
+  [[ -n "${1-}" ]] || return 0
+  _git_identity_ssh_parts "$1" || {
+    REPLY="(SSH command hidden)"
+    return 0
+  }
+  program_name="${reply[1]##*[/\\]}"
+  [[ -n "$program_name" ]] || program_name="(custom SSH program)"
+  [[ "${reply[3]}" == yes ]] && key_label="configured"
+  REPLY="${(V)program_name} (identity: $key_label; arguments: ********)"
 }
 
 _git_identity_apply() {
@@ -494,8 +553,10 @@ _git_identity_apply() {
   _git_label "Email:" "${profile[Email]}"
   _git_label "Signing:" "${gpg_key:-(disabled)}"
   _git_label "SSH identity:" "$_git_identity_ssh_label"
-  (( _git_identity_ssh_present )) &&
-    _git_label "SSH command:" "$_git_identity_ssh_value"
+  if (( _git_identity_ssh_present )); then
+    _git_identity_redact_ssh_command "$_git_identity_ssh_value"
+    _git_label "SSH command:" "$REPLY"
+  fi
 
   local -i apply_failed=0
   for key in "${keys[@]}"; do
@@ -544,7 +605,8 @@ _git_identity_status_section() {
   _git_label "Email:" "${email:-(not set)}"
   _git_label "Signing key:" "${signing:-(not set)}"
   _git_label "GPG format:" "${format:-openpgp}"
-  _git_label "SSH command:" "${ssh_command:-(not set)}"
+  _git_identity_redact_ssh_command "$ssh_command"
+  _git_label "SSH command:" "$REPLY"
 }
 
 _git_identity_status() {
@@ -746,11 +808,14 @@ _git_identity_effective_config() {
 # split into shell words and never run.
 _git_identity_ssh_selected_keys() {
   emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match mbegin mend
 
   local ssh_command="${1-}"
   local -a ssh_words=()
+  local -a _git_identity_option_parts=()
   local plain_word="" option_text="" key_path="" program_name=""
-  local -i word_index=1
+  local -i word_index=1 options_ended=0
   _git_identity_ssh_keys=()
   REPLY=""
   [[ -n "$ssh_command" ]] || return 0
@@ -765,27 +830,17 @@ _git_identity_ssh_selected_keys() {
 
   for (( ; word_index <= ${#ssh_words}; word_index++ )); do
     plain_word="${(Q)ssh_words[word_index]}"
+    [[ "$plain_word" == -- ]] && options_ended=1
+    (( options_ended )) && continue
+    _git_identity_ssh_option_word "${ssh_words[word_index]}" \
+      "${ssh_words[word_index + 1]-}" || return 1
     key_path=""
     option_text=""
-    case "$plain_word" in
-      -i)
-        key_path="${(Q)ssh_words[word_index + 1]-}"
-        (( word_index++ ))
-        ;;
-      -i?*)
-        key_path="${plain_word#-i}"
-        ;;
-      -o)
-        option_text="${(Q)ssh_words[word_index + 1]-}"
-        (( word_index++ ))
-        ;;
-      -o?*)
-        option_text="${plain_word#-o}"
-        ;;
-      *)
-        continue
-        ;;
+    case "${_git_identity_option_parts[1]}" in
+      i) key_path="${_git_identity_option_parts[2]}" ;;
+      o) option_text="${_git_identity_option_parts[2]}" ;;
     esac
+    (( word_index += _git_identity_option_parts[4] ))
     if [[ -n "$option_text" \
       && "$option_text" =~ '^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee]([[:space:]]*=[[:space:]]*|[[:space:]]+)(.+)$' ]]; then
       key_path="${match[2]}"
@@ -865,7 +920,7 @@ _git_identity_compare() {
   fi
 
   local -a _git_identity_ssh_keys=()
-  _git_identity_ssh_selected_keys "${effective[core.sshcommand]-}"
+  _git_identity_ssh_selected_keys "${effective[core.sshcommand]-}" || return 1
   local ssh_program="$REPLY"
   local ssh_key="${profile[SshKey]:-}"
   if [[ -n "$ssh_key" ]]; then

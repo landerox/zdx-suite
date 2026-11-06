@@ -16,6 +16,10 @@ verification, and remaining limitations.
   defaults before cleanup, stop local ref deletion on interruption, and refuse
   pull conflict side files whose actual paths cannot be established.
 
+- Git: mask SSH arguments and leading environment assignments in identity
+  status and plans, replace grouped identity options consistently, and report
+  incomplete rollback when configuration removal fails.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

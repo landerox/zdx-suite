@@ -150,6 +150,12 @@ included in a backup, or exposed through an error log.
 
 **Current controls.**
 
+- Git identity status and review plans show only the SSH program and an
+  identity-selection label from the configured command. SSH arguments and
+  leading environment assignments are masked by the same suite-owned
+  redactor. `git_identity_safety.bats` places canaries in those fields and
+  checks both surfaces; it does not certify arbitrary shell grammar.
+
 - `gitleaks` runs through pre-commit and the CI quality gate. GitHub secret
   scanning and push protection are enabled for the repository.
 - GitHub private vulnerability reporting provides a non-public disclosure
@@ -1751,6 +1757,13 @@ grow without bound, contain malformed records, or are replaced with links to
 unintended targets.
 
 **Current controls.**
+
+- Git identity rollback checks configuration removals and restores, reporting
+  incomplete recovery on a failed unset instead of a false restoration claim.
+  Grouped SSH option selection is parsed as data by the same scanner for
+  profile application and checking. `git_identity_safety.bats` exercises
+  persistent locks, recoverable failures and option operands; concurrent
+  configuration mutation remains a residual risk.
 
 - State is generally kept under the user's home.
 - Telemetry is opt-in.

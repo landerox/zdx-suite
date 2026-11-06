@@ -551,6 +551,19 @@ HEAD does not change.
 
 ## Workspace identity
 
+Identity status and switch plans display the SSH program and a configured or
+default identity label while masking every SSH argument and initial environment
+assignment. Profile-key labels remain separate facts; raw SSH command strings
+are never printed. Profile application and identity checks use the same
+data-only option scanner, including short-option groups such as `-vi FILE`,
+`-4iFILE`, and `-voIdentityFile=FILE`. Unrelated options retain their quoting,
+and an argument-taking option with no value is refused before publication.
+
+If identity publication fails, rollback checks every unset as well as every
+restored value. Only Git's documented already-absent result is a successful
+no-op; a failed removal reports incomplete rollback instead of claiming the
+previous identity was restored.
+
 `git-identity-check [--json|--quiet]` is read-only. For a repository whose
 root lies strictly below `$WS_BASE_DIR/<platform>/<identity>`, it compares the
 effective configuration with the profile `ZDX_GIT_IDENTITIES[<identity>]`, as
