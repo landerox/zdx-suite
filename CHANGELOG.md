@@ -12,6 +12,10 @@ verification, and remaining limitations.
   before exact forced pushes, refuse observable server-side branch aliases,
   and keep rebase updates within the reviewed branch.
 
+- Git: honor explicit tag deletion scopes, revalidate protected branch
+  defaults before cleanup, stop local ref deletion on interruption, and refuse
+  pull conflict side files whose actual paths cannot be established.
+
 - Bind core diagnostic probes, status collection, insert-widget tool calls,
   and plugin-manager Git calls to resolved native executable paths. Bound
   secondary Command Line Tools checks before running a possible placeholder;

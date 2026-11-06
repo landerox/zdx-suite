@@ -439,6 +439,23 @@ deleted.
 
 ## Branches
 
+Merged-branch cleanup protects the current branch, resolved local and remote
+defaults, existing `init.defaultBranch`, `main`, and `master`. Local branches
+tracking the selected remote's default are also protected. Protection is
+checked again before each deletion, including configuration and upstream
+changes after confirmation. Remote cleanup rechecks the server's HEAD binding,
+not only the previously default branch's OID.
+Failed protection or selected-remote observations fail closed; only documented
+absence statuses are benign. Detached local cleanup still selects the remote
+and protects its default and tracking branches. Interruptions during renewed
+eligibility reads stop later deletions and report completed and unrun targets.
+
+When the tracking HEAD is absent, default resolution queries the selected
+remote without prompting, with a 30-second deadline. An unknown default fails
+closed with `git remote set-head <remote> -a` guidance. With no configured
+remote, an existing `init.defaultBranch` takes precedence over existing
+`main` or `master`; the current feature branch is never guessed as a default.
+
 The Branches menu section groups `git-switch` and `git-recover`. The direct
 grammar is:
 
@@ -893,6 +910,22 @@ At minimum, the contextual grammar must distinguish:
 
 ## Mutation and remote safety
 
+Explicit tag deletion scope flags (`--local-only`, `--delete-remote`, or
+`--remote`) take precedence over the scope dialog. Confirmation names the
+selected remote when deletion includes it. Interrupted local tag and branch
+deletions preserve status 130 or 143, stop before later targets, and list those
+targets as not run.
+
+A computed rebase file/directory conflict can invent a side-file label that
+differs from the one `merge-tree` exposes. The suite refuses that unprovable
+write before ref promotion or worktree mutation. When merge-tree computation
+is unavailable, NUL-delimited tree snapshots and merge-base metadata reject
+changed files against opposing directories, including intermediate replay
+paths; unchanged file-to-directory conversions remain allowed. This fallback
+may conservatively refuse a complex historical conversion. Preserve ignored
+and untracked files and perform that merge or rebase manually; there is no
+bypass flag. Native old-Git acceptance is separate from capability-mocked tests.
+
 Every selected identifier remains data. File discovery is NUL-delimited where
 Git supports `-z`; external commands receive arrays and an option terminator
 before user-controlled paths. Revisions, refs, remotes, stash references, and
@@ -1059,14 +1092,14 @@ file/directory conflict, such as `p~HEAD`; and for a rebase, every step of
 a replay of the local commits with `git merge-tree --merge-base` on trees,
 which also lists a path that a later commit deletes again. On a Git that
 cannot compute that result (the minimum is 2.31), the merge or rebase runs
-with `merge.directoryRenames=false`, so files stay at the paths that the
-commits name. Two cases are still not checked, and a later change tracks
-them: the side file of a file/directory conflict in a rebase, which Git
-names after the replayed commit (`p~<abbreviated ID> (<subject>)`) where the
-replay can only use object IDs, and the side files of a merge's
-file/directory conflicts on a Git without `git merge-tree --write-tree`. An
-untracked or ignored file with exactly such a name is still replaced. Git
-silently replaces ignored files,
+with `merge.directoryRenames=false`. It also refuses changed files opposed by
+directories, comparing NUL-delimited tree metadata to the merge base. A
+computed rebase that introduces a synthetic conflict side file is refused
+when that path is absent from both input trees: Git labels the actual side
+file after the replayed commit, which cannot be proved from the tree labels.
+These checks precede ref promotion and worktree changes. Preserve local files
+before using a manual merge or rebase for a refused conversion. Git silently
+replaces ignored files,
 `git rebase` has no `--no-overwrite-ignore`, and a true merge does not honor
 it. The suite still passes `--no-overwrite-ignore` to `git merge`, where it
 stops a fast-forward over an ignored file that appears after the check. A
@@ -1147,6 +1180,14 @@ regressing.
 local-branch reflog integration and expiration, stacked rebase refs, exact PR
 head queries, server-side aliases before and after review, protocol-v2
 refusal, and interrupted observations using disposable local remotes.
+
+The 38 cases in `test/git_scope_safety.bats` cover explicit deletion scope, protected defaults
+and conventional branches, changed protection after review, server HEAD
+changes, stopped local interruptions, and file/directory side-file refusal.
+They also exercise failed configuration and ref observations, preserved read
+interruptions, remote-selection precedence and detached-HEAD protection.
+Tracking-HEAD failure and interruption remain distinct from a missing ref;
+only the documented absence result permits the remote-default fallback.
 
 | File | Contract boundary |
 | --- | --- |

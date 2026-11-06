@@ -333,6 +333,16 @@ reflog proof failures and interrupts, and partial progress in a private
 multi-record apply plan. The public force grammar remains single-ref.
 An empty successful reflog observation refuses without walking remote history.
 
+`git_scope_safety.bats` exercises tag-scope precedence, unknown and protected
+defaults, changes to configuration, upstreams and server HEAD after review,
+local deletion interruptions, modern rebase side files, and conservative
+old-Git capability fallback with positive conversion controls.
+Its 38 cases include failed protection reads, configuration absence versus
+failure, selector fallbacks and detached HEAD, and completed/unrun targets
+after interrupted eligibility collection.
+Failed or interrupted tracking-HEAD observations cannot select the absence
+fallback; a genuinely missing tracking ref still uses the actual remote.
+
 | File | Covered boundary |
 | --- | --- |
 | `git_contract.bats` | Frozen 21-command fixture; module, function, menu, help, dispatcher, nested-completion, and direct-completion parity, including a `git-push` grammar without a tag mode, the stash action grammars, `git-discard --include-untracked` only after `--all`, the amend and unstage flags, the exclusive `git-switch` change modes, and `--json` only on read-only commands |

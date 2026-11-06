@@ -715,18 +715,25 @@ you manage with `git-menu`:
   `git-push` publishes branches only.
 - `git-tag-delete [TAG ...]` — Delete exact local tags after a frozen plan;
   `--delete-remote` (or `--remote NAME`) deletes the same tags on the remote
-  first. With `--dry-run` or `--yes` and no names, every local tag is a target.
+  first. Explicit scope flags take precedence over the scope dialog, and the
+  confirmation names the remote. With `--dry-run` or `--yes` and no names,
+  every local tag is a target.
 - `git-undo-commit [--soft|--mixed|--hard]` — Move the current branch back to
   its first parent after showing the exact commits and affected paths;
   without a flag, pick the mode. `--soft` keeps the index and working tree,
   `--mixed` keeps only working-tree changes, and `--hard` discards the listed
   changes.
 - `clean-branches` — Preview and remove merged local branches while protecting
-  the current and default branches.
+  the current and resolved default branches, existing configured defaults,
+  `main`, `master`, and branches tracking the selected remote default. Unknown
+  defaults fail closed with `git remote set-head <remote> -a` guidance.
 - `clean-remote-merged` — Preview and remove merged remote branches with exact
   leases.
 
-Interrupting a discard or a stash drop stops before the remaining targets,
+If pull cannot prove a file/directory conflict's side-file paths, preserve
+ignored and untracked files and perform the merge or rebase manually.
+
+Interrupting a discard, stash drop, or local branch or tag deletion stops before the remaining targets,
 keeps the interruption status, and lists the targets that were not run.
 
 ---

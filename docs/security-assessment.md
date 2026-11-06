@@ -522,6 +522,19 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   conflicts and dirty files. These tests do not replace live GitHub or native
   pinentry acceptance.
 
+- Git cleanup revalidates current/default/conventional branch protection and
+  selected upstreams immediately before deleting a reviewed target. Remote
+  selection and protected configuration reads fail closed on failed
+  observations, including detached-HEAD cleanup. Read interruptions retain
+  their status and report partial progress before stopping later targets.
+  Remote cleanup renews the server HEAD binding. Explicit tag scope flags remain
+  authoritative, and interrupted local ref deletion stops later targets.
+  Pull refuses unprovable file/directory side files before promotion or
+  worktree changes. `git_scope_safety.bats` covers the late protection changes
+  and preserved ignored-file victims; old-Git behavior is capability-mocked.
+  Final check-to-mutation races remain, and an uncomputable historical
+  conversion may require a manual merge or rebase after preserving local data.
+
 - High-risk workflows commonly request confirmation.
 - `zdx-plugins` removal accepts only a validated identifier, so no name can
   leave the canonical plugin root, and refuses a linked or foreign plugin

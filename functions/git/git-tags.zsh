@@ -1376,16 +1376,20 @@ git-tag-delete() {
       return 0
     fi
 
-    local REPLY=""
-    _git_tag_select_action "deletion scope" \
-      "Delete local tags only" \
-      "Delete remote tags, then local tags" || return $?
-    [[ -n "$REPLY" ]] || {
-      _git_info "Cancelled. No deletion scope was selected."
-      return 0
-    }
-    [[ "$REPLY" == "Delete remote tags, then local tags" ]] \
-      && _git_tag_delete_opt_delete_remote=1
+    if (( ! _git_tag_delete_opt_local_only \
+      && ! _git_tag_delete_opt_delete_remote )); then
+      local REPLY=""
+      _git_tag_select_action "deletion scope" \
+        "Delete local tags only" \
+        "Delete remote tags, then local tags" || return $?
+      [[ -n "$REPLY" ]] || {
+        _git_info "Cancelled. No deletion scope was selected."
+        return 0
+      }
+      _git_tag_delete_opt_delete_remote=0
+      [[ "$REPLY" == "Delete remote tags, then local tags" ]] \
+        && _git_tag_delete_opt_delete_remote=1
+    fi
   fi
 
   local remote="" remote_url=""
@@ -1431,8 +1435,11 @@ git-tag-delete() {
   local plan_label=""
   _git_count_noun "${#plan[@]}" "exact tag ref"
   plan_label="$REPLY"
+  local deletion_prompt="Delete ${plan_label} locally?"
+  (( _git_tag_delete_opt_delete_remote )) \
+    && deletion_prompt="Delete ${plan_label} locally and on '$(_git_display_escape "$remote")'?"
   _git_tag_authorize "$_git_tag_delete_opt_yes" \
-    "Delete ${plan_label}?" || authorize_rc=$?
+    "$deletion_prompt" || authorize_rc=$?
   (( authorize_rc == 3 )) && return 0
   (( authorize_rc != 0 )) && return $authorize_rc
 
@@ -1545,7 +1552,24 @@ git-tag-delete() {
       _git_success "Deleted local $ref at $local_oid."
       deleted=$(( deleted + 1 ))
     else
+      local -i local_delete_rc=$?
       _git_error "Failed to delete local $ref."
+      if (( local_delete_rc == 130 || local_delete_rc == 143 )); then
+        _git_count_noun "$deleted" tag
+        _git_warn "Tag deletion interrupted: $REPLY deleted before the interruption."
+        local -i passed_current=0
+        local pending_record="" pending_ref=""
+        for pending_record in "${plan[@]}"; do
+          if (( ! passed_current )); then
+            [[ "$pending_record" == "$record" ]] && passed_current=1
+            continue
+          fi
+          pending_ref="${pending_record%%$'\t'*}"
+          _git_outcome_line "$(_git_display_escape "$pending_ref")" skipped \
+            "not run after interruption"
+        done
+        return $local_delete_rc
+      fi
       failed=$(( failed + 1 ))
     fi
   done
