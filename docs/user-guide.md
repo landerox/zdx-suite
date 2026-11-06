@@ -629,6 +629,12 @@ ZDX allows you to define multiple git profiles (e.g., Personal vs. Work) with di
   profile is refused unchanged, and a Windows path such as
   `C:/Users/you/.ssh/id_ed25519` works directly. `git-pr-create` resolves SSH
   host aliases with the same SSH program Git uses.
+- **SSH status stays private**: identity status and plans show the program
+  and a configured/default selection label, with arguments and initial
+  environment assignments masked. Grouped key options use the same parser
+  during application and checking; incomplete option values are refused.
+  A failed configuration rollback reports incomplete recovery if an old
+  value or absence cannot be restored.
 - **Requirements and platforms**: the Git suite needs Git 2.31 or newer. On
   macOS, Apple's `/usr/bin/git` placeholder is reported with installation
   advice instead of being run. With `core.ignorecase` (macOS and Windows
