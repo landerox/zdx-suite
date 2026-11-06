@@ -1783,6 +1783,13 @@ unintended targets.
   regex helpers and public telemetry without changing generic child-command
   execution policy.
 
+- System validates the canonical temporary root and every ancestor before
+  allocating diagnostic captures, watchdog markers, APT key staging, private
+  askpass programs or picker files. Bounded probes fail before allocation or
+  child execution on refusal. `sys_temporary_safety.bats` records allocations
+  and probes and covers standalone loading and trusted aliases. These
+  pathname checks retain a final concurrent-replacement risk.
+
 - State is generally kept under the user's home.
 - Telemetry is opt-in.
 - The opt-in Git identity guard persists nothing: it remembers checked

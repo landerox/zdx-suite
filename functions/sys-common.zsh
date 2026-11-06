@@ -581,9 +581,15 @@ _sys_run_bounded_probe() {
     && "$max_bytes" == <-> && ${#max_bytes} -le 9 ]] || return 2
   (( seconds > 0 && max_bytes > 0 && max_bytes <= 134217728 )) || return 2
 
+  local REPLY="" capture_parent=""
+  _sys_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _sys_error "Unsafe temporary directory for bounded probes."
+    return 1
+  }
+  capture_parent="$REPLY"
   local capture_file
   capture_file=$(umask 077; command mktemp \
-    "${TMPDIR:-/tmp}/zdx-bounded-probe.XXXXXX") || return 1
+    "${capture_parent%/}/zdx-bounded-probe.XXXXXX") || return 1
 
   local probe_rc=0
   {
@@ -1725,6 +1731,21 @@ _sys_temp_parent_safe() {
   else
     return 1
   fi
+  local ancestor="${temp_parent:h}"
+  while true; do
+    parent_state=()
+    [[ -d "$ancestor" && ! -L "$ancestor" ]] \
+      && zstat -LH parent_state -- "$ancestor" 2>/dev/null || return 1
+    if (( (parent_state[uid] != root_state[uid] && parent_state[uid] != EUID) \
+      || ((parent_state[mode] & 8#22) != 0 \
+        && ! (parent_state[uid] == root_state[uid] \
+          && (parent_state[mode] & 8#1000) != 0 \
+          && (parent_state[mode] & 8#2) != 0)) )); then
+      return 1
+    fi
+    [[ "$ancestor" == / ]] && break
+    ancestor="${ancestor:h}"
+  done
   REPLY="$temp_parent"
 }
 

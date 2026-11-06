@@ -372,6 +372,13 @@ section in snake_case with `null` for an unset value, `withheld_keys`,
 
 ### Bounded diagnostics and telemetry
 
+Diagnostic captures, standalone watchdog markers, APT key workspaces, private
+askpass programs, and picker files use the canonical trusted temporary root.
+The root and every ancestor must have a trusted owner and safe write mode;
+root-owned sticky shared directories remain allowed. An unsafe root fails
+before allocation or probe execution, including standalone loading. Trusted
+system aliases resolve to the physical directory before capture creation.
+
 Optional version and package probes have short deadlines. GNU `timeout` or
 `gtimeout` is used with a TERM deadline and KILL grace period; GNU timeout's
 default process-group behavior also targets descendants. BusyBox-compatible
