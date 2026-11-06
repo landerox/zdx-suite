@@ -501,6 +501,67 @@ _git_sync_merge_result_paths() {
   reply=("${(@u)reply:#}")
 }
 
+# Older Git cannot compute the side files of a file/directory conflict.
+# Refuse opposing file/directory shapes instead of guessing their labels.
+# Extra replay paths cover intermediate local commits absent from HEAD.
+# Usage: _git_sync_require_no_fd_overlap ROOT LEFT RIGHT [EXTRA_PATHS_NAME]
+_git_sync_require_no_fd_overlap() {
+  emulate -L zsh
+
+  local repo_root="$1" left_oid="$2" right_oid="$3"
+  local -a left_paths=() right_paths=() all_paths=() extra_paths=()
+  local -A left_files=() right_files=() base_files=()
+  local entry="" ancestor="" record="" base_oid=""
+  local -i base_rc=0
+  base_oid=$(command git --no-replace-objects -C "$repo_root" \
+    merge-base "$left_oid" "$right_oid" 2>/dev/null) || base_rc=$?
+  (( base_rc == 130 || base_rc == 143 )) && return $base_rc
+  (( base_rc == 0 || base_rc == 1 )) || return 1
+  if [[ -n "$base_oid" ]]; then
+    _git_capture_nul --no-replace-objects -C "$repo_root" \
+      ls-tree -r -z "$base_oid" || return $?
+    for record in "${reply[@]}"; do
+      base_files[${record#*$'\t'}]="${record%%$'\t'*}"
+    done
+  fi
+  _git_capture_nul --no-replace-objects -C "$repo_root" ls-tree -r -z "$left_oid" \
+    || return $?
+  for record in "${reply[@]}"; do
+    entry="${record#*$'\t'}"
+    left_paths+=("$entry")
+    left_files[$entry]="${record%%$'\t'*}"
+  done
+  [[ -z "${4:-}" ]] || extra_paths=("${(@P)4}")
+  for entry in "${extra_paths[@]}"; do
+    left_paths+=("$entry")
+    left_files[$entry]="replayed"
+  done
+  _git_capture_nul --no-replace-objects -C "$repo_root" ls-tree -r -z "$right_oid" \
+    || return $?
+  for record in "${reply[@]}"; do
+    entry="${record#*$'\t'}"
+    right_paths+=("$entry")
+    right_files[$entry]="${record%%$'\t'*}"
+  done
+  all_paths=("${left_paths[@]}" "${right_paths[@]}")
+  for entry in "${all_paths[@]}"; do
+    ancestor="$entry"
+    while [[ "$ancestor" == */* ]]; do
+      ancestor="${ancestor%/*}"
+      if { (( ${+left_files[$entry]} && ${+right_files[$ancestor]} )) \
+          && [[ "${right_files[$ancestor]}" != "${base_files[$ancestor]-}" ]]; } \
+        || { (( ${+right_files[$entry]} && ${+left_files[$ancestor]} )) \
+          && [[ "${left_files[$ancestor]}" != "${base_files[$ancestor]-}" ]]; }; then
+        _git_error \
+          "This Git cannot prove the side-file paths of a file/directory conflict at $(_git_display_escape "$ancestor"); run the merge or rebase manually after preserving untracked and ignored files."
+        return 1
+      fi
+    done
+  done
+  reply=()
+  return 0
+}
+
 # Sets reply to the paths that a rebase of UPSTREAM..HEAD onto UPSTREAM writes
 # or removes at any step. Each non-merge commit is replayed as git rebase
 # replays it, with git merge-tree --write-tree --merge-base=<parent> on the
@@ -519,7 +580,7 @@ _git_sync_rebase_result_paths() {
   local upstream_oid="$2"
   local head_oid="$3"
   local commits_output="" commit="" parent="" current="" output=""
-  local result_tree=""
+  local result_tree="" result_path=""
   local -i git_rc=0
   local -a written=()
   reply=()
@@ -550,6 +611,30 @@ _git_sync_rebase_result_paths() {
     _git_validate_oid "$result_tree" || return 3
     _git_capture_nul -C "$repo_root" diff-tree -r --name-only --no-renames \
       -z "$current" "$result_tree" || return $?
+    # Rebase gives these conflict side files a display label derived from
+    # the replayed commit. merge-tree uses its input object ID instead, so
+    # its synthetic names cannot prove which ignored files rebase may write.
+    for result_path in "${reply[@]}"; do
+      case "$result_path" in
+        *"~${commit}"|*"~${commit}"_<->|*"~${current}"|*"~${current}"_<->)
+          # An intentionally tracked name can have the same suffix. A
+          # generated conflict side file is absent from both input trees.
+          local -i input_rc=0
+          command git --no-replace-objects -C "$repo_root" cat-file -e \
+            "${current}:${result_path}" 2>/dev/null || input_rc=$?
+          (( input_rc == 130 || input_rc == 143 )) && return $input_rc
+          (( input_rc == 0 )) && continue
+          input_rc=0
+          command git --no-replace-objects -C "$repo_root" cat-file -e \
+            "${commit}:${result_path}" 2>/dev/null || input_rc=$?
+          (( input_rc == 130 || input_rc == 143 )) && return $input_rc
+          (( input_rc == 0 )) && continue
+          _git_error \
+            "Cannot prove the side-file paths of this file/directory rebase conflict; run git rebase manually after preserving untracked and ignored files."
+          return 1
+          ;;
+      esac
+    done
     written+=("${reply[@]}")
     current="$result_tree"
   done
@@ -2176,6 +2261,15 @@ git-pull() {
         if (( result_rc == 0 )); then
           replayed_paths+=("${reply[@]}")
         elif (( result_rc == 3 )); then
+          # Disabling directory renames does not protect conflict side files.
+          # A capability fallback must refuse those uncertain shapes first.
+          local -i overlap_rc=0
+          _git_sync_require_no_fd_overlap "$root" "$pull_head" "$remote_oid" \
+            replayed_paths || overlap_rc=$?
+          if (( overlap_rc != 0 )); then
+            (( operation_rc )) || operation_rc=$overlap_rc
+            return $operation_rc
+          fi
           pull_without_dir_renames=1
         elif (( result_rc == 130 || result_rc == 143 )); then
           (( operation_rc )) || operation_rc=$result_rc

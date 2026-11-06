@@ -1523,33 +1523,84 @@ _git_remote_push_url() {
 }
 
 _git_get_default_branch() {
-  local remote="${1:-}"
-  [[ -n "$remote" ]] || remote=$(_git_current_remote 2>/dev/null)
+  emulate -L zsh
 
-  local default_branch
+  local remote="${1-}"
+  (( $# > 0 )) || remote=$(_git_current_remote 2>/dev/null)
+
+  local default_branch=""
+  local -i observation_rc=0
   if [[ -n "$remote" ]]; then
     default_branch=$(command git symbolic-ref --quiet --short \
-      "refs/remotes/${remote}/HEAD" 2>/dev/null)
+      "refs/remotes/${remote}/HEAD" 2>/dev/null) || observation_rc=$?
+    (( observation_rc == 130 || observation_rc == 143 )) && return $observation_rc
+    if (( observation_rc != 0 && observation_rc != 1 )); then
+      _git_error "Unable to inspect the configured remote tracking HEAD."
+      return 1
+    fi
     default_branch="${default_branch#${remote}/}"
-    if [[ -n "$default_branch" ]]; then
+    if (( observation_rc == 0 )); then
+      [[ -n "$default_branch" ]] || return 1
       print -r -- "$default_branch"
       return 0
     fi
+    # A missing tracking HEAD must never turn the current feature branch
+    # into the default. Ask the selected remote without prompting instead.
+    local output="" record="" remote_default=""
+    local -i probe_rc=0
+    output=$(
+      unset SSH_ASKPASS
+      export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="" GCM_INTERACTIVE=never
+      _git_run_with_timeout "$_GIT_REMOTE_SYMREF_SECONDS" git \
+        ls-remote --symref -- "$remote" HEAD </dev/null 2>/dev/null
+    ) || probe_rc=$?
+    (( probe_rc == 0 )) || return $probe_rc
+    for record in "${(@f)output}"; do
+      [[ "$record" == 'ref: '*$'\t''HEAD' ]] || continue
+      [[ -z "$remote_default" ]] || return 1
+      remote_default="${${record#ref: }%%$'\t'*}"
+      [[ "$remote_default" == refs/heads/* ]] || return 1
+      _git_validate_full_ref "$remote_default" || return $?
+    done
+    [[ -n "$remote_default" ]] || return 1
+    print -r -- "${remote_default#refs/heads/}"
+    return 0
   fi
 
+  observation_rc=0
+  default_branch=$(command git config --get init.defaultBranch 2>/dev/null) \
+    || observation_rc=$?
+  (( observation_rc == 130 || observation_rc == 143 )) && return $observation_rc
+  (( observation_rc == 0 || observation_rc == 1 )) || return 1
+  if (( observation_rc == 0 )); then
+    [[ -n "$default_branch" ]] || return 1
+    local -i name_rc=0
+    _git_validate_branch_name "$default_branch" || name_rc=$?
+    (( name_rc == 130 || name_rc == 143 )) && return $name_rc
+    (( name_rc == 0 )) || return 1
+    observation_rc=0
+    command git show-ref --verify --quiet "refs/heads/$default_branch" \
+      || observation_rc=$?
+    if (( observation_rc == 0 )); then
+      print -r -- "$default_branch"
+      return 0
+    fi
+    (( observation_rc == 130 || observation_rc == 143 )) && return $observation_rc
+    (( observation_rc == 1 )) || return 1
+  fi
   local candidate
   for candidate in main master; do
-    if command git show-ref --verify --quiet "refs/heads/$candidate"; then
+    observation_rc=0
+    command git show-ref --verify --quiet "refs/heads/$candidate" \
+      || observation_rc=$?
+    if (( observation_rc == 0 )); then
       print -r -- "$candidate"
       return 0
     fi
+    (( observation_rc == 130 || observation_rc == 143 )) && return $observation_rc
+    (( observation_rc == 1 )) || return 1
   done
-  default_branch=$(command git config --get init.defaultBranch 2>/dev/null)
-  if [[ -n "$default_branch" ]]; then
-    print -r -- "$default_branch"
-    return 0
-  fi
-  command git symbolic-ref --quiet --short HEAD 2>/dev/null
+  return 1
 }
 
 _git_validate_oid() {
