@@ -288,6 +288,13 @@ before probe captures, APT staging and standalone watchdog markers, plus
 trusted aliases and cleaned allocations. Recording fixtures prove no capture
 allocation or child probe occurs after a refusal.
 
+`sys_cleanup_scope.bats` covers nested nvm aliases, incomplete and unreadable
+alias observations, per-runtime revalidation, canonical HOME link checks,
+cache-only Homebrew cleanup, and interrupted removal and updater phases.
+Recording fixtures check completed and not-run targets. Returned interruption
+statuses are separate from the one disposable child that terminates itself
+with TERM; these fixtures do not establish native package-manager acceptance.
+
 | File | Covered boundary |
 | --- | --- |
 | `sys.bats` | Shared System helpers, the absence of package-lock polling and process-name lock helpers, Homebrew analytics and environment-hint regressions, non-interactive privilege resolution, probe timeout portability and cleanup under `NO_CLOBBER`, bounded probes that merge stderr within the same bound, the active-tool resolver's usable, absent, world-writable, WSL Windows, and macOS placeholder results, closed-stdin bounded/redacted command capture announced as `$ <command>` that keeps the caller's umask, the core duration format with its standalone fallback, color policy, and advisory menu dependency annotations |

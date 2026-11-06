@@ -1373,6 +1373,11 @@ nothing to clean. Ctrl-C stops the cleanup and leaves the remaining targets
 untouched. Generic cleanup never removes shared
 `/tmp` content and never prunes Docker resources.
 
+Homebrew cleanup removes caches through `cleanup --prune=all`; dependency
+removal belongs to `update-brew`. Both the literal and canonical HOME paths
+reject inner links. Interrupted removals stop later targets and report what
+was removed and what was not run.
+
 Superseded tool versions are old releases that a newer installation
 replaced: Codex, Cursor Agent, and Claude CLI releases, AWS CLI v2 bundles left
 by the bundled installer's `--update`, and nvm runtimes older than your
@@ -1385,6 +1390,10 @@ your current `PATH`, or missing global packages still need. Other Node.js
 release lines are never touched. If an open terminal still uses a removed nvm
 runtime, run `nvm use default` there. With `ZDX_VERBOSE=1`, the plan explains
 why each candidate runtime stays.
+
+Nested nvm aliases also protect runtimes, including a nested alias called
+`default`. If the complete alias inventory cannot be read, ZDX keeps the
+runtimes. It checks that protection again before every removal.
 
 For disabled Snap revisions, ZDX authenticates once, re-queries every selected
 name and revision immediately before removal, and uses non-interactive `sudo`

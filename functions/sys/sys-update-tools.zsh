@@ -207,7 +207,9 @@ update-gcloud() {
     _sys_update_report_version "Google Cloud SDK" \
       "$gcloud_before" "$gcloud_after"
   else
+    local -i mutation_rc=$?
     _sys_error "Google Cloud SDK update failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 }
@@ -226,7 +228,9 @@ update-awscli() {
     _sys_info "AWS CLI is managed by Homebrew; upgrading that formula."
     HOMEBREW_NO_AUTO_UPDATE=1 _sys_brew upgrade --no-ask awscli \
       </dev/null >&2 || {
+      local -i mutation_rc=$?
       _sys_error "Homebrew failed to update AWS CLI."
+      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
     _sys_update_probe_version 5 aws --version && aws_after="$REPLY"
@@ -274,7 +278,9 @@ update-starship() {
     _sys_info "Starship is managed by Homebrew."
     HOMEBREW_NO_AUTO_UPDATE=1 _sys_brew upgrade --no-ask starship \
       </dev/null >&2 || {
+      local -i mutation_rc=$?
       _sys_error "Homebrew failed to update Starship."
+      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
     _sys_update_probe_version 3 starship --version \
@@ -290,7 +296,9 @@ update-starship() {
     _sys_info "Starship is managed by Cargo."
     command env CARGO_NET_RETRY=0 \
       cargo install --locked starship >&2 || {
+      local -i mutation_rc=$?
       _sys_error "Cargo failed to update Starship."
+      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     }
     _sys_update_probe_version 3 starship --version \
@@ -397,6 +405,7 @@ update-uv-system() {
     }
     (( upgrade_rc == 0 )) || {
       _sys_error "Homebrew failed to update uv; its self-updater was not invoked."
+      (( upgrade_rc == 130 || upgrade_rc == 143 )) && return $upgrade_rc
       return 1
     }
     # Homebrew can replace the Cellar target. Resolve its public launcher again
@@ -423,7 +432,9 @@ update-uv-system() {
     }
     _sys_update_report_version uv "$uv_before" "$REPLY"
   else
+    local -i mutation_rc=$?
     _sys_error "uv self-update failed or is managed externally."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 }
@@ -478,7 +489,9 @@ update-pipx() {
         "pipx upgrade-all completed."
     fi
   else
+    local -i mutation_rc=$?
     _sys_error "pipx upgrade-all failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 }
@@ -556,6 +569,9 @@ _sys_nvm_migrate_global_packages() {
       REPLY="$REPLY carried over from $previous"
       return 0
     fi
+  else
+    local -i migration_rc=$?
+    (( migration_rc == 130 || migration_rc == 143 )) && return $migration_rc
   fi
   _sys_warn "Some global npm packages of $previous are missing from $current (${(j:, :)${(@V)missing[1,5]}})."
   _sys_dim "Finish it: nvm use $current && nvm reinstall-packages $previous"
@@ -603,14 +619,22 @@ update-node() {
     _sys_info "Installing latest Node.js LTS via fnm..."
     if _sys_run_logged "fnm install --lts" command "$fnm_program" install --lts; then
       local -i phase_failures=0
-      if ! command "$fnm_program" use lts-latest </dev/null >&2; then
+      if command "$fnm_program" use lts-latest </dev/null >&2; then
+        :
+      else
+        local -i selection_rc=$?
         _sys_error "Node.js LTS was installed, but activation failed."
         _sys_dim "Retry activation after checking fnm shell setup: fnm use lts-latest"
+        (( selection_rc == 130 || selection_rc == 143 )) && return $selection_rc
         phase_failures=$(( phase_failures + 1 ))
       fi
-      if ! command "$fnm_program" default lts-latest </dev/null >&2; then
+      if command "$fnm_program" default lts-latest </dev/null >&2; then
+        :
+      else
+        local -i selection_rc=$?
         _sys_error "Node.js LTS was installed, but default selection failed."
         _sys_dim "Retry the default selection: fnm default lts-latest"
+        (( selection_rc == 130 || selection_rc == 143 )) && return $selection_rc
         phase_failures=$(( phase_failures + 1 ))
       fi
       (( phase_failures == 0 )) || return 1
@@ -626,7 +650,9 @@ update-node() {
       }
       _sys_update_report_node "$fnm_before" "$lts_version"
     else
+      local -i mutation_rc=$?
       _sys_error "fnm failed to install Node.js LTS."
+      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     fi
 
@@ -659,18 +685,26 @@ update-node() {
         return 1
       }
       local -i phase_failures=0
-      if ! _sys_run_logged_here "nvm alias default $lts_version" \
+      if _sys_run_logged_here "nvm alias default $lts_version" \
         nvm alias default "$lts_version"; then
+        :
+      else
+        local -i selection_rc=$?
         _sys_error "Node.js LTS was installed, but default selection failed."
         _sys_dim "Retry the default selection: nvm alias default $lts_version"
+        (( selection_rc == 130 || selection_rc == 143 )) && return $selection_rc
         phase_failures=$(( phase_failures + 1 ))
       fi
       # Keep activation in the invoking shell: output capture through a pipeline
       # would discard nvm's PATH/session changes even when it returned success.
-      if ! _sys_run_logged_here "nvm use $lts_version" \
+      if _sys_run_logged_here "nvm use $lts_version" \
         nvm use "$lts_version"; then
+        :
+      else
+        local -i selection_rc=$?
         _sys_error "Node.js LTS was installed, but activation failed."
         _sys_dim "Retry activation: nvm use $lts_version"
+        (( selection_rc == 130 || selection_rc == 143 )) && return $selection_rc
         phase_failures=$(( phase_failures + 1 ))
       fi
       (( phase_failures == 0 )) || return 1
@@ -681,7 +715,7 @@ update-node() {
         return 1
       }
       _sys_nvm_migrate_global_packages "$nvm_dir" "$nvm_previous_default" \
-        "$lts_version"
+        "$lts_version" || return $?
       local migration_note="$REPLY"
       if [[ -n "$nvm_previous_default" && "$nvm_previous_default" != "$lts_version" \
         && "${${nvm_previous_default#v}%%.*}" == "${${lts_version#v}%%.*}" ]]; then
@@ -689,7 +723,9 @@ update-node() {
       fi
       _sys_update_report_node "$nvm_before" "$lts_version" "$migration_note"
     else
+      local -i mutation_rc=$?
       _sys_error "nvm failed to install Node.js LTS."
+      (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
       return 1
     fi
 
@@ -719,7 +755,9 @@ update-rust() {
     _sys_update_probe_version 5 rustc --version && rustc_after="$REPLY"
     _sys_update_report_version "Rust (rustc)" "$rustc_before" "$rustc_after"
   else
+    local -i mutation_rc=$?
     _sys_error "Rust update failed."
+    (( mutation_rc == 130 || mutation_rc == 143 )) && return $mutation_rc
     return 1
   fi
 }
