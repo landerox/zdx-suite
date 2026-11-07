@@ -520,17 +520,17 @@ assert_secret_plan_hidden() {
 
 @test "sys secret plans: credential-only origin changes still invalidate authorization" {
   export PLAN_REPOSITORY="$HOME/plan-repository"
-  create_maintenance_git_repo "$PLAN_REPOSITORY" 'https://first:private@example.invalid/repo.git?token=one'
+  create_maintenance_git_repo "$PLAN_REPOSITORY" 'https://first:F414_PASSWORD_CANARY_PRIVATE47@example.invalid/repo.git?token=one'
   run run_maintenance_zsh '
     _sys_update_git_fingerprint "$HOME" "$PLAN_REPOSITORY" || return 81
     expected_fingerprint="$REPLY"
     git -C "$PLAN_REPOSITORY" remote set-url origin \
-      "https://second:changed@example.invalid/repo.git?token=two" || return 82
+      "https://second:F414_PASSWORD_CANARY_CHANGED47@example.invalid/repo.git?token=two" || return 82
     _sys_update_git_revalidate "$HOME" "$PLAN_REPOSITORY" "$expected_fingerprint"
   '
   [ "$status" -eq 1 ]
   [[ "$output" == *"changed after authorization"* ]]
-  [[ "$output" != *"private"* && "$output" != *"changed@example"* ]]
+  [[ "$output" != *"F414_PASSWORD_CANARY_PRIVATE47"* && "$output" != *"F414_PASSWORD_CANARY_CHANGED47"* ]]
   [ ! -s "$MAINT_MUTATION_LOG" ]
   assert_no_privilege_network_or_signal
 }
