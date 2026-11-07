@@ -18,6 +18,158 @@ teardown() {
   cleanup_sandbox
 }
 
+dev_scope_duckdb_cargo() {
+  local evidence="$1"
+  mkdir -p "$DEV_PROJECT/target/data"
+  : > "$DEV_PROJECT/dbt_project.yml"
+  : > "$DEV_PROJECT/$evidence"
+  printf 'private database\n' > "$DEV_PROJECT/target/data/state.duckdb"
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --yes'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/target/data/state.duckdb")" = 'private database' ]
+  [[ "$output" != *'dir   target'* ]]
+}
+
+@test "dev cleanup scope: Cargo manifest cannot override DuckDB protection" {
+  dev_scope_duckdb_cargo Cargo.toml
+}
+
+@test "dev cleanup scope: Cargo cache tag cannot override DuckDB protection" {
+  dev_scope_duckdb_cargo target/CACHEDIR.TAG
+}
+
+dev_scope_nested_checkout() {
+  local nested_path="$1"
+  mkdir -p "$DEV_PROJECT/$nested_path/.git"
+  printf 'unpublished work\n' > "$DEV_PROJECT/$nested_path/keep.txt"
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --yes'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/$nested_path/keep.txt")" = 'unpublished work' ]
+  [[ "$output" == *'contains a nested repository'* ]]
+}
+
+@test "dev cleanup scope: build vendor checkout survives" { dev_scope_nested_checkout build/vendor/project; }
+@test "dev cleanup scope: dist node_modules checkout survives" { dev_scope_nested_checkout dist/node_modules/project; }
+@test "dev cleanup scope: build virtualenv checkout survives" { dev_scope_nested_checkout build/.venv/src/project; }
+@test "dev cleanup scope: build site-packages checkout survives" { dev_scope_nested_checkout build/env/site-packages/project; }
+@test "dev cleanup scope: dist tox checkout survives" { dev_scope_nested_checkout dist/.tox/py/project; }
+
+@test "dev cleanup scope: directory removal checks beyond target discovery depth" {
+  export DEV_CLEAN_DEPTH=1
+  dev_scope_nested_checkout build/vendor/deep/project
+}
+
+dev_scope_bare_repository() {
+  local relative_path="$1"
+  mkdir -p "$DEV_PROJECT/$relative_path"
+  git -C "$DEV_PROJECT/$relative_path" init --bare --quiet
+  printf 'unpublished object\n' > "$DEV_PROJECT/$relative_path/objects/keep"
+  run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --yes'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/$relative_path/objects/keep")" = 'unpublished object' ]
+}
+
+@test "dev cleanup scope: a suffixed bare repository survives build removal" {
+  dev_scope_bare_repository build/vendor/project.git
+}
+
+@test "dev cleanup scope: a bare repository without suffix survives dist removal" {
+  dev_scope_bare_repository dist/vendor/project
+}
+
+@test "dev cleanup scope: an ancestor of HOME refuses discovery" {
+  mkdir -p "$HOME/private/__pycache__"
+  printf 'keep\n' > "$HOME/private/__pycache__/keep.pyc"
+  run run_zsh 'cd "$TEST_TEMP_DIR" && dev-clean-py --dry-run'
+  [ "$status" -eq 1 ]
+  [[ "$output" != *'Removal plan'* ]]
+  [ "$(cat "$HOME/private/__pycache__/keep.pyc")" = keep ]
+}
+
+@test "dev cleanup scope: a repository appearing after confirmation is preserved" {
+  mkdir -p "$DEV_PROJECT/build"
+  printf 'build output\n' > "$DEV_PROJECT/build/generated"
+  run run_zsh '
+    cd "$DEV_PROJECT" || return 81
+    _dev_confirm() {
+      command mkdir -p "$DEV_PROJECT/build/vendor/new/.git" || return 82
+      print -r -- "new work" > "$DEV_PROJECT/build/vendor/new/keep.txt" || return 83
+      return 0
+    }
+    dev-clean-py
+  '
+  [ "$status" -eq 1 ]
+  [ "$(cat "$DEV_PROJECT/build/vendor/new/keep.txt")" = 'new work' ]
+  [ -f "$DEV_PROJECT/build/generated" ]
+}
+
+dev_scope_failed_protected_inventory() {
+  export DEV_SCOPE_SCAN_MODE="$1"
+  mkdir -p "$DEV_PROJECT/build/vendor/repo/.git"
+  printf 'keep\n' > "$DEV_PROJECT/build/vendor/repo/keep.txt"
+  run run_zsh '
+    cd "$DEV_PROJECT" || return 81
+    functions[_dev_scope_timeout_original]="${functions[_dev_run_with_timeout]}"
+    _dev_run_with_timeout() {
+      if [[ "$2" == find \
+        && ( "$3" == "$DEV_PROJECT/build" || "$3" == ./build ) ]]; then
+        case "$DEV_SCOPE_SCAN_MODE" in
+          partial)
+            print -rn -- "$DEV_PROJECT/build/vendor/repo/.git"
+            return 0
+            ;;
+          failure)
+            print -rn -- "$DEV_PROJECT/build/vendor/repo/.git"$'"'"'\0'"'"'
+            return 1
+            ;;
+          timeout) return 124 ;;
+          *) return 97 ;;
+        esac
+      fi
+      _dev_scope_timeout_original "$@"
+    }
+    dev-clean-py --yes
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/build/vendor/repo/keep.txt")" = keep ]
+}
+
+@test "dev cleanup scope: incomplete protected records cannot authorize removal" {
+  dev_scope_failed_protected_inventory partial
+}
+
+@test "dev cleanup scope: failed protected discovery keeps its whole directory" {
+  dev_scope_failed_protected_inventory failure
+}
+
+@test "dev cleanup scope: timed out protected discovery keeps its whole directory" {
+  dev_scope_failed_protected_inventory timeout
+}
+
+@test "dev cleanup scope: a protected marker limit keeps the whole directory" {
+  mkdir -p "$DEV_PROJECT/build/vendor/one/.git" \
+    "$DEV_PROJECT/build/vendor/two/.git" "$DEV_PROJECT/build/vendor/three/.git"
+  printf 'keep\n' > "$DEV_PROJECT/build/vendor/one/keep.txt"
+  run run_zsh 'cd "$DEV_PROJECT" || return 81; DEV_CLEAN_MAX_TARGETS=2; dev-clean-py --yes'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/build/vendor/one/keep.txt")" = keep ]
+}
+
+@test "dev cleanup scope: DuckDB appearing after confirmation is preserved" {
+  mkdir -p "$DEV_PROJECT/target"
+  : > "$DEV_PROJECT/Cargo.toml"
+  run run_zsh '
+    cd "$DEV_PROJECT" || return 81
+    _dev_confirm() {
+      print -r -- "new database" > "$DEV_PROJECT/target/new.duckdb" || return 82
+      return 0
+    }
+    dev-clean-all
+  '
+  [ "$status" -eq 1 ]
+  [ "$(cat "$DEV_PROJECT/target/new.duckdb")" = 'new database' ]
+}
+
 @test "dev cleanup safety: a symlinked project root is refused" {
   local real_project="$HOME/real-project"
   local project_link="$HOME/project-link"

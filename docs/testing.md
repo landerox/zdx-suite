@@ -464,6 +464,14 @@ already-set `GPG_TTY`; they do not establish native pinentry initialization.
 
 ### Developer coverage
 
+Cleanup scope cases cover polyglot dbt/Cargo data, repositories hidden under
+discovery prunes, bare repositories, depth-independent containment checks,
+HOME ancestors and protected content added during consent. Failed, timed-out,
+oversized and incomplete protected inventories retain their whole directory.
+Backup cases cover injective new names, retention within the reserved
+namespace and preserved ambiguous legacy copies. All discovery, mutation and
+backend work stays inside disposable project roots.
+
 The network update cases in `dev_io_safety.bats` and
 `dev_update_actions.bats` cover malformed PyPI bodies and version fields,
 partial and failed transfers, malformed/oversized tag listings, query failures

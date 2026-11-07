@@ -288,7 +288,7 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"backup directory is not configured"* ]]
   [[ "$output" != *"Backup saved"* ]]
-  [ -z "$(find "$DEV_PROJECT" -name 'pyproject.toml.*.bak' -print -quit)" ]
+  [ -z "$(find "$DEV_PROJECT" -name '*.bak' -print -quit)" ]
 }
 
 @test "dev alignment: bounded configuration rejects invalid values" {

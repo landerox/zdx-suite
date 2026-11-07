@@ -1894,9 +1894,9 @@ _dev_scan_root() {
     return 1
   fi
 
-  if [[ "$root" == "${HOME:A}" ]]; then
+  if [[ "$root" == "${HOME:A}" || "${HOME:A}" == "$root"/* ]]; then
     _dev_error \
-      "Refusing to run a recursive cleanup directly in the home directory."
+      "Refusing to run a recursive cleanup in the home directory or one of its ancestors."
     _dev_info "Change into a project directory first."
     return 1
   fi

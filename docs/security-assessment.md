@@ -564,6 +564,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   root. These tests exercise the existing T3/T4/T7 controls and do not change
   runtime policy or replace native VPN acceptance.
 
+- Developer directory cleanup performs complete bounded protected-data checks
+  independently of target-discovery prunes/depth, recognizing nested and bare
+  repositories and retaining every DuckDB-bearing candidate across categories.
+  The check repeats before removal, with renewed target/root identities; HOME
+  and its ancestors are refused before discovery. Generated repository-cache
+  exceptions do not exempt databases. Backup names use a new reserved stem
+  namespace and injective escaping; ambiguous legacy names are never pruned
+  as new copies. Private fixtures cover data preservation and consent-time
+  changes. Final pathname/content races and installed tool trust remain.
+
 - Git publication and cleanup proofs ignore replacement refs and disable
   legacy grafts for each proof invocation. Explicit force
   leases require integration of the leased tip into the current local branch

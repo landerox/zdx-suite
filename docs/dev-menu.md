@@ -731,8 +731,8 @@ records its own telemetry, so the step adds no Dev timing record.
 Every `dev-clean-*` command implements the destructive sequence from
 `development.md` in this order:
 
-1. **Freeze and validate the root.** `_dev_scan_root` refuses `/` and the
-   user's home directory before any target is calculated. The literal root may
+1. **Freeze and validate the root.** `_dev_scan_root` refuses `/`, the
+   user's home directory and its ancestors before any target is calculated. The literal root may
    not be a symlink. Its resolved path, device, inode, and type are captured and
    matched against the open working-directory anchor.
 2. **Compute the exact target set without mutating.** Discovery uses bounded,
@@ -751,6 +751,12 @@ Every `dev-clean-*` command implements the destructive sequence from
    instead of materializing unbounded output. Associative first-seen
    deduplication preserves deterministic plan order. Each cleanup category is
    also capped after combining its bounded streams.
+   Every directory candidate additionally receives a complete protected-data
+   scan without those discovery prunes or the target-discovery depth bound.
+   It recognizes `.git` markers and bare repositories through `HEAD`,
+   `objects/` and `refs/`, including inside generated/vendor trees. A fixed
+   15-second deadline, marker limit and complete NUL records bound this scan;
+   incomplete, unreadable or timed-out observations retain the whole candidate.
 3. **Freeze each target.** Every candidate becomes a literal path relative to
    the original working-directory anchor plus its device, inode, and type. The
    workflow never recanonicalizes that relative target through a movable root.
@@ -769,6 +775,9 @@ Every `dev-clean-*` command implements the destructive sequence from
    identity must still match immediately before each relative `rm`; root
    identity is checked again after each removal. A changed target is refused,
    and partial failures are named and return `1`.
+   Directory contents are checked again before each removal, followed by a
+   renewed target identity check, so a repository or DuckDB file added during
+   confirmation cannot be removed under an older directory fingerprint.
 
 `--yes` bypasses only the prompt. It never bypasses root validation, scope
 proof, or the plan. User-derived confirmation text is visibly escaped before
@@ -794,6 +803,8 @@ reshape the authorization UI.
   `<database>.tmp` directory) or `duckdb_temp*`, is skipped with a warning,
   and no pattern selects a DuckDB file: a database and its WAL hold data, not
   build output.
+  This protection applies to every directory category, including Cargo and
+  generated clone caches; repository exceptions never exempt DuckDB data.
 - `--keep-build` preserves root `build/`, `dist/`, and `target/`, including
   their contents: discovery does not descend into a preserved directory. Root
   `target/` is Cargo output in `dev-clean-all` and dbt output in both
@@ -804,8 +815,9 @@ reshape the authorization UI.
   survives in the project.
 - Operating-system junk files are not a Dev category. `file-clean-junk` owns
   them in any directory through the File deletion engine.
-- Discovery uses `find` exclusively, so one set of exclusions decides both
-  the displayed plan and what is removed.
+- Discovery uses `find` exclusively. Target discovery retains its exclusions;
+  the separate complete protected-data check narrows the displayed plan and
+  is repeated before deletion.
 
 ## Remote-code policy
 
@@ -972,10 +984,14 @@ and `dev-update-precommit` take their own invocation backup through the
 private `_dev_backup_pyproject` helper before publication, and
 `dev-update-actions` backs up each workflow file it will change through
 `_dev_backup_project_file`. A copy is named
-`<stem>.<YYYYMMDD_HHMMSS>[.<n>].bak`, where the stem is the file's
-project-relative path with `/` written as `%` and leading dots removed, such
-as `github%workflows%ci.yml.20261004_101500.bak`; `pyproject.toml` keeps its
-own name. Retention and pruning apply per stem, matching only that exact
+`.v2-<escaped-path>.<YYYYMMDD_HHMMSS>[.<n>].bak`. The path encoder
+escapes `%` as `%25`, `/` as `%2F`, and leading dots as `%2E`, for example
+`.v2-%2Egithub%2Fworkflows%2Fci.yml.20261004_101500.bak` or
+`.v2-pyproject.toml.20261004_101500.bak`. The leading `.v2-` cannot be a
+legacy stem, since the old scheme stripped leading dots. Ambiguous legacy
+copies stay untouched for manual review; there is no automatic migration and
+legacy copies do not count toward the new namespace's retention bound.
+Retention and pruning apply per stem, matching only that exact
 timestamp shape, so one file's pruning never selects another file's copies.
 The backup records the exact published copy and the original file mode.
 Automatic `pyproject.toml` rollback accepts only that invocation-owned path,
