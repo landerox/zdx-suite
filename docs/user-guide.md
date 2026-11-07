@@ -302,6 +302,11 @@ Inside WSL, Windows routes DNS through a relay that ignores the tunnel resolver,
 so DNS leaks unless `/etc/resolv.conf` is pinned. On import, the suite offers to
 add `PostUp`/`PostDown` hooks that pin the resolver while the tunnel is up and
 restore public fallbacks while it is down.
+DNS keys and sections match without ASCII letter case. Repeated Interface
+DNS declarations are validated together, in order, before their first IP is
+used; only an absent declaration permits fallback. Invalid or empty values
+are refused. IPv6 rewriting likewise recognizes mixed-case Address, DNS and
+AllowedIPs while preserving comments, hooks and the existing safety backup.
 
 Hardening needs a regular `/etc/resolv.conf`. WSL generates a symbolic link by
 default, which `chattr` cannot pin; set `generateResolvConf = false` under

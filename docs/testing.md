@@ -494,6 +494,13 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_wsl_keys.bats` covers lower/mixed-case keys and sections, padding, CRLF,
+comments, repeated DNS declarations and the first validated resolver, protected
+reads, absent-versus-invalid fallback, NUL fields, IPv6-only refusal, existing
+backups and idempotent hooks. Compact-list boundary controls retain the IP-only
+grammar and limits. Linux/WSL and privilege behavior use private fixtures;
+networking-mode defaults and real-host acceptance remain separate.
+
 `vpn_secret_retention.bats` covers provider tokens absent from argv and saved
 errors, invocation-local key hiding and independent filtering, complete
 backup/undo plans, kept copies, rename compensation, restore disclosure,

@@ -215,6 +215,11 @@ _vpn_wsl_line_opens_peer() {
 #   Status:    0 on success or when the profile is already hardened,
 #              1 on any validation, permission, or parse failure.
 _vpn_apply_wsl_dns_hooks() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local conf="${1:-}"
   [[ -n "$conf" ]] || return 1
 
@@ -285,23 +290,19 @@ _vpn_apply_wsl_dns_hooks() {
 
   # The DNS value is written into a hook that root executes, so an unsafe value
   # is rejected outright rather than quoted.
-  local declared_dns tunnel_dns
-  declared_dns=$(print -r -- "$content" \
-    | command sed -n 's/^[[:space:]]*DNS[[:space:]]*=[[:space:]]*//p' \
-    | command head -1)
-  declared_dns="${declared_dns%$'\r'}"
-
-  if [[ -n "$declared_dns" ]]; then
-    if ! tunnel_dns=$(_vpn_first_dns_entry "$declared_dns"); then
+  local declared_dns="" tunnel_dns=""
+  local -i dns_status=0
+  declared_dns=$(_vpn_dns_from_text "$content") || dns_status=$?
+  case "$dns_status" in
+    0) tunnel_dns="${declared_dns%%,*}" ;;
+    3) tunnel_dns="$VPN_DNS_FALLBACK_PRIMARY" ;;
+    *)
       _vpn_error "The profile's DNS value is not a plain list of IP addresses."
-      _vpn_dim "Found: $(_vpn_display_escape "$declared_dns")"
       _vpn_info \
         "Refusing to write it into a root-executed hook. Fix the DNS line first."
       return 1
-    fi
-  else
-    tunnel_dns="$VPN_DNS_FALLBACK_PRIMARY"
-  fi
+      ;;
+  esac
 
   local stage_dir stage_identity temp_file
   stage_dir=$(_vpn_make_private_temp_dir "zdx-vpn-wsl") || return 1
@@ -312,13 +313,24 @@ _vpn_apply_wsl_dns_hooks() {
 
   {
     local -a lines=("${(@f)content}")
-    local line
+    local line data key section=other comment
     local -i inserted=0
     local -a output=()
 
     for line in "${lines[@]}"; do
+      data="${line%%\#*}"
+      key="${(L)${data%%=*}}"
+      case "$key" in
+        [[:space:]]#'[interface]'[[:space:]]#) section=interface ;;
+        [[:space:]]#'['*) section=other ;;
+      esac
       # The declared DNS is replaced by the hooks, so drop the original line.
-      if [[ "$line" =~ '^[[:space:]]*DNS[[:space:]]*=' ]]; then
+      if [[ "$section" == interface \
+        && "$key" == [[:space:]]#dns[[:space:]]# ]]; then
+        if [[ "$line" == *\#* ]]; then
+          comment="#${line#*\#}"
+          output+=("$comment")
+        fi
         continue
       fi
       if (( ! inserted )) && _vpn_wsl_line_opens_peer "$line"; then
@@ -427,6 +439,11 @@ _vpn_wsl_backup_once() {
 }
 
 _vpn_fix_ipv6_config() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local iface="${1:-}"
   _vpn_check_wg_quick || return 1
 
@@ -451,6 +468,10 @@ _vpn_fix_ipv6_config() {
       _vpn_sudo_probe head -c "$_VPN_MAX_PROFILE_BYTES" -- "$conf_file"
     ) || return 1
   fi
+  [[ "$content" != *$'\0'* ]] || {
+    _vpn_error "WireGuard profiles containing NUL bytes cannot be rewritten."
+    return 1
+  }
   local current_fingerprint
   current_fingerprint=$(
     _vpn_profile_file_fingerprint "$conf_file" "$iface profile"
@@ -462,13 +483,24 @@ _vpn_fix_ipv6_config() {
 
   local -a lines=("${(@f)content}")
   local -a output=()
-  local line key value
+  local line key value data field section=other comment
   local -i changed=0
 
   for line in "${lines[@]}"; do
-    if [[ "$line" =~ '^[[:space:]]*(Address|DNS|AllowedIPs)[[:space:]]*=' ]]; then
-      key="${line%%=*}"
-      value="${line#*=}"
+    data="${line%%\#*}"
+    field="${(L)${data%%=*}}"
+    case "$field" in
+      [[:space:]]#'[interface]'[[:space:]]#) section=interface ;;
+      [[:space:]]#'[peer]'[[:space:]]#) section=peer ;;
+      [[:space:]]#'['*) section=other ;;
+    esac
+    if [[ ( "$section" == interface && "$field" == [[:space:]]#(address|dns)[[:space:]]# ) \
+      || ( "$section" == peer && "$field" == [[:space:]]#allowedips[[:space:]]# ) ]]; then
+      [[ "$data" == *=* ]] || return 1
+      key="${data%%=*}"
+      value="${data#*=}"
+      comment=""
+      [[ "$line" != *\#* ]] || comment=" #${line#*\#}"
 
       local -a entries=("${(@s:,:)value}")
       local -a kept=()
@@ -487,7 +519,7 @@ _vpn_fix_ipv6_config() {
         return 1
       fi
 
-      local rebuilt="${key}= ${(j:, :)kept}"
+      local rebuilt="${key}= ${(j:, :)kept}${comment}"
       [[ "$rebuilt" != "$line" ]] && changed=1
       output+=("$rebuilt")
       continue
