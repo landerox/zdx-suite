@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: keep provider tokens out of curl arguments and retained diagnostics,
+  filter private keys independently of WireGuard's hide-keys setting, and
+  include credential-bearing undo copies in reviewed rename/removal plans.
+
 - VPN: refuse profile creation below an unsearchable existing ancestor before
   confirmation, authentication or a privileged install attempt.
 

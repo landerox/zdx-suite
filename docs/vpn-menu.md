@@ -376,6 +376,24 @@ prints its recommendations.
 `vpn-config-restore [PROFILE]` and `vpn-profile-remove [PROFILE]`. Both accept
 `--dry-run` and `--yes`; `vpn-profile-remove` also accepts `--with-backup`.
 
+The reviewed credential family is `<name>.conf`, its matching
+`.conf.bak-vpn-menu` backup and `.conf.pre-restore` undo copy.
+`--with-backup` includes both copies in removal; otherwise they are retained
+and named. Rename follows each existing family member. All targets and
+compensating rollback operations are fingerprinted, mapped and announced
+before authentication, then revalidated. Failed undo rename compensates
+earlier moves only when their identities match and original targets remain
+vacant. An interruption during backup or undo removal stops later undo or
+saved-choice mutations and reports the partial result.
+
+Restore discloses replacement of an existing undo copy before publishing a
+new one; failure to publish that copy prevents replacing the live profile.
+`vpn-config-dir` lists safe orphaned backup/undo names and kinds without
+contents. Its new protected-directory enumeration is nonprompting and bound
+by time, bytes and records; failed or incomplete reads publish no partial
+inventory. This narrow deadline does not change the general protected-probe
+deadline gap recorded below.
+
 `vpn-default-clear` accepts `--yes` because it removes a saved pointer, but it
 is a single small reversible state change rather than a broad operation and
 therefore has no `--dry-run`.
@@ -671,6 +689,17 @@ before the manager refreshes.
 
 ## Persisted state
 
+Provider requests pass escaped URL configuration on curl stdin with leading
+`-q` and fixed protocol/time/size limits. Raw child diagnostics are suppressed;
+failure messages and saved reports name validated authorities without paths,
+queries or fragments. No provider URL is retained in a temporary config file.
+WireGuard reads scope `WG_HIDE_KEYS=always` to that invocation and independently
+filter private/preshared key lines even when a backend ignores the setting.
+Excerpts and preview panes also filter commented or whitespace-split key
+assignments. Caller state is restored, and interrupted live reads retain
+their status. Installed tools remain trusted; returned statuses are distinct
+from terminal-signal acceptance.
+
 | Variable | Default | Contents |
 | --- | --- | --- |
 | `VPN_CONFIG_DIR` | `/etc/wireguard`; selected on macOS | WireGuard profiles (root-owned by default) |
@@ -752,7 +781,7 @@ conflate them: a scripted `vpn-off-all` without a terminal fails instead of
 doing nothing and reporting success.
 
 `--yes` bypasses only the prompt. It never widens the plan: `vpn-profile-remove
---yes` keeps the backup unless `--with-backup` is also given.
+--yes` keeps both backup and undo copies unless `--with-backup` is also given.
 
 ## Test coverage
 
@@ -839,11 +868,12 @@ VPN files, and on manual dispatch.
 3. **Setting `VPN_CONFIG_DIR` on an unsupported host is a user decision.** The
    directory is validated, but the suite cannot vouch for that host's WireGuard
    integration, and `chattr`-based resolver pinning will not work there.
-4. **`.conf.pre-restore` accumulates one file per profile.** It is the undo copy
-   for the last restore and is overwritten on the next one, so it is bounded, but
-   nothing removes it automatically. It does not appear in the profile list
-   because listing matches `*.conf` only; `vpn-config-dir` reports each
-   profile's undo copy so the retained state stays visible.
+4. **Credential copies have no automatic retention sweep.** Each profile has
+   at most one matching `.conf.pre-restore` undo copy, whose replacement is
+   disclosed by restore. Removal includes backup and undo only with
+   `--with-backup`; otherwise the kept copies are named. Safe orphans appear
+   in `vpn-config-dir`. Connection pickers continue to match `*.conf` only;
+   retained copies are never treated as connection profiles.
 5. **Report retention runs only after a successful `vpn-report`.** Publication
    is private, atomic, and no-clobber, and a validated
    `VPN_MENU_REPORT_RETENTION` (default keep-newest 20; `0` disables) prunes

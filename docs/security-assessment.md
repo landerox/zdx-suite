@@ -150,6 +150,18 @@ included in a backup, or exposed through an error log.
 
 **Current controls.**
 
+- VPN provider queries send escaped URL configuration through curl stdin,
+  retaining fixed HTTPS/time/size bounds and suppressing URL-bearing child
+  diagnostics. Display and persisted failures name only validated authorities.
+  Invocation-local WireGuard key hiding has an independent line filter for
+  private/preshared material, including commented and split assignments.
+  Backup and undo copies remain private credentials: reviewed removal can
+  include both, rename follows both, restore discloses undo replacement and
+  safe orphan names are visible without contents. New protected orphan reads
+  are bounded/nonprompting and publish no partial inventory; broader protected
+  probe deadlines remain a residual gap. Strict private fixtures cover these
+  controls without native host or real-key acceptance.
+
 - Git identity status and review plans show only the SSH program and an
   identity-selection label from the configured command. SSH arguments and
   leading environment assignments are masked by the same suite-owned

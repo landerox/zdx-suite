@@ -547,19 +547,23 @@ vpn-profile-rename() {
     return 0
   fi
 
-  local old_conf new_conf old_backup new_backup
+  local old_conf new_conf old_backup new_backup old_undo new_undo
   old_conf=$(_vpn_conf_path "$old_iface") || return 1
   new_conf=$(_vpn_conf_path "$new_iface") || return 1
   old_backup=$(_vpn_backup_path "$old_iface") || return 1
   new_backup=$(_vpn_backup_path "$new_iface") || return 1
+  old_undo="${old_conf}.pre-restore"
+  new_undo="${new_conf}.pre-restore"
 
-  local directory_identity old_fingerprint old_backup_fingerprint=""
-  local old_state new_state old_backup_state new_backup_state
+  local directory_identity old_fingerprint old_backup_fingerprint="" old_undo_fingerprint=""
+  local old_state new_state old_backup_state new_backup_state old_undo_state new_undo_state
   directory_identity=$(_vpn_config_dir_identity) || return 1
   old_state=$(_vpn_profile_path_state "$old_conf")
   new_state=$(_vpn_profile_path_state "$new_conf")
   old_backup_state=$(_vpn_profile_path_state "$old_backup")
   new_backup_state=$(_vpn_profile_path_state "$new_backup")
+  old_undo_state=$(_vpn_profile_path_state "$old_undo")
+  new_undo_state=$(_vpn_profile_path_state "$new_undo")
 
   [[ "$old_state" == "safe" ]] || {
     _vpn_error "Profile is missing or unsafe: $old_iface"
@@ -583,6 +587,22 @@ vpn-profile-rename() {
   esac
   [[ "$new_backup_state" == "missing" ]] || {
     _vpn_error "A backup target for $new_iface already exists or is unsafe."
+    return 1
+  }
+  case "$old_undo_state" in
+    safe)
+      old_undo_fingerprint=$(
+        _vpn_profile_file_fingerprint "$old_undo" "$old_iface pre-restore copy"
+      ) || return 1
+      ;;
+    missing) ;;
+    *)
+      _vpn_error "The pre-restore copy for $old_iface is unsafe or unreadable."
+      return 1
+      ;;
+  esac
+  [[ "$new_undo_state" == missing ]] || {
+    _vpn_error "A pre-restore target for $new_iface already exists or is unsafe."
     return 1
   }
   old_fingerprint=$(
@@ -616,6 +636,10 @@ vpn-profile-rename() {
   if [[ "$old_backup_state" == "safe" ]]; then
     (( plan_step += 1, file_count += 1 ))
     plan_rows+=("$plan_step"$'\t'"rename"$'\t'"${old_backup:t}"$'\t'"${new_backup:t}")
+  fi
+  if [[ "$old_undo_state" == safe ]]; then
+    (( plan_step += 1, file_count += 1 ))
+    plan_rows+=("$plan_step"$'\t'"rename"$'\t'"${old_undo:t}"$'\t'"${new_undo:t}")
   fi
   # The action column appears only when the plan mixes actions.
   local plan_header=$'#\tAction\tFrom\tTo' tab=$'\t'
@@ -684,7 +708,7 @@ vpn-profile-rename() {
   }
   _vpn_blank
 
-  local -a rename_argv=() backup_argv=() rollback_argv=()
+  local -a rename_argv=() backup_argv=() rollback_argv=() undo_argv=() backup_rollback_argv=()
   _vpn_privileged_argv mv -- "$old_conf" "$new_conf" || return 1
   rename_argv=("${reply[@]}")
   _vpn_announce_privileged "${(j: :)${(@q)rename_argv}}"
@@ -692,10 +716,27 @@ vpn-profile-rename() {
     _vpn_privileged_argv mv -- "$old_backup" "$new_backup" || return 1
     backup_argv=("${reply[@]}")
     _vpn_announce_privileged "${(j: :)${(@q)backup_argv}}"
+  fi
+  if [[ "$old_undo_state" == safe ]]; then
+    _vpn_privileged_argv mv -- "$old_undo" "$new_undo" || return 1
+    undo_argv=("${reply[@]}")
+    _vpn_announce_privileged "${(j: :)${(@q)undo_argv}}"
+    if [[ "$old_backup_state" == safe ]]; then
+      _vpn_privileged_argv mv -- "$new_backup" "$old_backup" || return 1
+      backup_rollback_argv=("${reply[@]}")
+      _vpn_announce_privileged \
+        "${(j: :)${(@q)backup_rollback_argv}} (rollback if pre-restore rename fails)"
+    fi
+  fi
+  if [[ "$old_backup_state" == safe || "$old_undo_state" == safe ]]; then
     _vpn_privileged_argv mv -- "$new_conf" "$old_conf" || return 1
     rollback_argv=("${reply[@]}")
-    _vpn_announce_privileged \
-      "${(j: :)${(@q)rollback_argv}} (rollback if backup rename fails)"
+    local rollback_reason="pre-restore rename fails"
+    if [[ "$old_backup_state" == safe ]]; then
+      rollback_reason="backup rename fails"
+      [[ "$old_undo_state" != safe ]] || rollback_reason+=" or pre-restore rename fails"
+    fi
+    _vpn_announce_privileged "${(j: :)${(@q)rollback_argv}} (rollback if $rollback_reason)"
   fi
   if (( old_active )); then
     _vpn_tunnel_down "$old_iface" || return 1
@@ -731,12 +772,38 @@ vpn-profile-rename() {
     _vpn_error "$new_backup appeared after planning — aborting."
     return 1
   }
+  if [[ "$old_undo_state" == safe ]]; then
+    current_fingerprint=$(
+      _vpn_profile_file_fingerprint "$old_undo" "$old_iface pre-restore copy"
+    ) || return 1
+    [[ "$current_fingerprint" == "$old_undo_fingerprint" ]] || {
+      _vpn_error "$old_undo changed after planning — aborting."
+      return 1
+    }
+  elif [[ "$(_vpn_profile_path_state "$old_undo")" != missing ]]; then
+    _vpn_error "$old_undo appeared after planning — aborting."
+    return 1
+  fi
+  [[ "$(_vpn_profile_path_state "$new_undo")" == missing ]] || {
+    _vpn_error "$new_undo appeared after planning — aborting."
+    return 1
+  }
 
   if ! _vpn_sudo_exec "${rename_argv[@]}"; then
     _vpn_error "Failed to rename the profile."
     return 1
   fi
   _vpn_success "${old_conf:t} → ${new_conf:t}"
+  local moved_profile_fingerprint="" moved_backup_fingerprint=""
+  if [[ "$old_undo_state" == safe ]]; then
+    moved_profile_fingerprint=$(
+      _vpn_profile_file_fingerprint "$new_conf" "$new_iface renamed profile"
+    ) || {
+      _vpn_error "Could not verify the renamed profile at $new_conf."
+      _vpn_mark_partial
+      return 1
+    }
+  fi
 
   if [[ "$old_backup_state" == "safe" ]]; then
     if ! _vpn_sudo_exec "${backup_argv[@]}"; then
@@ -749,6 +816,56 @@ vpn-profile-rename() {
       return 1
     fi
     _vpn_success "${old_backup:t} → ${new_backup:t}"
+    if [[ "$old_undo_state" == safe ]]; then
+      moved_backup_fingerprint=$(
+        _vpn_profile_file_fingerprint "$new_backup" "$new_iface renamed backup"
+      ) || {
+        _vpn_error "Could not verify the renamed backup at $new_backup."
+        _vpn_mark_partial
+        return 1
+      }
+    fi
+  fi
+
+  if [[ "$old_undo_state" == safe ]]; then
+    local -i undo_rc=0 rollback_failures=0
+    current_fingerprint=$(
+      _vpn_profile_file_fingerprint "$old_undo" "$old_iface pre-restore copy"
+    ) || undo_rc=1
+    [[ "$current_fingerprint" == "$old_undo_fingerprint" \
+      && "$(_vpn_profile_path_state "$new_undo")" == missing ]] || undo_rc=1
+    (( undo_rc )) || _vpn_sudo_exec "${undo_argv[@]}" || undo_rc=$?
+    if (( undo_rc )); then
+      _vpn_error "Could not rename the pre-restore copy; rolling earlier files back."
+      if [[ "$old_backup_state" == safe ]]; then
+        current_fingerprint=$(
+          _vpn_profile_file_fingerprint "$new_backup" "$new_iface renamed backup"
+        ) || current_fingerprint=""
+        if [[ "$current_fingerprint" != "$moved_backup_fingerprint" \
+          || "$(_vpn_profile_path_state "$old_backup")" != missing ]] \
+          || ! _vpn_sudo_exec "${backup_rollback_argv[@]}"; then
+          _vpn_error "Could not safely roll back the backup; inspect $new_backup."
+          (( ++rollback_failures ))
+        fi
+      fi
+      current_fingerprint=$(
+        _vpn_profile_file_fingerprint "$new_conf" "$new_iface renamed profile"
+      ) || current_fingerprint=""
+      if [[ "$current_fingerprint" != "$moved_profile_fingerprint" \
+        || "$(_vpn_profile_path_state "$old_conf")" != missing ]] \
+        || ! _vpn_sudo_exec "${rollback_argv[@]}"; then
+        _vpn_error "Could not safely roll back the profile; inspect $new_conf."
+        (( ++rollback_failures ))
+      fi
+      if (( rollback_failures )); then
+        _vpn_mark_partial
+      else
+        _vpn_info "Rollback completed; nothing remains renamed."
+      fi
+      (( undo_rc == 130 || undo_rc == 143 )) && return "$undo_rc"
+      return 1
+    fi
+    _vpn_success "${old_undo:t} → ${new_undo:t}"
   fi
 
   local -i state_failures=0
@@ -776,7 +893,7 @@ vpn-profile-rename() {
 
 # vpn-profile-remove
 #   Arguments: [PROFILE] | --dry-run | --yes | --with-backup | --help
-#   Effects:   deletes the profile and, when requested, its backup.
+#   Effects:   deletes the profile and, when requested, its credential copies.
 #   Status:    0 on success or cancellation, 1 on failure, 2 on bad arguments.
 vpn-profile-remove() {
   emulate -L zsh
@@ -790,10 +907,10 @@ vpn-profile-remove() {
           "Usage: vpn-profile-remove [PROFILE] [--with-backup] [--dry-run] [--yes]"
         print -u2 -r -- "  Remove a profile after confirmation."
         print -u2 -r -- \
-          "  --with-backup   Also remove ${VPN_BACKUP_SUFFIX} for that profile."
+          "  --with-backup   Also remove its backup and .pre-restore undo copy."
         print -u2 -r -- "  --dry-run       Show the plan and stop."
         print -u2 -r -- \
-          "  --yes, -y       Skip the confirmation prompts. The backup is kept"
+          "  --yes, -y       Skip the confirmation prompts. Credential copies are kept"
         print -u2 -r -- \
           "                  unless --with-backup is also given."
         return 0
@@ -831,12 +948,13 @@ vpn-profile-remove() {
     iface="$picked"
   fi
 
-  local conf_file bak_file
+  local conf_file bak_file undo_file
   conf_file=$(_vpn_conf_path "$iface") || return 1
   bak_file=$(_vpn_backup_path "$iface") || return 1
+  undo_file="${conf_file}.pre-restore"
 
-  local directory_identity profile_fingerprint backup_fingerprint=""
-  local profile_state backup_path_state
+  local directory_identity profile_fingerprint backup_fingerprint="" undo_fingerprint=""
+  local profile_state backup_path_state undo_path_state
   directory_identity=$(_vpn_config_dir_identity) || return 1
   profile_state=$(_vpn_profile_path_state "$conf_file")
   [[ "$profile_state" == "safe" ]] || {
@@ -848,7 +966,7 @@ vpn-profile-remove() {
   ) || return 1
 
   backup_path_state=$(_vpn_profile_path_state "$bak_file")
-  local -i backup_present=0
+  local -i backup_present=0 undo_present=0
   case "$backup_path_state" in
     safe)
       backup_present=1
@@ -859,6 +977,21 @@ vpn-profile-remove() {
     missing) ;;
     *)
       _vpn_error "The backup path for $iface is unsafe or unreadable."
+      return 1
+      ;;
+  esac
+
+  undo_path_state=$(_vpn_profile_path_state "$undo_file")
+  case "$undo_path_state" in
+    safe)
+      undo_present=1
+      undo_fingerprint=$(
+        _vpn_profile_file_fingerprint "$undo_file" "$iface pre-restore copy"
+      ) || return 1
+      ;;
+    missing) ;;
+    *)
+      _vpn_error "The pre-restore copy for $iface is unsafe or unreadable."
       return 1
       ;;
   esac
@@ -874,10 +1007,10 @@ vpn-profile-remove() {
     # Ask about the backup only when the caller neither decided on the command
     # line nor passed --yes. Letting --yes answer this question would widen the
     # target set, and --yes may bypass a prompt but never the plan.
-    if (( backup_present && ! backup_flag_given && ! auto_yes && !dry_run )); then
+    if (( (backup_present || undo_present) && ! backup_flag_given && ! auto_yes && !dry_run )); then
       local backup_outcome
       backup_outcome=$(
-        _vpn_confirm_outcome "Include ${bak_file:t} in the removal plan?"
+        _vpn_confirm_outcome "Include the backup and pre-restore copies in the removal plan?"
       )
       [[ "$backup_outcome" == "confirmed" ]] && with_backup=1
     fi
@@ -909,6 +1042,10 @@ vpn-profile-remove() {
     (( plan_step += 1, file_count += 1 ))
     plan_rows+=("$plan_step"$'\t'"delete"$'\t'"${bak_file:t}")
   fi
+  if (( undo_present && with_backup )); then
+    (( plan_step += 1, file_count += 1 ))
+    plan_rows+=("$plan_step"$'\t'"delete"$'\t'"${undo_file:t}")
+  fi
   # The action column appears only when the plan mixes actions.
   local plan_header=$'#\tAction\tTarget' tab=$'\t'
   if (( ! profile_active )); then
@@ -919,6 +1056,8 @@ vpn-profile-remove() {
   _vpn_table "$plan_header" "${plan_rows[@]}"
   (( backup_present && !with_backup )) \
     && _vpn_dim "The backup ${bak_file:t} is kept; pass --with-backup to delete it."
+  (( undo_present && !with_backup )) \
+    && _vpn_dim "The pre-restore copy ${undo_file:t} contains credentials and is kept; pass --with-backup to delete it."
   local -a cleared=()
   [[ "$default_before" == "$iface" ]] && cleared+=("default")
   [[ "$last_before" == "$iface" ]] && cleared+=("last-used")
@@ -959,7 +1098,7 @@ vpn-profile-remove() {
   }
   _vpn_blank
 
-  local -a remove_argv=() backup_argv=()
+  local -a remove_argv=() backup_argv=() undo_argv=()
   _vpn_privileged_argv rm -- "$conf_file" || return 1
   remove_argv=("${reply[@]}")
   _vpn_announce_privileged "${(j: :)${(@q)remove_argv}}"
@@ -967,6 +1106,11 @@ vpn-profile-remove() {
     _vpn_privileged_argv rm -- "$bak_file" || return 1
     backup_argv=("${reply[@]}")
     _vpn_announce_privileged "${(j: :)${(@q)backup_argv}}"
+  fi
+  if (( with_backup && undo_present )); then
+    _vpn_privileged_argv rm -- "$undo_file" || return 1
+    undo_argv=("${reply[@]}")
+    _vpn_announce_privileged "${(j: :)${(@q)undo_argv}}"
   fi
   if (( profile_active )); then
     _vpn_tunnel_down "$iface" || return 1
@@ -991,18 +1135,57 @@ vpn-profile-remove() {
       return 1
     }
   fi
+  if (( with_backup && undo_present )); then
+    current_fingerprint=$(
+      _vpn_profile_file_fingerprint "$undo_file" "$iface pre-restore copy"
+    ) || return 1
+    [[ "$current_fingerprint" == "$undo_fingerprint" ]] || {
+      _vpn_error "$undo_file changed after planning — aborting."
+      return 1
+    }
+  fi
 
-  local -i failures=0 changes=$(( file_count + ${#cleared[@]} ))
+  local -i failures=0 step_rc=0 changes=$(( file_count + ${#cleared[@]} ))
   if ! _vpn_sudo_exec "${remove_argv[@]}"; then
     _vpn_error "Could not remove $conf_file; cached pointers were preserved."
     return 1
   fi
   _vpn_success "Deleted ${conf_file:t}"
   if (( with_backup && backup_present )); then
-    if _vpn_sudo_exec "${backup_argv[@]}"; then
+    _vpn_sudo_exec "${backup_argv[@]}" || step_rc=$?
+    if (( step_rc == 0 )); then
       _vpn_success "Deleted ${bak_file:t}"
     else
       _vpn_error "Could not delete ${bak_file:t}."
+      if (( step_rc == 130 || step_rc == 143 )); then
+        _vpn_warn "Removal interrupted; the profile was already removed."
+        _vpn_dim "Stopped before the pre-restore copy and saved choices; inspect $bak_file and $undo_file."
+        _vpn_mark_partial
+        return "$step_rc"
+      fi
+      (( ++failures ))
+    fi
+  fi
+  if (( with_backup && undo_present )); then
+    step_rc=0
+    current_fingerprint=$(
+      _vpn_profile_file_fingerprint "$undo_file" "$iface pre-restore copy"
+    ) || step_rc=$?
+    if (( step_rc == 0 )) && [[ "$current_fingerprint" == "$undo_fingerprint" ]]; then
+      _vpn_sudo_exec "${undo_argv[@]}" || step_rc=$?
+    elif (( step_rc == 0 )); then
+      step_rc=1
+    fi
+    if (( step_rc == 0 )); then
+      _vpn_success "Deleted ${undo_file:t}"
+    else
+      _vpn_error "Could not safely delete ${undo_file:t}."
+      if (( step_rc == 130 || step_rc == 143 )); then
+        _vpn_warn "Removal interrupted; the profile was already removed."
+        _vpn_dim "Saved choices were not changed; inspect $undo_file before retrying."
+        _vpn_mark_partial
+        return "$step_rc"
+      fi
       (( ++failures ))
     fi
   fi

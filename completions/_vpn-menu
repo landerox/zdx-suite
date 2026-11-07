@@ -179,7 +179,7 @@ case "$subcommand" in
     _arguments \
       '(- *)'{-h,--help}'[Show command usage]' \
       '(-h --help --dry-run)--dry-run[Show the removal plan and stop]' \
-      '(-h --help --with-backup)--with-backup[Also remove the matching backup file]' \
+      '(-h --help --with-backup)--with-backup[Also remove matching backup and pre-restore copies]' \
       '(-h --help -y --yes)'{-y,--yes}'[Skip the confirmation prompts]' \
       '1:profile:_vpn_menu_profiles'
     ;;

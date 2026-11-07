@@ -494,6 +494,15 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_secret_retention.bats` covers provider tokens absent from argv and saved
+errors, invocation-local key hiding and independent filtering, complete
+backup/undo plans, kept copies, rename compensation, restore disclosure,
+safe orphan inventories and bounded protected reads. Returned `130`/`143`
+from family deletion stop later mutations; rollback/restore controls retain
+their established policies. Exact actors and all filesystem/socket work stay
+inside disposable HOME. A native fixture run avoids sandbox UID/socket
+artifacts and does not establish real VPN or macOS acceptance.
+
 The privilege-boundary fixture also covers existing profile directories hidden
 below owned mode000/0600 parents. Public create must refuse before consent or
 authentication and preserve the hidden profile bytes without permission repair.
