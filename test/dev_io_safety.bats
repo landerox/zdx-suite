@@ -1322,3 +1322,174 @@ MOCK
   [ "$status" -eq 0 ]
   [ "$output" = "foo-bar-baz" ]
 }
+
+# Malformed network data must pass through the real decoder, query cache and
+# public dependency updater before any project or package-manager mutation.
+write_pypi_network_response() {
+  export DEV_NETWORK_BODY="$TEST_TEMP_DIR/network-body.json"
+  export DEV_NETWORK_LOG="$TEST_TEMP_DIR/network-curl.log"
+  export DEV_NETWORK_UV_LOG="$TEST_TEMP_DIR/network-uv.log"
+  export DEV_NETWORK_CURL_STATUS="${2:-0}"
+  printf '%s' "$1" > "$DEV_NETWORK_BODY"
+  : > "$DEV_NETWORK_LOG"
+  : > "$DEV_NETWORK_UV_LOG"
+  cat > "$DEV_PROJECT/pyproject.toml" <<'TOML'
+[project]
+name = "network-fixture"
+version = "1.0.0"
+dependencies = ["fixture-pkg>=1.0.0"]
+TOML
+  cp "$DEV_PROJECT/pyproject.toml" "$TEST_TEMP_DIR/network-original.toml"
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/curl"
+  cat >> "$TEST_MOCK_BIN/curl" <<'MOCK'
+set -u
+output_file=""
+url="${!#}"
+while (( $# > 0 )); do
+  case "$1" in
+    -o) output_file="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$url" >> "$DEV_NETWORK_LOG"
+case "$url" in
+  https://pypi.org/simple/)
+    [[ "$output_file" == /dev/null ]] || exit 97
+    printf '200 0.001 1 192.0.2.1'
+    exit 0
+    ;;
+  https://pypi.org/pypi/fixture-pkg/json)
+    [[ "$TMPDIR" == "$TEST_TEMP_DIR/tmp" && "$output_file" == "$TMPDIR/"* \
+      && "$output_file" != */../* && -f "$output_file" ]] || exit 97
+    cat "$DEV_NETWORK_BODY" > "$output_file"
+    exit "$DEV_NETWORK_CURL_STATUS"
+    ;;
+  *) exit 97 ;;
+esac
+MOCK
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/uv"
+  cat >> "$TEST_MOCK_BIN/uv" <<'MOCK'
+printf '%s\n' "$*" >> "$DEV_NETWORK_UV_LOG"
+case "$*" in
+  'lock --upgrade-package fixture-pkg'|'sync --all-groups') exit 0 ;;
+  *) exit 97 ;;
+esac
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/curl" "$TEST_MOCK_BIN/uv"
+}
+
+assert_pypi_network_response_refused() {
+  run run_zsh '
+    builtin cd -q -- "$DEV_PROJECT" || exit 90
+    DEV_PYPI_RETRIES=0
+    {
+      _dev_pypi_latest fixture-pkg
+    } always {
+      _dev_pypi_cache_cleanup
+    }
+  '
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [ "$(grep -c '^https://pypi.org/pypi/fixture-pkg/json$' "$DEV_NETWORK_LOG")" -eq 1 ]
+  cmp "$TEST_TEMP_DIR/network-original.toml" "$DEV_PROJECT/pyproject.toml"
+
+  : > "$DEV_NETWORK_LOG"
+  run run_zsh '
+    builtin cd -q -- "$DEV_PROJECT" || exit 90
+    DEV_PYPI_RETRIES=0
+    dev-update-deps --yes > "$HOME/network.stdout"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"No update was applied: 1 package could not be queried or planned."* ]]
+  [ "$(grep -c '^https://pypi.org/simple/$' "$DEV_NETWORK_LOG")" -eq 1 ]
+  [ "$(grep -c '^https://pypi.org/pypi/fixture-pkg/json$' "$DEV_NETWORK_LOG")" -eq 2 ]
+  cmp "$TEST_TEMP_DIR/network-original.toml" "$DEV_PROJECT/pyproject.toml"
+  [ ! -s "$HOME/network.stdout" ]
+  [ ! -s "$DEV_NETWORK_UV_LOG" ]
+  [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+  run run_zsh '
+    local -a leftovers=("$TMPDIR"/zdx-dev-pypi.*(ND) "$TMPDIR"/zdx-dev-update.*(ND))
+    (( ${#leftovers} == 0 )) || exit 91
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "dev network: quoted PyPI versions never reach a project specifier" {
+  write_pypi_network_response '{"info":{"version":"1.0\", \"injected>=0"}}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: spaced PyPI versions never reach a project specifier" {
+  write_pypi_network_response '{"info":{"version":"2.0 ; extra"}}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: embedded newline PyPI versions never reach a project specifier" {
+  write_pypi_network_response '{"info":{"version":"2.0\n[tool.injected]"}}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: non-ASCII PyPI versions never reach a project specifier" {
+  write_pypi_network_response '{"info":{"version":"２.0"}}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: overlong PyPI versions never reach a project specifier" {
+  local long_version="1.$(printf '%0128d' 0)"
+  write_pypi_network_response "{\"info\":{\"version\":\"$long_version\"}}"
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: non-string PyPI versions never reach a project specifier" {
+  local body
+  for body in '{"info":{"version":2}}' '{"info":{"version":null}}' '{"info":{"version":[]}}'; do
+    write_pypi_network_response "$body"
+    assert_pypi_network_response_refused
+  done
+}
+
+@test "dev network: a non-object PyPI info field never reaches a project specifier" {
+  write_pypi_network_response '{"info":[]}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: a missing PyPI info field never reaches a project specifier" {
+  write_pypi_network_response '{"message":"not found"}'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: a non-JSON PyPI body never reaches a project specifier" {
+  write_pypi_network_response '<html>upstream temporarily unavailable</html>'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: an incomplete PyPI body never reaches a project specifier" {
+  write_pypi_network_response '{"info":{"version":"2.0.0"'
+  assert_pypi_network_response_refused
+}
+
+@test "dev network: failed and partial PyPI transfers cannot publish an otherwise valid version" {
+  local curl_status
+  # --fail maps authentication/rate-limit/server HTTP errors to22; DNS,
+  # deadline and partial-body failures retain6,28 and18 respectively.
+  for curl_status in 22 6 28 18; do
+    write_pypi_network_response '{"info":{"version":"9.9.9"}}' "$curl_status"
+    assert_pypi_network_response_refused
+  done
+}
+
+@test "dev network: a valid PyPI response reaches only the selected specifier and mocked backend" {
+  write_pypi_network_response '{"info":{"version":"2.4.6"}}'
+  run run_zsh '
+    builtin cd -q -- "$DEV_PROJECT" || exit 90
+    DEV_PYPI_RETRIES=0
+    dev-update-deps --yes > "$HOME/network.stdout"
+  '
+  [ "$status" -eq 0 ]
+  grep -Fq 'dependencies = ["fixture-pkg>=2.4.6"]' "$DEV_PROJECT/pyproject.toml"
+  [ "$(cat "$DEV_NETWORK_UV_LOG")" = $'lock --upgrade-package fixture-pkg\nsync --all-groups' ]
+  [ "$(grep -c '^https://pypi.org/pypi/fixture-pkg/json$' "$DEV_NETWORK_LOG")" -eq 1 ]
+  [ ! -s "$HOME/network.stdout" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}

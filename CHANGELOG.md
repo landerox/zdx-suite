@@ -126,6 +126,10 @@ verification, and remaining limitations.
 
 ### Changed
 
+- Add isolated malformed PyPI metadata, Git tag-listing and GitHub age-response
+  coverage through public Developer updaters, including unchanged-file refusal,
+  bounded oversized responses and successful recording-backend controls.
+
 - Add isolated public VPN profile rename/removal, restore and default-clear
   tests for exact scope, consent, authentication races, rollback and partial
   failures. Runtime behavior is unchanged.

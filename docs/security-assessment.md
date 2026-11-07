@@ -1452,6 +1452,14 @@ in a compromised release channel and then installed, potentially as root.
   installed tools remain trusted. Separate file publications retain a final
   race and are not one kernel-atomic transaction.
 
+- Developer network-response tests exercise malformed PyPI fields and JSON,
+  failed/partial transfers, malformed or oversized Git tag listings and invalid
+  GitHub age data through the public update paths. They assert unchanged
+  project bytes on refusal and exact recording-backend publication for valid
+  controls. These bounded cases do not attest live upstream metadata or every
+  representation affected by line normalization; that validation limit
+  remains separate from artifact provenance and installer trust.
+
 - Downloads use HTTPS and generally fail on HTTP errors.
 - Without a Homebrew or Snap owner, `update-awscli` refuses automatic bundle
   installation and points to AWS's detached-signature verification procedure.
