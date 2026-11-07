@@ -406,33 +406,73 @@ _dev_precommit_live_config_matches() {
   [[ "$REPLY" == "$expected_fingerprint" ]]
 }
 
+# REPLY: a display-only repository identifier without URL userinfo, query,
+# or fragment data. The original repository value remains the updater's data.
+_dev_precommit_display_repo() {
+  emulate -L zsh
+  local repository="${1-}" scheme authority remainder
+  repository="${repository%%\?*}"
+  repository="${repository%%\#*}"
+  if [[ "$repository" == *://* ]]; then
+    scheme="${repository%%://*}"
+    remainder="${repository#*://}"
+    authority="${remainder%%/*}"
+    repository="${scheme}://${authority##*@}${remainder#"$authority"}"
+  elif [[ "$repository" == *@*:* ]]; then
+    repository="${repository##*@}"
+  fi
+  REPLY="${repository#https://github.com/}"
+}
+
 # dev-update-precommit
-#   Arguments: --help only.
+#   Arguments: --yes | -y | --dry-run | --help
 #   stdout:    none. Plans, tool output, diffs, and diagnostics go to stderr.
 #   Effects:   bumps the pre-commit specifier, re-locks, syncs, plans frozen
 #              hook revisions privately, rejects unsafe regressions, installs
 #              and validates the candidate, publishes it atomically,
 #              reinstalls the Git hooks, then runs the file-stage hooks and
 #              reports their findings without discarding the publication.
+#              Execution requires an explicit upstream trust decision; a dry
+#              run uses an installed runner and a private cache to preview only.
 #   Requires:  uv, Python 3.11+, pyproject.toml, .pre-commit-config.yaml, and
 #              network access to the configured package and hook repositories.
 #              A failed PyPI probe skips only the package specifier query.
-#   Status:    0 when every stage succeeds, 1 on an operational or rollback
-#              failure or when the published hooks report findings, 2 on
-#              invalid arguments.
+#   Status:    0 on success, a passive preview, or a declined trust decision;
+#              1 when consent is unavailable, validation or a stage fails,
+#              or the published hooks report findings; 2 on invalid arguments.
 dev-update-precommit() {
   emulate -L zsh
   (( ${+_DEV_RUN_PYTHON} )) || local _DEV_RUN_PYTHON=""
 
   local REPLY
-  _dev_parse_no_arguments dev-update-precommit "$@" || return $?
-  if [[ "$REPLY" == "help" ]]; then
-    print -u2 -r -- "Usage: dev-update-precommit"
+  local -i auto_yes=0 dry_run=0 show_help=0
+  local option
+  for option in "$@"; do
+    case "$option" in
+      --yes|-y) auto_yes=1 ;;
+      --dry-run) dry_run=1 ;;
+      -h|--help) show_help=1 ;;
+      *) _dev_error "Unknown option: $option"; return 2 ;;
+    esac
+  done
+  if (( show_help )); then
+    (( $# == 1 )) || {
+      _dev_error "Help does not accept additional arguments."
+      return 2
+    }
+    print -u2 -r -- "Usage: dev-update-precommit [--yes] [--dry-run]"
     print -u2 -r -- \
-      "  Publish only safe frozen hook revisions after private validation."
+      "  Review dynamic upstream package and hook updates before installing and running code."
+    print -u2 -r -- \
+      "  --dry-run   Preview with already-installed pre-commit; never install or publish."
+    print -u2 -r -- \
+      "  --yes, -y   Trust this upstream scope without prompting; validation still applies."
     return 0
   fi
 
+  local -i _DEV_PREVIEW_EXEC_TRUST=$dry_run
+  (( ${+_DEV_PREVIEW_EXEC_IDENTITIES} )) \
+    || local -A _DEV_PREVIEW_EXEC_IDENTITIES=()
   _dev_header "Updating Pre-commit (Package and Hooks)"
   _dev_require_command uv || return 1
   _dev_require_python_toml || return 1
@@ -468,6 +508,17 @@ dev-update-precommit() {
   initial_pyproject_fingerprint="$REPLY"
   _dev_update_file_fingerprint "$config_path" || return 1
   initial_config_fingerprint="$REPLY"
+
+  # An aggregate's --yes authorizes only the configuration it displayed.
+  # These dynamically scoped facts exist for that invocation alone.
+  if [[ -n "${_DEV_PRECOMMIT_REVIEW_CONFIG_PATH:-}" \
+    && ( "$config_path" != "$_DEV_PRECOMMIT_REVIEW_CONFIG_PATH" \
+      || "$initial_config_fingerprint" != \
+        "${_DEV_PRECOMMIT_REVIEW_CONFIG_FINGERPRINT:-}" ) ]]; then
+    _dev_error \
+      "The pre-commit configuration differs from the authorized aggregate plan; start a new invocation to review it."
+    return 1
+  fi
 
   local transaction_root=""
   local transaction_root_identity=""
@@ -594,10 +645,69 @@ dev-update-precommit() {
         ;;
     esac
 
+    _dev_label "Configuration" "$config_path"
+    _dev_label "Configuration SHA256" "${initial_config_fingerprint##*:}"
+    _dev_label "Project SHA256" "${initial_pyproject_fingerprint##*:}"
+    _dev_warn \
+      "Trust scope: dynamic upstream pre-commit packages and every hook repository declared by this configuration, including local hooks."
+    _dev_info \
+      "Installed pre-commit resolves upstream revisions with autoupdate --freeze --config <private candidate>; this can access the network without executing newly resolved hooks."
+    _dev_info \
+      "Execution may publish pyproject.toml, run uv lock --upgrade-package pre-commit and uv sync --all-groups, then validate-config <private candidate>, install-hooks --config <private candidate>, publish frozen revisions, install --install-hooks, and run --all-files --config <project configuration>."
+    _dev_warn \
+      "Package builds and hook installation can execute upstream code; hooks may rewrite project files. Frozen revisions do not attest that upstream code is safe."
+
+    if (( ! dry_run )); then
+      local -i previous_auto_yes=$_DEV_AUTO_YES
+      local trust_outcome="declined"
+      {
+        (( auto_yes )) && _DEV_AUTO_YES=1
+        trust_outcome=$(_dev_confirm_outcome \
+          "Trust this upstream scope and install and execute its package and hook code?")
+      } always {
+        _DEV_AUTO_YES=$previous_auto_yes
+      }
+      case "$trust_outcome" in
+        confirmed) ;;
+        unavailable)
+          _dev_error \
+            "Pre-commit updates need an explicit trust decision; pass --yes in a non-interactive shell."
+          return 1
+          ;;
+        *)
+          _dev_info "Cancelled. No package or hook update was started."
+          return 0
+          ;;
+      esac
+    fi
+
+    # Consent does not authorize a different project or configuration.
+    _dev_update_workspace_validate \
+      "$transaction_root" "$transaction_root_identity" \
+      "$transaction_dir" "$transaction_dir_identity" || return 1
+    current_project_identity=$(
+      _dev_directory_identity "$project_root" "project directory"
+    ) || return 1
+    [[ "$current_project_identity" == "$project_identity" \
+      && "${PWD:A}" == "$project_root" ]] || {
+      _dev_error "The project context changed during trust review."
+      return 1
+    }
+    _dev_update_file_fingerprint "$pyproject_path" || return 1
+    [[ "$REPLY" == "$initial_pyproject_fingerprint" ]] || {
+      _dev_error "pyproject.toml changed during trust review."
+      return 1
+    }
+    _dev_precommit_live_config_matches \
+      "$config_path" "$initial_config_fingerprint" || {
+      _dev_error ".pre-commit-config.yaml changed during trust review."
+      return 1
+    }
+
     local invocation_backup=""
     local invocation_backup_fingerprint=""
     local applied_pyproject_fingerprint=""
-    if [[ "$specifier_status" == "updated" ]]; then
+    if [[ "$specifier_status" == "updated" ]] && (( ! dry_run )); then
       _dev_info "Creating an invocation-owned backup of pyproject.toml..."
       reply=()
       _dev_update_prepare_pyproject_backup \
@@ -669,7 +779,7 @@ dev-update-precommit() {
       fi
     fi
 
-    if ! _dev_run_captured "uv sync --all-groups" \
+    if (( ! dry_run )) && ! _dev_run_captured "uv sync --all-groups" \
       command uv sync --all-groups; then
       _dev_error "Sync failed — pre-commit autoupdate needs the environment."
       _dev_report_result failed "sync failed"
@@ -679,11 +789,41 @@ dev-update-precommit() {
     reply=()
     _dev_exact_project_python_tool_runner \
       pre-commit pre_commit "uv add --dev pre-commit" configured || {
-      _dev_error \
-        "Sync completed, but the project pre-commit runner is unavailable."
+      if (( dry_run )); then
+        _dev_error \
+          "A dry run requires already-installed project pre-commit; install it through your reviewed project workflow first."
+      else
+        _dev_error \
+          "Sync completed, but the project pre-commit runner is unavailable."
+      fi
       return 1
     }
     local -a precommit_runner=("${reply[@]}")
+    local preview_runner_fingerprint=""
+    if (( dry_run )); then
+      # Execute only the existing runner, never uv run or a newly synced tool.
+      _dev_preview_exec_guard "${precommit_runner[1]}" || {
+        _dev_error "The installed preview runner is not trusted."
+        return 1
+      }
+      local -A preview_runner_stat
+      zmodload -F zsh/stat b:zstat || return 1
+      zstat -H preview_runner_stat -- "${precommit_runner[1]}" \
+        2>/dev/null || return 1
+      [[ -f "${precommit_runner[1]}" && -x "${precommit_runner[1]}" \
+        && ( "${preview_runner_stat[uid]}" == "$EUID" \
+          || "${preview_runner_stat[uid]}" == 0 ) ]] \
+        && (( (preview_runner_stat[mode] & 8#022) == 0 )) || {
+        _dev_error "The installed preview runner is not trusted."
+        return 1
+      }
+      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return 1
+      preview_runner_fingerprint="$REPLY"
+      local -x PRE_COMMIT_HOME="${transaction_dir}/pre-commit-cache"
+      command mkdir -m 700 -- "$PRE_COMMIT_HOME" || return 1
+      _dev_info \
+        "DRY-RUN — executing installed pre-commit only, with an invocation-private cache; no package or hook installation or publication."
+    fi
 
     _dev_update_workspace_validate \
       "$transaction_root" "$transaction_root_identity" \
@@ -717,6 +857,17 @@ dev-update-precommit() {
     fi
 
     local -i autoupdate_status=0
+    if (( dry_run )); then
+      _dev_preview_exec_guard "${precommit_runner[1]}" || {
+        _dev_error "The installed preview runner changed before execution."
+        return 1
+      }
+      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return 1
+      [[ "$REPLY" == "$preview_runner_fingerprint" ]] || {
+        _dev_error "The installed preview runner changed before execution."
+        return 1
+      }
+    fi
     _dev_run_captured "pre-commit autoupdate --freeze" \
       "${precommit_runner[@]}" autoupdate --freeze \
       --config "$planned_config" || autoupdate_status=$?
@@ -803,7 +954,8 @@ dev-update-precommit() {
         _dev_error "The hook revision guard returned an invalid record."
         return 1
       fi
-      guard_display="${guard_repo#https://github.com/}"
+      _dev_precommit_display_repo "$guard_repo"
+      guard_display="$REPLY"
       case "$guard_outcome" in
         current)
           (( ++current_revisions ))
@@ -816,7 +968,7 @@ dev-update-precommit() {
         kept)
           (( ++kept_revisions ))
           _dev_warn \
-            "Kept ${(V)guard_repo} at ${(V)guard_previous}: ${(V)${guard_detail#*: }}."
+            "Kept ${(V)guard_display} at ${(V)guard_previous}: ${(V)${guard_detail#*: }}."
           _dev_dim "  Rejected autoupdate proposal: ${(V)${guard_detail%%: *}}"
           revision_rows+=("$guard_display"$'\t'"$guard_final"$'\t'skipped$'\t'"kept; autoupdate proposed ${guard_detail%%: *} (${guard_detail#*: })")
           ;;
@@ -824,6 +976,13 @@ dev-update-precommit() {
     done
     (( ${#revision_rows[@]} > 0 )) && _dev_table --outcome-column 3 \
       $'Hook repository\tRevision\tResult\tDetail' "${revision_rows[@]}"
+
+    if (( dry_run )); then
+      _dev_info "Dry run complete. No package, hook, or project file was installed or published."
+      (( autoupdate_status == 0 )) \
+        && [[ "$specifier_status" != failed ]]
+      return $?
+    fi
 
     local -i validate_config_status=0
     _dev_run_captured "pre-commit validate-config" \

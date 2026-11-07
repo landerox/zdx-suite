@@ -20,7 +20,7 @@ dev-update-actions	dev-update-actions.zsh	mutating	dev
 dev-update-all	dev-update.zsh	destructive	dev
 dev-update-deps	dev-update-deps.zsh	mutating	dev
 dev-update-lock	dev-update-deps.zsh	mutating	dev
-dev-update-precommit	dev-update-precommit.zsh	mutating	dev
+dev-update-precommit	dev-update-precommit.zsh	remote-code	dev
 dev-update-python	dev-update-python.zsh	destructive	dev
 dev-update-terraform	dev-update.zsh	read-only	dev
 dev-update-tflint	dev-update.zsh	read-only	dev

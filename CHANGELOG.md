@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Developer: require an explicit trust decision before pre-commit package or
+  hook installation/execution, validate installed preview interpreters/runners
+  before qualification, and bind aggregate hook authorization to the reviewed
+  configuration identity.
+
 - Developer: keep DuckDB data and nested/bare repositories out of directory
   cleanup across categories and after consent, refuse ancestors of HOME,
   and separate new backup stems from ambiguous legacy names during pruning.
