@@ -688,6 +688,105 @@ run_zsh() {
   " < /dev/null
 }
 
+# Emit fixed test-only observers; their original calls retain all streams and status.
+_zdx_test_dev_preview_diagnostic_program() {
+  cat <<'ZSH'
+# Keep the first literal rejection, including expected unsafe-path controls.
+_zdx_test_dev_preview_note() {
+  emulate -L zsh
+  local REPLY _zdx_test_role="$1" _zdx_test_rc="$2" _zdx_test_exec="$3"
+  local _zdx_test_log="$HOME/dev-preview-qualification.log" _zdx_test_item
+  local _zdx_test_path _zdx_test_depth
+  local -A _zdx_test_state=()
+  [[ "$HOME" == "$TEST_TEMP_DIR/home" && -d "$HOME" && ! -L "$HOME" \
+    && ! -e "$_zdx_test_log" && ! -L "$_zdx_test_log" ]] || return 0
+  [[ "$_zdx_test_exec" == /* && ${#_zdx_test_exec} -le 512 \
+    && "$_zdx_test_exec" != *[[:cntrl:]]* ]] || return 0
+  case "${_zdx_test_exec:t}" in
+    python*|Python|uv|pre-commit|sha256sum|shasum) ;;
+    *) return 0 ;;
+  esac
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 0
+  (
+    umask 077
+    setopt NOCLOBBER
+    {
+      printf 'Preview qualification: first rejection; role=%s status=%s\n' \
+        "$_zdx_test_role" "$_zdx_test_rc"
+      print -r -- 'Passive metadata after rejection; no candidate was rerun.'
+      for _zdx_test_item in "$_zdx_test_exec" "${_zdx_test_exec:A}"; do
+        [[ ${#_zdx_test_item} -le 512 \
+          && "$_zdx_test_item" != *[[:cntrl:]]* ]] || continue
+        _zdx_test_path="$_zdx_test_item"
+        _zdx_test_depth=0
+        while (( _zdx_test_depth < 32 )); do
+          _zdx_test_state=()
+          if zstat -LH _zdx_test_state -- "$_zdx_test_path" 2>/dev/null; then
+            printf 'path=%q uid=%s gid=%s mode=%o type=%o device=%s inode=%s\n' \
+              "$_zdx_test_path" "${_zdx_test_state[uid]}" "${_zdx_test_state[gid]}" \
+              "${_zdx_test_state[mode]}" "$(( _zdx_test_state[mode] & 8#170000 ))" \
+              "${_zdx_test_state[device]}" "${_zdx_test_state[inode]}"
+          else
+            printf 'path=%q metadata=unavailable\n' "$_zdx_test_path"
+          fi
+          [[ "$_zdx_test_path" == / ]] && break
+          _zdx_test_path="${_zdx_test_path:h}"
+          (( ++_zdx_test_depth ))
+        done
+      done
+    } > "$_zdx_test_log"
+  ) 2>/dev/null || :
+  return 0
+}
+
+if (( ${+functions[_dev_preview_exec_snapshot]} \
+  && ${+functions[_dev_preview_exec_guard]} \
+  && ${+functions[_dev_run_with_timeout]} \
+  && ! ${+functions[_zdx_test_dev_preview_original_snapshot]} )); then
+  functions[_zdx_test_dev_preview_original_snapshot]="${functions[_dev_preview_exec_snapshot]}"
+  functions[_zdx_test_dev_preview_original_guard]="${functions[_dev_preview_exec_guard]}"
+  functions[_zdx_test_dev_preview_original_timeout]="${functions[_dev_run_with_timeout]}"
+  _dev_preview_exec_snapshot() {
+    _zdx_test_dev_preview_original_snapshot "$@"
+    local _zdx_test_rc=$?
+    if (( _zdx_test_rc != 0 )); then
+      _zdx_test_dev_preview_note snapshot "$_zdx_test_rc" "${1:-}" 2>/dev/null || :
+    fi
+    return "$_zdx_test_rc"
+  }
+  _dev_preview_exec_guard() {
+    _zdx_test_dev_preview_original_guard "$@"
+    local _zdx_test_rc=$?
+    if (( _zdx_test_rc != 0 )); then
+      _zdx_test_dev_preview_note guard "$_zdx_test_rc" "${1:-}" 2>/dev/null || :
+    fi
+    return "$_zdx_test_rc"
+  }
+  _dev_run_with_timeout() {
+    _zdx_test_dev_preview_original_timeout "$@"
+    local _zdx_test_rc=$? _zdx_test_program="${2:-}"
+    if (( _zdx_test_rc != 0 && ${_DEV_PREVIEW_EXEC_TRUST:-0} )) \
+      && [[ "${_zdx_test_program:t}" == sha256sum || "${_zdx_test_program:t}" == shasum ]]; then
+      _zdx_test_dev_preview_note hash-service "$_zdx_test_rc" "$_zdx_test_program" 2>/dev/null || :
+    fi
+    return "$_zdx_test_rc"
+  }
+fi
+ZSH
+}
+
+# BATS buffers teardown output and exposes it with failures, even after redirection.
+_zdx_test_dev_preview_diagnostic_dump() {
+  local diagnostic_log="$HOME/dev-preview-qualification.log" diagnostic_line diagnostic_count=0
+  [[ -f "$diagnostic_log" && ! -L "$diagnostic_log" && -s "$diagnostic_log" ]] || return 0
+  while IFS= read -r diagnostic_line || [[ -n "$diagnostic_line" ]]; do
+    printf '%s\n' "$diagnostic_line" >&2 || return 0
+    diagnostic_count=$((diagnostic_count + 1))
+    [[ "$diagnostic_count" -lt 70 ]] || break
+  done < "$diagnostic_log"
+  return 0
+}
+
 # Prints the body Zsh stores for _<prefix>_<base> with every `_<prefix>_`
 # replaced by `_P_` and each NOUN argument by `NOUN`, after the core and every
 # suite common file are sourced, so duplicated primitives compare as text.

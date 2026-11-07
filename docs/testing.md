@@ -464,6 +464,18 @@ already-set `GPG_TTY`; they do not establish native pinentry initialization.
 
 ### Developer coverage
 
+`dev_precommit_trust.bats` covers direct/nested grammar, pre-consent refusal,
+passive installed-runner previews, exact runner/configuration revalidation,
+credential-safe labels, aggregate disclosure and child forwarding, and
+configuration changes or unknown fingerprints before the hook step.
+`dev_precommit_preview_trust.bats` additionally exercises real private project
+interpreter qualification, writable executable/ancestor refusal before probes,
+metadata cache, link and byte changes, isolated installed-module resolution,
+offline UV finder arguments, CLT skip/fallback and aggregate dependency preview.
+Its existing interpreters only create/read disposable fixture data; installed
+interpreters and site directories remain unchanged. Fixtures mock package/hook backends and never execute real clipboard, project hooks,
+network updates or host installs.
+
 Cleanup scope cases cover polyglot dbt/Cargo data, repositories hidden under
 discovery prunes, bare repositories, depth-independent containment checks,
 HOME ancestors and protected content added during consent. Failed, timed-out,

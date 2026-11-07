@@ -22,7 +22,7 @@ subcmds=(
   'dev-run-bandit:Run Bandit static analysis over Python sources'
   'dev-update-deps:Preview and bump pyproject >= specifiers after backup and confirmation'
   'dev-update-lock:Refresh uv.lock and sync without editing pyproject'
-  'dev-update-precommit:Validate and publish safe frozen hook revisions'
+  'dev-update-precommit:Preview, then trust upstream package and hook installation and execution'
   'dev-update-actions:Pin workflow actions to newer release SHAs after backup and confirmation'
   'dev-update-python:Upgrade the runtime and rebuild .venv, or delegate runtime installation'
   'dev-update-terraform:Inspect Terraform ownership and its safest update workflow'
@@ -158,6 +158,12 @@ case "$subcommand" in
       '(-h --help)--dry-run[Show the plan without running uv or the Python suite]' \
       '(-h --help)'{-y,--yes}'[Skip confirmation; delegated version selection may still prompt]'
     ;;
+  dev-update-precommit)
+    _arguments \
+      '(- *)'{-h,--help}'[Show command usage]' \
+      '(-h --help)--dry-run[Preview with installed pre-commit without installation or publication]' \
+      '(-h --help)'{-y,--yes}'[Trust the upstream package and hook code]'
+    ;;
   dev-clean-py)
     _arguments \
       '(- *)'{-h,--help}'[Show command usage]' \
@@ -181,11 +187,11 @@ case "$subcommand" in
   dev-update-all)
     _arguments \
       '(- *)'{-h,--help}'[Show command usage]' \
-      '(-h --help)--dry-run[Preview dependency, action, and cleanup plans]' \
+      '(-h --help)--dry-run[Preview dependency, hook, action, and cleanup plans]' \
       '(-h --help)'{-y,--yes}'[Authorize aggregate and exact child plans]' \
       '(-h --help)'{-v,--verbose}'[Stream tool output and show policy notes]'
     ;;
-  dev-check-types|dev-run-shellcheck|dev-update-lock|dev-update-precommit\
+  dev-check-types|dev-run-shellcheck|dev-update-lock\
     |dev-update-terraform|dev-update-tflint)
     _arguments \
       '(- *)'{-h,--help}'[Show command usage]'

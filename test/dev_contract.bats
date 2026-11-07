@@ -42,7 +42,7 @@ assert_contract_matches() {
 
     [[ "$command_name" =~ ^dev-[a-z0-9-]+$ ]]
     [[ "$module_name" =~ ^dev-[a-z0-9-]+\.zsh$ ]]
-    [[ "$risk" =~ ^(read-only|mutating|destructive)$ ]]
+    [[ "$risk" =~ ^(read-only|mutating|destructive|remote-code)$ ]]
     [[ "$owner" == "dev" ]]
     [[ -z "$extra" ]]
     [[ -f "$TEST_SUITE_ROOT/functions/dev/$module_name" ]]
@@ -290,7 +290,6 @@ assert_contract_matches() {
       dev-check-types
       dev-run-shellcheck
       dev-update-lock
-      dev-update-precommit
       dev-update-terraform
       dev-update-tflint
     )

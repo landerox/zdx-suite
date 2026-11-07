@@ -778,6 +778,109 @@ _dev_require_file() {
   fi
 }
 
+# Passive executable identity for the opt-in installed-only preview policy.
+# Preserve the invocation path: resolving a venv Python symlink in argv loses
+# sys.prefix. Inspect both the link and its target without running either.
+_dev_preview_exec_snapshot() {
+  emulate -L zsh
+  local executable="${1:-}" resolved directory signature="" item
+  local -A state=()
+  REPLY=""
+  [[ "$executable" == /* && "$executable" != *[[:cntrl:]]* \
+    && "${executable:a}" == "$executable" ]] || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  resolved="${executable:A}"
+  for item in "$executable" "$resolved"; do
+    state=()
+    zstat -LH state -- "$item" 2>/dev/null || return 1
+    [[ "${state[uid]}" == 0 || "${state[uid]}" == "$EUID" ]] || return 1
+    if [[ -L "$item" ]]; then
+      (( (state[mode] & 8#170000) == 8#120000 )) || return 1
+    else
+      [[ -f "$item" && -x "$item" ]] \
+        && (( (state[mode] & 8#170000) == 8#100000 \
+          && (state[mode] & 8#022) == 0 )) || return 1
+    fi
+    signature+="${item}:${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}:${state[gid]}:${state[size]}:${state[mtime]}:${state[ctime]}:${state[link]-}"$'\n'
+    directory="${item:h}"
+    while true; do
+      state=()
+      zstat -H state -- "$directory" 2>/dev/null || return 1
+      [[ -d "$directory" \
+        && ( "${state[uid]}" == 0 || "${state[uid]}" == "$EUID" ) ]] \
+        || return 1
+      if (( state[mode] & 8#022 )); then
+        [[ "${state[uid]}" == 0 ]] \
+          && (( state[mode] & 8#1000 )) || return 1
+      fi
+      # Directory timestamps change when an unrelated sibling is created.
+      signature+="${directory}:${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}:${state[gid]}"$'\n'
+      [[ "$directory" == / ]] && break
+      directory="${directory:h}"
+    done
+  done
+  REPLY="$signature"
+}
+
+# Bind each preview executable's link, target, trusted ancestors and bytes
+# before qualification and recheck before every later qualification or use.
+# Hash through a checked installed digest program, never the candidate Python.
+# Normal commands retain their existing interpreter policy.
+_dev_preview_exec_guard() {
+  (( ${_DEV_PREVIEW_EXEC_TRUST:-0} )) || return 0
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local executable="${1:-}" REPLY="" before="" after=""
+  _dev_preview_exec_snapshot "$executable" || return 1
+  before="$REPLY"
+  local digest_program="" digest_before="" raw_output="" digest=""
+  local -a digest_argv=()
+  digest_program=$(whence -p sha256sum 2>/dev/null)
+  if [[ -n "$digest_program" ]]; then
+    digest_argv=("$digest_program")
+  else
+    digest_program=$(whence -p shasum 2>/dev/null)
+    [[ -n "$digest_program" ]] || return 1
+    digest_argv=("$digest_program" -a 256)
+  fi
+  _dev_preview_exec_snapshot "$digest_program" || return 1
+  digest_before="$REPLY"
+  local resolved="${executable:A}"
+  local -A named_state=() open_state=()
+  local -i input_fd=-1 digest_status=1
+  zmodload -F zsh/system b:sysopen 2>/dev/null || return 1
+  zstat -LH named_state -- "$resolved" 2>/dev/null || return 1
+  sysopen -r -o nofollow,nonblock,cloexec -u input_fd \
+    -- "$resolved" 2>/dev/null || return 1
+  {
+    zstat -H open_state -f "$input_fd" 2>/dev/null || return 1
+    (( (open_state[mode] & 8#170000) == 8#100000 \
+      && open_state[device] == named_state[device] \
+      && open_state[inode] == named_state[inode] )) || return 1
+    raw_output=$(_dev_run_with_timeout 5 "${digest_argv[@]}" \
+      <&$(( input_fd )) 2>/dev/null)
+    digest_status=$?
+  } always {
+    exec {input_fd}<&-
+  }
+  (( digest_status == 0 )) || return 1
+  digest="${raw_output%%[[:space:]]*}"
+  [[ ${#digest} == 64 && "$digest" != *[^0-9a-f]* ]] || return 1
+  _dev_preview_exec_snapshot "$digest_program" || return 1
+  [[ "$REPLY" == "$digest_before" ]] || return 1
+  _dev_preview_exec_snapshot "$executable" || return 1
+  after="$REPLY"
+  [[ "$before" == "$after" ]] || return 1
+  local identity="${before}${digest}"
+  if [[ -n "${_DEV_PREVIEW_EXEC_IDENTITIES[$executable]-}" ]]; then
+    [[ "${_DEV_PREVIEW_EXEC_IDENTITIES[$executable]}" == "$identity" ]] \
+      || return 1
+  else
+    _DEV_PREVIEW_EXEC_IDENTITIES[$executable]="$identity"
+  fi
+  return 0
+}
+
 _dev_require_venv() {
   local mode="${1:-}"
   local -i quiet=0
@@ -813,6 +916,7 @@ _dev_require_venv() {
   if [[ ! -d "$venv_bin" || -L "$venv_bin" \
     || "${venv_bin:A}" != "${venv_directory}/bin" \
     || ! -x "$project_python" ]] \
+    || ! _dev_preview_exec_guard "$project_python" \
     || ! "$project_python" -I -c \
       'from pathlib import Path
 import sys
@@ -856,6 +960,7 @@ _dev_python_toml_capable() {
   local python_path="${1:-}"
   [[ "$python_path" == /* && "$python_path" != *[[:cntrl:]]* \
     && -f "$python_path" && -x "$python_path" ]] || return 1
+  _dev_preview_exec_guard "$python_path" || return 1
   command "$python_path" -I -S -c 'import tomllib' </dev/null &>/dev/null
 }
 
@@ -868,6 +973,7 @@ _dev_python_toml_resolve() {
   local -i remember=${+_DEV_RUN_PYTHON}
   if (( remember )) && [[ -n "$_DEV_RUN_PYTHON" ]]; then
     [[ "$_DEV_RUN_PYTHON" == "!" ]] && return 1
+    _dev_preview_exec_guard "$_DEV_RUN_PYTHON" || return 1
     REPLY="$_DEV_RUN_PYTHON"
     return 0
   fi
@@ -886,11 +992,28 @@ _dev_python_toml_resolve() {
     local -a uv_find=(python find --system --no-project)
     # On a Mac without the Command Line Tools, uv would query the python3
     # placeholder on PATH, which opens Apple's installation dialog, so only
-    # uv's own installations are considered there.
-    _dev_clt_placeholder python3 "${commands[python3]-}" \
-      && uv_find+=(--python-preference only-managed)
-    candidate_path=$(command uv "${uv_find[@]}" '>=3.11' \
-      </dev/null 2>/dev/null) || candidate_path=""
+    # uv's own installations are considered in normal execution. Preview
+    # instead skips this finder; its literal offline request must not probe
+    # the placeholder or acquire an interpreter.
+    if (( ${_DEV_PREVIEW_EXEC_TRUST:-0} )); then
+      # Preview may discover an installed interpreter, never download one.
+      local uv_path="${commands[uv]-}"
+      uv_find+=(--no-python-downloads --offline)
+      if ! _dev_clt_placeholder python3 "${commands[python3]-}" \
+        && _dev_preview_exec_guard "$uv_path"; then
+        candidate_path=$(_dev_run_with_timeout 5 "$uv_path" \
+          "${uv_find[@]}" '>=3.11' </dev/null 2>/dev/null) \
+          || candidate_path=""
+        _dev_preview_exec_guard "$uv_path" || candidate_path=""
+      else
+        candidate_path=""
+      fi
+    else
+      _dev_clt_placeholder python3 "${commands[python3]-}" \
+        && uv_find+=(--python-preference only-managed)
+      candidate_path=$(command uv "${uv_find[@]}" '>=3.11' \
+        </dev/null 2>/dev/null) || candidate_path=""
+    fi
     candidate_path="${candidate_path%%$'\n'*}"
     _dev_python_toml_capable "$candidate_path" && selected="$candidate_path"
   fi
@@ -1527,6 +1650,7 @@ _dev_exact_project_python_tool_runner() {
   # __main__. This avoids trusting a project wrapper whose shebang might
   # resolve python through PATH. Native tools and packages without __main__
   # fall back to their exact in-environment executable below.
+  _dev_preview_exec_guard "$project_python" || return 1
   if "$project_python" -I -c \
     'from pathlib import Path
 import importlib.util
@@ -1568,6 +1692,8 @@ raise SystemExit(1)' \
     resolved_executable="${tool_executable:A}"
     if [[ -f "$resolved_executable" && -x "$resolved_executable" \
       && "$resolved_executable" == "${venv_directory}/"* ]] \
+      && _dev_preview_exec_guard "$project_python" \
+      && _dev_preview_exec_guard "$resolved_executable" \
       && "$project_python" -I -c \
         'import os
 import stat
@@ -1602,6 +1728,7 @@ expected = ("#!" + sys.argv[2]).encode()
 raise SystemExit(
     first_line != expected and not first_line.startswith(expected + b" ")
 )' "$resolved_executable" "$project_python" 2>/dev/null; then
+      _dev_preview_exec_guard "$resolved_executable" || return 1
       (( quiet )) \
         || _dev_info "Using the exact project executable: .venv/bin/$tool_name"
       reply=("$resolved_executable")

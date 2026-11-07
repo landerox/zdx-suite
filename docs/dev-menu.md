@@ -298,7 +298,7 @@ upgrading `.venv`; non-interactive use requires `--fix --yes`.
 | --- | --- | --- |
 | `dev-update-deps` | mutating | Builds and fingerprints a private plan, shows it, confirms, backs up, atomically publishes, and re-locks only bumped packages; `--dry-run` stops after the plan |
 | `dev-update-lock` | mutating | Refreshes `uv.lock`; never edits `pyproject.toml` |
-| `dev-update-precommit` | mutating | Continues usable package and hook backends after a PyPI query failure; plans frozen revisions privately, rejects regressions, installs every planned hook environment, publishes atomically, reinstalls the Git hooks, and reports findings or incomplete updates |
+| `dev-update-precommit` | remote-code | Continues usable package and hook backends after a PyPI query failure; plans frozen revisions privately, rejects regressions, installs every planned hook environment, publishes atomically, reinstalls the Git hooks, and reports findings or incomplete updates |
 | `dev-update-actions` | mutating | Pins the workflow and composite-action `uses:` references to the commit SHA of a newer release with a version comment; plans privately, shows the plan, confirms, backs up, publishes atomically, validates with `actionlint` and `zizmor`, and rolls back a newly failing validation; `--dry-run` stops after the plan. See [GitHub Actions updates](#github-actions-updates) |
 | `dev-update-python` | destructive | With an existing `.venv`, shows a two-step plan, confirms before any uv mutation, upgrades the uv-managed runtime patch release, and delegates the rebuild to `py-menu venv-rebuild --yes`; without one, delegates installation to `py-menu`; `--dry-run` runs neither uv nor `py-menu` |
 | `dev-update-terraform` | read-only | Proves and reports the `tfenv` or host package-manager workflow; Dev never executes `tfenv install latest` |
@@ -518,14 +518,20 @@ an interruption does.
 
 `dev-update-all` freezes its applicable scope once, shows that aggregate
 maintenance plan, and requests authorization before any mutating child
-starts. The frozen scope is:
+starts. Its pre-commit row discloses dynamic upstream package builds, hook
+installation/execution and possible file rewrites. The configuration path and
+SHA256 appear before consent; an invocation-local identity/content fingerprint
+binds that authorization. The child rejects a changed configuration before its
+first mutation even with `--yes`, requiring a new invocation. An unsafe or
+unavailable configuration fingerprint blocks that step while independent
+steps remain eligible. The frozen scope is:
 
 | Step | Runs when | Child command |
 | --- | --- | --- |
 | Host toolchain | always | `sys-menu update-uv-system` |
 | Dependency specifiers | `pyproject.toml` exists | `dev-update-deps --yes` |
 | Lockfile refresh | `uv.lock` exists | `dev-update-lock` |
-| Pre-commit hooks | `pyproject.toml` and `.pre-commit-config.yaml` exist | `dev-update-precommit` |
+| Pre-commit hooks | `pyproject.toml` and `.pre-commit-config.yaml` exist | `dev-update-precommit --yes` |
 | GitHub Actions | `.github/workflows` exists | `dev-update-actions --yes` |
 | Terraform ownership | `terraform` is installed | `dev-update-terraform` |
 | TFLint ownership | `tflint` is installed | `dev-update-tflint` |
@@ -558,9 +564,11 @@ GitHub Actions step runs with `--yes` under the aggregate authorization; it
 still shows its exact plan, backs up, validates, and rolls back. Its workflow
 files are independent of the Python metadata, so no dependency outcome blocks
 it. `--dry-run` invokes only the `dev-update-deps --dry-run`,
-`dev-update-actions --dry-run`, and `dev-clean-all --dry-run` previews,
-skipping the dependency preview when `pyproject.toml` is absent and the
-actions preview when `.github/workflows` is absent.
+`dev-update-precommit --dry-run`, `dev-update-actions --dry-run`, and
+`dev-clean-all --dry-run` previews, skipping the dependency preview without
+`pyproject.toml`, the hook preview without both project files, and the actions
+preview without `.github/workflows`. Hook execution receives `--yes` only after
+aggregate authorization and still revalidates its exact configuration.
 
 The aggregate continues after independent failures and prints one result line
 per step, a `Maintenance Summary` table with the result, time, and detail of
@@ -596,7 +604,14 @@ Project-file changes do have exact transaction boundaries:
    success message. A later sync failure leaves the published metadata and
    lockfile in place and reports that the environment may be partial; rolling
    back only one of those three objects would create a different inconsistency.
-4. Pre-commit specifier changes follow the same plan, backup, publication, and
+4. `dev-update-precommit [--yes] [--dry-run]` accepts `-y` as the `--yes`
+   alias. It shows configuration/project SHA256 facts, dynamic upstream scope,
+   fixed backend arguments and the build/install/run effects before asking
+   for an explicit trust decision. A decline returns `0`; nonterminal use
+   without `--yes` refuses before a backup, publication, lock, sync, new hook
+   installation or hook run. `--yes` skips only the prompt. The live project,
+   configuration, private plans and workspace are revalidated after consent.
+   Specifier changes follow the same plan, backup, publication, and
    lock-failure rollback sequence. Hook revisions are autoupdated with
    `--freeze` in a separate private candidate. An ordinary non-zero autoupdate
    result may still leave usable proposals, such as when one repository has
@@ -823,6 +838,30 @@ reshape the authorization UI.
 
 Downloading and executing code is treated as a distinct risk class.
 
+**Pre-commit maintenance requires trust before new code executes.** Its
+`--dry-run` passively validates the installed metadata interpreter and project
+runner before any capability, environment, module or script qualification.
+It freezes the invocation link, resolved executable, trusted ancestor identities,
+owners, writable modes and bytes, and rechecks them before each later use.
+A legitimate `.venv/bin/python` link retains its invocation path so that
+`sys.prefix` still identifies the project environment. Fingerprinting needs an
+already-installed, validated `sha256sum` or `shasum`; missing or unprovable
+inputs fail closed without installing a backend. It runs `autoupdate --freeze`
+against a private candidate and invocation-private mode-700 `PRE_COMMIT_HOME`.
+This can query upstream Git repositories through the existing trusted runner;
+it never runs `uv run`, lock/sync, builds or installs new hook environments,
+publishes project files, creates persistent backups or runs hooks. An absent
+runner requires a reviewed installation first. Preview metadata fallback uses
+only installed UV with
+`python find --system --no-project --no-python-downloads --offline '>=3.11'`; an unavailable Apple Command Line
+Tools placeholder skips that finder and permits the validated project fallback.
+No interpreter is acquired. Preview revalidates the runner immediately before
+delegation; repository labels omit URL credentials.
+Launcher fingerprinting does not attest all its installed dependencies, and
+frozen revisions bind identity rather than prove upstream code benign.
+`dev-update-lock` remains a separate remote-code boundary: its configured
+`uv lock`/sync can build and execute packages without this hook trust prompt.
+
 **Installers are never piped to a shell.** No Dev command runs a downloaded
 installer through `sh` or `bash`. Host `uv` maintenance delegates to the
 targeted public `sys` owner, while `dev-update-tflint` reports a proven
@@ -893,6 +932,11 @@ one host interpreter, resolved in this order:
    because it would otherwise query that placeholder;
 4. the project `.venv` interpreter, after the same validation the project
    runners use.
+
+Pre-commit dry runs apply the stricter passive trust, offline-finder and CLT
+rules in [Remote-code policy](#remote-code-policy) before this qualification,
+including reuse of a remembered candidate. Ordinary execution keeps the
+resolution policy above.
 
 A candidate qualifies only when `-I -S -c 'import tomllib'` succeeds:
 isolated and without the `site` module, the import can come only from the
@@ -1162,11 +1206,12 @@ normalized metadata representation or live upstream acceptance.
    plan shows every change before authorization. A validator that already
    failed before the update cannot distinguish new findings, so such an
    update is kept and reported rather than rolled back.
-8. **`dev-run-hooks`, `dev-run-ruff-format`, and the post-publication hook
-   run of `dev-update-precommit` rewrite files without a confirmation.** That
-   is their documented purpose and matches how the underlying tools are
-   normally invoked, but it means a `dev-run-all-checks` or `dev-update-all`
-   run on a project with formatting hooks can modify the working tree.
+8. **`dev-run-hooks` and `dev-run-ruff-format` can rewrite project files.**
+   That is their documented purpose, so `dev-run-all-checks` can modify the
+   working tree. Pre-commit maintenance discloses this effect and requires its
+   trust decision; aggregate maintenance covers it with the reviewed hook
+   configuration binding. `dev-update-lock` still delegates package builds
+   and synchronization without a separate trust prompt.
 
 ## Maintenance triggers
 

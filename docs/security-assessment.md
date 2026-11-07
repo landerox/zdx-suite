@@ -835,9 +835,9 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   package query when that probe fails. Its child Git processes use native HTTP
   low-speed limits scoped to the invocation; these are not total transaction
   or SSH deadlines and never justify terminating a mutating child. The
-  aggregate skips the pre-commit
-  update only when dependency publication left `pyproject.toml` and `uv.lock`
-  inconsistent. A decline starts no step and non-interactive use requires
+  aggregate blocks the pre-commit step when its configuration cannot be
+  bound to the reviewed identity or dependency publication left
+  `pyproject.toml` and `uv.lock` inconsistent. A decline starts no step and non-interactive use requires
   `--yes`. Interactive cleanup independently previews and confirms its exact
   targets immediately before removal; `--yes` bypasses both prompts without
   bypassing validation.
@@ -1399,6 +1399,27 @@ pairing, and routes; WSL networking, the DNS hardening, and interactive or
 password-protected sudo remain verified only through mocks.
 
 ### T5. Compromised remote installer or artifact
+
+Developer pre-commit maintenance is a remote-code action. Direct execution
+prints configuration/project hashes, dynamic package and configured-hook
+scope, fixed operations and file-rewrite effects before explicit consent;
+`--yes` skips only confirmation. Aggregate consent includes a configuration
+identity/content fingerprint that the child revalidates before its first
+mutation. Unknown or changed facts block that child. The passive preview
+passively validates installed metadata interpreters and runner paths before
+capability, environment, module or script qualification, including cached
+candidates. It freezes invocation links, executable/ancestor identities,
+ownership, modes and bytes through a validated installed hash utility, then
+rechecks before reuse. Legitimate project interpreter links keep their argv
+identity. UV metadata discovery is offline, forbids Python downloads and skips
+unavailable Apple placeholders. Missing safe interpreters, runners or hash
+utilities refuse without installing them. Its candidate and cache are private,
+with no new builds, hook installation/run or project publication.
+Repository display labels omit URL credentials. Installed dependencies,
+upstream Git behavior and same-EUID races remain trust boundaries; revision
+pins do not review upstream code. `dev-update-lock` remains unchanged: its
+configured package resolution/builds and sync can execute code without the
+pre-commit trust prompt.
 
 **Risk.** A moving `latest` archive or installer script is replaced upstream or
 in a compromised release channel and then installed, potentially as root.

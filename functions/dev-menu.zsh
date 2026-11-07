@@ -215,7 +215,7 @@ _dev_menu_rows() {
     || return $?
   _dev_menu_entry \
     "Update Pre-commit Hooks" "dev-update-precommit" \
-    "Review and update pinned hook versions in .pre-commit-config.yaml." \
+    "Preview dynamic upstream hooks, then explicitly trust package builds and hooks to install and execute." \
     || return $?
   _dev_menu_entry \
     "Update GitHub Actions" "dev-update-actions" \

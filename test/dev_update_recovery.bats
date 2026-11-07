@@ -83,7 +83,7 @@ run_hook_update() {
       dev-clean-all() { return 0; }
       dev-menu dev-update-all --yes
     else
-      dev-update-precommit
+      dev-update-precommit --yes
     fi
   '
 }
@@ -158,7 +158,7 @@ run_hook_update() {
     _dev_exact_project_python_tool_runner() {
       reply=("$TEST_MOCK_BIN/pre-commit")
     }
-    dev-update-precommit || return $?
+    dev-update-precommit --yes || return $?
     [[ "$GIT_HTTP_LOW_SPEED_LIMIT:$GIT_HTTP_LOW_SPEED_TIME" == 17:23 ]]
   '
   [ "$status" -eq 0 ]
@@ -227,7 +227,7 @@ run_hook_update() {
     _dev_exact_project_python_tool_runner() {
       reply=("$TEST_MOCK_BIN/pre-commit")
     }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ -s "$HOME/cache-created" ]

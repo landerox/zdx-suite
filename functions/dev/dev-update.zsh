@@ -268,7 +268,7 @@ dev-update-all() {
         print -u2 -r -- \
           "  Steps whose project files are absent are listed as not applicable."
         print -u2 -r -- \
-          "  --dry-run   Preview dependency bumps, action updates, and the cleanup plan only."
+          "  --dry-run   Preview dependency, hook, action, and cleanup plans without installation."
         print -u2 -r -- \
           "  --yes       Authorize aggregate and exact child plans without prompts."
         print -u2 -r -- \
@@ -288,6 +288,8 @@ dev-update-all() {
   (( verbose )) && ZDX_VERBOSE=1
   # Every child step shares one metadata-interpreter resolution.
   (( ${+_DEV_RUN_PYTHON} )) || local _DEV_RUN_PYTHON=""
+  local -i _DEV_PREVIEW_EXEC_TRUST=$dry_run
+  local -A _DEV_PREVIEW_EXEC_IDENTITIES=()
 
   _dev_header "Full Project Maintenance"
 
@@ -296,16 +298,23 @@ dev-update-all() {
   local -a summary_records=() failed_labels=() retry_commands=()
 
   if (( dry_run )); then
-    _dev_warn "DRY-RUN — dependency, action, and cleanup steps only preview their plans."
-    local -i has_pyproject=0 has_workflows=0
+    _dev_warn "DRY-RUN — dependency, hook, action, and cleanup steps only preview their plans."
+    local -i has_pyproject=0 has_hook_config=0 has_workflows=0
     [[ -f pyproject.toml ]] && has_pyproject=1
+    [[ -f .pre-commit-config.yaml ]] && has_hook_config=1
     [[ -d .github/workflows ]] && has_workflows=1
-    step_total=$(( has_pyproject + has_workflows + 1 ))
+    step_total=$(( has_pyproject + (has_pyproject && has_hook_config) + has_workflows + 1 ))
     if (( has_pyproject )); then
       _dev_update_all_step "Dependency preview" "dev:dev-update-deps" \
         dev-update-deps --dry-run
     else
       summary_records+=("Dependency preview"$'\tskipped\t\tno pyproject.toml')
+    fi
+    if (( has_pyproject && has_hook_config )); then
+      _dev_update_all_step "Pre-commit preview" "dev:dev-update-precommit" \
+        dev-update-precommit --dry-run
+    else
+      summary_records+=("Pre-commit preview"$'\tskipped\t\tno pyproject.toml or .pre-commit-config.yaml')
     fi
     if (( has_workflows )); then
       _dev_update_all_step "GitHub Actions preview" "dev:dev-update-actions" \
@@ -329,6 +338,25 @@ dev-update-all() {
   [[ -d ".github/workflows" ]] && has_workflows=1
   _dev_have_command terraform && has_terraform=1
   _dev_have_command tflint && has_tflint=1
+
+  # Bind the hook trust decision to passive input facts, including identity.
+  # The child must revalidate them even though it receives --yes.
+  local _DEV_PRECOMMIT_REVIEW_CONFIG_PATH=""
+  local _DEV_PRECOMMIT_REVIEW_CONFIG_FINGERPRINT=""
+  local -i hook_scope_ready=1
+  if (( has_pyproject && has_hook_config )); then
+    _DEV_PRECOMMIT_REVIEW_CONFIG_PATH="${PWD:A}/.pre-commit-config.yaml"
+    local REPLY=""
+    if _dev_owned_file_identity \
+      "$_DEV_PRECOMMIT_REVIEW_CONFIG_PATH" "pre-commit configuration" \
+      >/dev/null \
+      && _dev_update_file_fingerprint \
+        "$_DEV_PRECOMMIT_REVIEW_CONFIG_PATH"; then
+      _DEV_PRECOMMIT_REVIEW_CONFIG_FINGERPRINT="$REPLY"
+    else
+      hook_scope_ready=0
+    fi
+  fi
 
   # Only specifier queries require public PyPI. uv may use another index or
   # cached packages, and hook repositories have independent endpoints.
@@ -362,8 +390,10 @@ dev-update-all() {
     unplanned_rows+=($'⊘\tPre-commit hooks\tnot applicable (no pyproject.toml)')
   elif (( ! has_hook_config )); then
     unplanned_rows+=($'⊘\tPre-commit hooks\tnot applicable (no .pre-commit-config.yaml)')
+  elif (( ! hook_scope_ready )); then
+    unplanned_rows+=($'✘\tPre-commit hooks\tblocked (configuration identity or hash unavailable)')
   else
-    plan_rows+=("Pre-commit hooks"$'\t'"Update, validate, and install frozen hook revisions.")
+    plan_rows+=("Pre-commit hooks"$'\t'"Trust dynamic upstream pre-commit packages and configured hook repositories; install and execute their code, including local hooks and file rewrites.")
   fi
   if (( has_workflows )); then
     plan_rows+=("GitHub Actions"$'\t'"Pin workflow actions to newer release SHAs in the current major.")
@@ -383,6 +413,11 @@ dev-update-all() {
     numbered_rows+=("$plan_index"$'\t'"${plan_rows[plan_index]}")
   done
   _dev_table $'#\tStep\tAction' "${numbered_rows[@]}" "${unplanned_rows[@]}"
+  if (( has_pyproject && has_hook_config && hook_scope_ready )); then
+    _dev_label "Hook configuration" "$_DEV_PRECOMMIT_REVIEW_CONFIG_PATH"
+    _dev_label "Configuration SHA256" \
+      "${_DEV_PRECOMMIT_REVIEW_CONFIG_FINGERPRINT##*:}"
+  fi
   (( network_ready )) || _dev_warn \
     "PyPI is unreachable: specifier queries are blocked; lockfile and hook updates use their own backends."
   _dev_warn \
@@ -448,9 +483,14 @@ dev-update-all() {
     summary_records+=($'Pre-commit hooks\tskipped\t\tno pyproject.toml')
   elif (( ! has_hook_config )); then
     summary_records+=($'Pre-commit hooks\tskipped\t\tno .pre-commit-config.yaml')
+  elif (( ! hook_scope_ready )); then
+    summary_records+=($'Pre-commit hooks\tblocked\t\tconfiguration identity or hash unavailable')
+    failed_labels+=("Pre-commit hooks — configuration identity or hash unavailable")
+    retry_commands+=("dev-menu dev-update-precommit")
+    failures=$(( failures + 1 ))
   elif (( lockfile_trusted )); then
     _dev_update_all_step "Pre-commit hooks" "dev:dev-update-precommit" \
-      dev-update-precommit
+      dev-update-precommit --yes
   else
     _dev_warn \
       "Skipping dev-update-precommit: dependency publication left the lockfile stale."
