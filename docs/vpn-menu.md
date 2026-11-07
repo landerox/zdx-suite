@@ -719,6 +719,13 @@ doing nothing and reporting success.
 
 ## Test coverage
 
+`vpn_profile_safety.bats` exercises public profile rename/removal, configuration
+restore and default-pointer clearing: exact dry-run scope, cancellation,
+nonterminal refusal, explicit consent, post-authentication resource changes,
+rollback/recovery and partial pointer failures. Strict allowlisted privilege
+recorders confine all targets to the disposable profile root; the tests do
+not establish native WireGuard, DNS or privileged-host acceptance.
+
 | File | Covered boundary |
 | --- | --- |
 | `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, DNS hook idempotency, and hardening of the lower-case and indented headers import accepts |
