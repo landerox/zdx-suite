@@ -714,12 +714,25 @@ vpn-default-clear() {
   done
 
   local iface default_file
-  iface=$(_vpn_effective_default_iface) || iface=""
-  default_file=$(_vpn_cache_file_existing "default-iface") || default_file=""
-
-  if [[ -z "$iface" && ( -z "$default_file" || ! -f "$default_file" ) ]]; then
-    _vpn_info "No default VPN profile is configured."
-    return 0
+  local -i inspection_status=0
+  default_file=$(_vpn_cache_file_existing "default-iface") || inspection_status=$?
+  case "$inspection_status" in
+    0) ;;
+    3)
+      _vpn_info "No default VPN profile is configured."
+      return 0
+      ;;
+    130|143) return "$inspection_status" ;;
+    *)
+      _vpn_error "Refusing to clear default state that could not be inspected safely."
+      return 1
+      ;;
+  esac
+  iface=$(_vpn_effective_default_iface) || inspection_status=$?
+  (( inspection_status == 130 || inspection_status == 143 )) && return "$inspection_status"
+  if (( inspection_status != 0 )) || [[ -z "$iface" ]]; then
+    _vpn_error "Refusing to clear default state that could not be inspected safely."
+    return 1
   fi
 
   if [[ -n "$iface" ]]; then

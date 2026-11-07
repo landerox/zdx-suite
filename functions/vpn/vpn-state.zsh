@@ -131,14 +131,24 @@ _vpn_cache_dir() {
 }
 
 # Read-only lookup: resolves without creating anything. A directory that does
-# not exist yet is simply absent, not unsafe; anything else at the path is
-# still refused by the identity check.
+# not exist yet is status3 only when an accessible existing ancestor proves
+# absence. Unsafe or unknown paths are status1, without permission repair.
 _vpn_cache_dir_existing() {
-  local resolved
-  resolved=$(_vpn_state_resolve "$VPN_CACHE_DIR" "cache") || return 1
-  [[ -e "$resolved" || -L "$resolved" ]] || return 1
+  emulate -L zsh
+  local resolved ancestor
+  resolved=$(_vpn_state_resolve "$VPN_CACHE_DIR" "cache") || return $?
+  if [[ ! -e "$resolved" && ! -L "$resolved" ]]; then
+    ancestor="${resolved:h}"
+    while [[ ! -e "$ancestor" && ! -L "$ancestor" ]]; do
+      [[ "$ancestor" != / && "$ancestor" != "${ancestor:h}" ]] || return 1
+      ancestor="${ancestor:h}"
+    done
+    [[ -d "$ancestor" && ! -L "$ancestor" && -x "$ancestor" ]] || return 1
+    return 3
+  fi
   _vpn_private_dir_identity "$resolved" "cache directory" >/dev/null \
-    || return 1
+    || return $?
+  [[ -x "$resolved" ]] || return 1
   print -r -- "$resolved"
 }
 
@@ -159,6 +169,7 @@ _vpn_cache_file() {
 }
 
 _vpn_cache_file_existing() {
+  emulate -L zsh
   local name="${1:-}"
   case "$name" in
     last-iface|default-iface|test-key) ;;
@@ -166,7 +177,8 @@ _vpn_cache_file_existing() {
   esac
 
   local dir
-  dir=$(_vpn_cache_dir_existing) || return 1
+  dir=$(_vpn_cache_dir_existing) || return $?
+  [[ -e "$dir/$name" || -L "$dir/$name" ]] || return 3
   print -r -- "$dir/$name"
 }
 
@@ -338,8 +350,12 @@ _vpn_peek_cached_iface() {
 }
 
 _vpn_clear_cached_iface() {
+  emulate -L zsh
   local file dir directory_identity fingerprint current
-  file=$(_vpn_cache_file_existing "$1") || return 0
+  local -i lookup_status=0
+  file=$(_vpn_cache_file_existing "$1") || lookup_status=$?
+  (( lookup_status == 3 )) && return 0
+  (( lookup_status == 0 )) || return "$lookup_status"
   dir="${file:h}"
   directory_identity=$(
     _vpn_private_dir_identity "$dir" "cache directory"
@@ -523,11 +539,29 @@ _vpn_report_retention_value() {
   REPLY="$raw"
 }
 
-# Bounded retention after a successful publication: keep the report that was
-# just published plus the newest retention-1 prior reports for the same
-# prefix. Entries that fail owner-only validation are never deleted, and the
-# published report itself is always protected regardless of its sort order.
+# Matches the publisher's reserved ASCII filename shape. A matching name is
+# not proof of provenance; owner-only validation and fingerprints are separate.
+_vpn_report_name_generated() {
+  emulate -L zsh
+  local LC_ALL=C
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  local name="${1-}" prefix="${2-}" extension="${3-}" body
+  [[ "$prefix" =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$' \
+    && "$extension" =~ '^[A-Za-z0-9]{1,8}$' ]] || return 1
+  [[ "$name" == "$prefix-"*".$extension" ]] || return 1
+  body="${name#"$prefix-"}"
+  body="${body%".$extension"}"
+  # The hostname itself may end in a dotted number. Match the publisher's
+  # union of a 1..64-character hostname and its optional unique .1..999.
+  [[ "$body" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}-[A-Za-z0-9._-]{1,64}([.][1-9][0-9]{0,2})?$' ]]
+}
+
+# Keep the just-published report plus the newest retention-1 prior reports in
+# that reserved namespace. Refuse changed identities before deletion.
 _vpn_report_prune() {
+  emulate -L zsh
+  local LC_ALL=C
   local published="${1:-}"
   local prefix="${2:-vpn-report}"
   local extension="${3:-md}"
@@ -539,6 +573,12 @@ _vpn_report_prune() {
 
   local dir
   dir=$(_vpn_report_root) || return 1
+  _vpn_report_name_generated "${published:t}" "$prefix" "$extension" || return 1
+  local directory_identity published_fingerprint
+  directory_identity=$(_vpn_private_dir_identity "$dir" "report directory") || return 1
+  published_fingerprint=$(
+    _vpn_state_file_fingerprint "$published" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES"
+  ) || return 1
   local -a candidates=("$dir"/${prefix}-*.${extension}(N.))
   (( ${#candidates[@]} <= 4096 )) || {
     _vpn_warn \
@@ -548,14 +588,17 @@ _vpn_report_prune() {
 
   # Timestamped names are zero-padded, so a lexicographic sort is
   # chronological per prefix even when file mtimes were manipulated.
-  local -a prunable=()
-  local candidate
+  local -a prunable=() fingerprints=()
+  local candidate fingerprint
   for candidate in "${(on)candidates[@]}"; do
     [[ "$candidate" == "$published" ]] && continue
-    _vpn_state_validate_file \
-      "$candidate" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES" \
-      2>/dev/null || continue
+    _vpn_report_name_generated "${candidate:t}" "$prefix" "$extension" || continue
+    fingerprint=$(
+      _vpn_state_file_fingerprint \
+        "$candidate" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES" 2>/dev/null
+    ) || continue
     prunable+=("$candidate")
+    fingerprints+=("$fingerprint")
   done
 
   local -i keep_others=$(( retention - 1 ))
@@ -564,9 +607,24 @@ _vpn_report_prune() {
   local -i removed=0 failures=0 index=0
   for (( index = 1; index <= remove_count; index++ )); do
     candidate="${prunable[index]}"
-    _vpn_state_validate_file \
-      "$candidate" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES" \
-      2>/dev/null || {
+    _vpn_assert_private_dir_identity \
+      "$dir" "report directory" "$directory_identity" 2>/dev/null || {
+      (( ++failures ))
+      break
+    }
+    fingerprint=$(
+      _vpn_state_file_fingerprint \
+        "$published" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES" 2>/dev/null
+    ) || fingerprint=""
+    [[ "$fingerprint" == "$published_fingerprint" ]] || {
+      (( ++failures ))
+      break
+    }
+    fingerprint=$(
+      _vpn_state_file_fingerprint \
+        "$candidate" "$dir" "published report" "$_VPN_MAX_REPORT_BYTES" 2>/dev/null
+    ) || fingerprint=""
+    [[ -n "$fingerprint" && "$fingerprint" == "${fingerprints[index]}" ]] || {
       (( ++failures ))
       continue
     }

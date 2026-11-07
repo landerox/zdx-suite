@@ -547,6 +547,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
 
 **Current controls.**
 
+- VPN report retention narrows candidates to the publisher's reserved ASCII
+  filename grammar and renews the directory, just-published report and each
+  candidate fingerprint before unlinking. Similar user names and changed
+  candidates remain untouched. A hand-made file in the exact reserved grammar
+  is still eligible: shape is not provenance, and the final pathname race
+  remains. Default-pointer clearing refuses unsafe/unknown cache observations
+  and stops after interrupted inspection before consent or mutation. External
+  report values escape Markdown link/emphasis delimiters literally. Private
+  state/report fixtures establish these controls, without native host evidence.
+
 - Public VPN profile rename/removal, configuration restore and default-clear
   have isolated transaction tests for reviewed scope, authorization,
   post-authentication revalidation, rollback and partial state publication.
