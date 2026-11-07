@@ -40,13 +40,19 @@ case " $* " in
       >> "$ACTIONS_LOG"
     name="${last#https://github.com/}"
     file="$ACTIONS_TAGS/${name//\//__}"
+    if [[ -f "$file.partial-status" ]]; then
+      cat "$file"
+      exit "$(cat "$file.partial-status")"
+    fi
     if [[ -f "$file.status" ]]; then
       echo "fatal: unable to access '$last': Could not resolve host: github.com" >&2
       exit "$(cat "$file.status")"
     fi
     [[ -f "$file" ]] || { echo "remote: Repository not found." >&2; exit 128; }
     cat "$file"
-    exit 0
+    listing_status=$?
+    printf 'listing-status:%s\n' "$listing_status" >> "$ACTIONS_LOG"
+    exit "$listing_status"
     ;;
 esac
 exec "$REAL_GIT" "$@"
@@ -68,6 +74,7 @@ case "${1:-}" in
     file="$ACTIONS_GH/${endpoint//\//__}"
     [[ -f "$file" ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     cat "$file"
+    [[ ! -f "$file.status" ]] || exit "$(cat "$file.status")"
     exit 0
     ;;
 esac
@@ -743,4 +750,148 @@ EOF
   [[ "$output" == *"--major[Also allow newer major versions]"* ]]
   [[ "$output" == *"--yes[Confirm the action updates]"* ]]
   [[ "$output" == *"--help[Show command usage]"* ]]
+}
+
+# Malformed network replies must be exercised after the real tag query and
+# before publication, with a known valid release retained as a control.
+write_network_action_workflow() {
+  cat > "$DEV_PROJECT/.github/workflows/network.yml" <<EOF2
+jobs:
+  fixture:
+    steps:
+      - uses: actions/checkout@$(sha 410) # v4.1.0
+EOF2
+  cp "$DEV_PROJECT/.github/workflows/network.yml" "$TEST_TEMP_DIR/network.original"
+}
+
+write_malformed_newer_tags() {
+  printf '%040s\trefs/tags/v4.99.0\n' '' | tr ' ' g
+  printf '%039d\trefs/tags/v4.98.0\n' 1
+  printf '%041d\trefs/tags/v4.97.0\n' 1
+  printf '%s refs/tags/v4.96.0\n' "$(sha 4960)"
+  printf '%s\trefs/tags/v4.95.0\r\n' "$(sha 4950)"
+  printf '%s\trefs/tags/v4.94.0/../evil\n' "$(sha 4940)"
+  printf '%s\trefs/tags/v4.93.0.lock\n' "$(sha 4930)"
+  printf '%s\trefs/tags/v4.92.0$(touch injected)\n' "$(sha 4920)"
+  printf '%s\trefs/tags/v４.91.0\n' "$(sha 4910)"
+  printf 'not-a-listing-line\n'
+}
+
+@test "dev network actions: malformed tag records are ignored beside a valid newer release" {
+  write_network_action_workflow
+  {
+    printf '%s\trefs/tags/v4.1.0\n' "$(sha 410)"
+    printf '%s\trefs/tags/v4.2.0\n' "$(sha 420)"
+    write_malformed_newer_tags
+  } > "$ACTIONS_TAGS/actions__checkout"
+  run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+  [ "$status" -eq 0 ]
+  [ "$(ls_remote_count)" -eq 1 ]
+  grep -Fq "actions/checkout@$(sha 420) # v4.2.0" \
+    "$DEV_PROJECT/.github/workflows/network.yml"
+  [ ! -e "$DEV_PROJECT/injected" ]
+  [ ! -s "$HOME/network.stdout" ]
+}
+
+@test "dev network actions: malformed newer records alone never rewrite the current workflow" {
+  write_network_action_workflow
+  {
+    printf '%s\trefs/tags/v4.1.0\n' "$(sha 410)"
+    write_malformed_newer_tags
+  } > "$ACTIONS_TAGS/actions__checkout"
+  run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+  [ "$status" -eq 0 ]
+  [ "$(ls_remote_count)" -eq 1 ]
+  cmp "$TEST_TEMP_DIR/network.original" "$DEV_PROJECT/.github/workflows/network.yml"
+  [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+  [ ! -e "$DEV_PROJECT/injected" ]
+  [ ! -s "$HOME/network.stdout" ]
+}
+
+@test "dev network actions: an oversized listing fails even after emitting usable tags" {
+  write_network_action_workflow
+  {
+    printf '%s\trefs/tags/v4.1.0\n' "$(sha 410)"
+    printf '%s\trefs/tags/v4.3.0\n' "$(sha 430)"
+  } > "$ACTIONS_TAGS/actions__checkout"
+  make_sized_file "$ACTIONS_TAGS/actions__checkout" "$((16 * 1024 * 1024 + 1))"
+  [ "$(file_size "$ACTIONS_TAGS/actions__checkout")" -gt "$((16 * 1024 * 1024))" ]
+  run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tag query failed"* ]]
+  [ "$(ls_remote_count)" -eq 1 ]
+  grep -Eq '^listing-status:[1-9][0-9]*$' "$ACTIONS_LOG"
+  cmp "$TEST_TEMP_DIR/network.original" "$DEV_PROJECT/.github/workflows/network.yml"
+  [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+  [ ! -s "$HOME/network.stdout" ]
+}
+
+@test "dev network actions: failed partial tag queries cannot publish their valid prefix" {
+  local query_status
+  for query_status in 128 124; do
+    write_network_action_workflow
+    printf '%s\n' "$query_status" > "$ACTIONS_TAGS/actions__checkout.partial-status"
+    : > "$ACTIONS_LOG"
+    run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+    [ "$status" -eq 1 ]
+    [ "$(ls_remote_count)" -eq 1 ]
+    cmp "$TEST_TEMP_DIR/network.original" "$DEV_PROJECT/.github/workflows/network.yml"
+    [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+    [ ! -s "$HOME/network.stdout" ]
+  done
+}
+
+@test "dev network actions: non-integer release and commit dates fail the reference closed" {
+  write_network_action_workflow
+  export HIDE_COMMANDS="actionlint zizmor"
+  local epoch
+  for epoch in 'not-json' '{"message":"API rate limit exceeded"}' 'null' \
+    '"1700000000"' '1700000000.0' '-1' '17000000000000' $'1700000000\r'; do
+    printf '%s\n' "$epoch" > "$ACTIONS_GH/repos__actions__checkout__releases__tags__v4.3.0"
+    printf '%s\n' "$epoch" > "$ACTIONS_GH/repos__actions__checkout__commits__$(sha 430)"
+    : > "$ACTIONS_LOG"
+    run_actions '_dev_actions_release_epoch actions checkout v4.3.0 0000000000000000000000000000000000000430'
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+    [ "$(grep -c '^gh:api ' "$ACTIONS_LOG")" -eq 2 ]
+
+    : > "$ACTIONS_LOG"
+    run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"release age of v4.3.0 could not be checked"* ]]
+    [ "$(grep -c '^gh:api ' "$ACTIONS_LOG")" -eq 2 ]
+    cmp "$TEST_TEMP_DIR/network.original" "$DEV_PROJECT/.github/workflows/network.yml"
+    [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+    [ ! -s "$HOME/network.stdout" ]
+  done
+}
+
+@test "dev network actions: failed API calls cannot publish an otherwise integer date" {
+  write_network_action_workflow
+  export HIDE_COMMANDS="actionlint zizmor"
+  gh_release actions/checkout v4.3.0 "$(days_ago 30)"
+  printf '%s\n' "$(days_ago 30)" > "$ACTIONS_GH/repos__actions__checkout__commits__$(sha 430)"
+  printf '1\n' > "$ACTIONS_GH/repos__actions__checkout__releases__tags__v4.3.0.status"
+  printf '1\n' > "$ACTIONS_GH/repos__actions__checkout__commits__$(sha 430).status"
+  run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"release age of v4.3.0 could not be checked"* ]]
+  [ "$(grep -c '^gh:api ' "$ACTIONS_LOG")" -eq 2 ]
+  cmp "$TEST_TEMP_DIR/network.original" "$DEV_PROJECT/.github/workflows/network.yml"
+  [ ! -e "$DEV_PROJECT/.dev-suite-backups" ]
+  [ ! -s "$HOME/network.stdout" ]
+}
+
+@test "dev network actions: a valid commit date still permits fallback from malformed release data" {
+  write_network_action_workflow
+  export HIDE_COMMANDS="actionlint zizmor"
+  printf '{"message":"no release object"}\n' \
+    > "$ACTIONS_GH/repos__actions__checkout__releases__tags__v4.3.0"
+  printf '%s\n' "$(days_ago 30)" > "$ACTIONS_GH/repos__actions__checkout__commits__$(sha 430)"
+  run_actions 'dev-update-actions --yes > "$HOME/network.stdout"'
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^gh:api ' "$ACTIONS_LOG")" -eq 2 ]
+  grep -Fq "actions/checkout@$(sha 430) # v4.3.0" \
+    "$DEV_PROJECT/.github/workflows/network.yml"
+  [ ! -s "$HOME/network.stdout" ]
 }

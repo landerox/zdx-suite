@@ -1071,6 +1071,15 @@ A declined confirmation and "this project has no Python files" are both `0`.
 
 ## Test coverage
 
+The network-response cases in `dev_io_safety.bats` and
+`dev_update_actions.bats` exercise malformed PyPI JSON/version types and
+characters, missing or partial bodies, failed transfers, malformed and
+oversized tag listings, failed or timed-out queries and non-integer GitHub age data.
+They check public update refusal and unchanged project bytes alongside valid
+publication controls. All clients and mutation backends are confined
+recorders; the listed cases do not establish complete rejection of every
+normalized metadata representation or live upstream acceptance.
+
 | File | Covered boundary |
 | --- | --- |
 | `dev.bats` | Shell and Markdown gates including the opt-in `npx` runner, the multi-gate result table, and the no-applicable-gate no-op |

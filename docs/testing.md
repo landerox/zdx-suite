@@ -464,6 +464,14 @@ already-set `GPG_TTY`; they do not establish native pinentry initialization.
 
 ### Developer coverage
 
+The network update cases in `dev_io_safety.bats` and
+`dev_update_actions.bats` cover malformed PyPI bodies and version fields,
+partial and failed transfers, malformed/oversized tag listings, query failures
+and non-integer release ages. Public refusal preserves project bytes and
+cleans staging; valid controls record the exact update backend. These are
+isolated response classes rather than live network acceptance or exhaustive
+metadata-normalization coverage.
+
 | File | Covered boundary |
 | --- | --- |
 | `dev.bats` | Clean sourcing and help, shell and Markdown gates including the opt-in `npx` Markdownlint runner, the multi-gate result table, and the no-applicable-gate no-op |
