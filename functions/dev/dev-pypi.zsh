@@ -324,6 +324,7 @@ _dev_pypi_temp_root_identity() {
     _dev_error "TMPDIR must name a writable directory without untrusted symbolic links."
     return 1
   fi
+  _dev_temp_ancestors_trusted "$literal" || return 1
 
   zmodload -F zsh/stat b:zstat 2>/dev/null || {
     _dev_error "The zsh/stat module is required to validate the PyPI cache."

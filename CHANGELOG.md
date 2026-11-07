@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Developer: restore exact pre-commit metadata after interrupted locks, show
+  credential-safe private dependency diffs before authorization, isolate Git
+  tag queries from caller configuration, and validate temporary ancestors.
+  Parallel query cleanup uses the actual worker PID to avoid inherited names.
+
 - Developer: require an explicit trust decision before pre-commit package or
   hook installation/execution, validate installed preview interpreters/runners
   before qualification, and bind aggregate hook authorization to the reviewed

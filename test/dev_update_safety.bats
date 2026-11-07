@@ -1078,7 +1078,11 @@ EOF
 @test "dev update safety: root-owned sticky TMPDIR is accepted" {
   run run_zsh '
     zstat() {
-      metadata=(device 7 inode 11 mode 1023 uid 0)
+      if [[ "$2" == metadata ]]; then
+        metadata=(device 7 inode 11 mode 1023 uid 0)
+      else
+        builtin zstat "$@"
+      fi
     }
 
     _dev_update_temp_root_identity "$TMPDIR"
@@ -1091,6 +1095,10 @@ EOF
 @test "dev update safety: foreign-owned sticky TMPDIR is refused" {
   run run_zsh '
     zstat() {
+      if [[ "$2" != metadata ]]; then
+        builtin zstat "$@"
+        return $?
+      fi
       metadata=(
         device 7
         inode 11

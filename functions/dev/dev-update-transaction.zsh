@@ -125,6 +125,7 @@ _dev_update_temp_root_identity() {
     _dev_error "TMPDIR must name a writable directory without untrusted symbolic links."
     return 1
   fi
+  _dev_temp_ancestors_trusted "$literal" || return 1
 
   zmodload -F zsh/stat b:zstat 2>/dev/null || {
     _dev_error \
@@ -284,7 +285,15 @@ _dev_update_workspace_cleanup() {
     return 1
   fi
 
-  local quarantine="${temp_root}/.zdx-dev-update.cleanup.${$}.${RANDOM}.${RANDOM}"
+  # Forked query workers inherit $$ and the same PRNG state. The actual
+  # process identity keeps concurrent owned quarantines distinct.
+  zmodload -F zsh/system p:sysparams 2>/dev/null || {
+    _dev_error "Could not resolve the cleanup process identity."
+    return 1
+  }
+  local cleanup_pid="${sysparams[pid]-}"
+  [[ "$cleanup_pid" == <-> ]] && (( cleanup_pid > 0 )) || return 1
+  local quarantine="${temp_root}/.zdx-dev-update.cleanup.${cleanup_pid}.${RANDOM}.${RANDOM}"
   if [[ -e "$quarantine" || -L "$quarantine" ]] \
     || ! command mv -- "$workspace_dir" "$quarantine" 2>/dev/null; then
     _dev_error "Could not quarantine the update workspace for safe removal."
@@ -346,6 +355,116 @@ _dev_update_copy_snapshot() {
   fi
 
   REPLY="$snapshot_fingerprint"
+}
+
+# Shows only the exact private original-to-candidate change, independently of
+# Git, its index, external diff drivers, or pagers. stdout remains empty.
+# Usage: _dev_update_show_planned_diff ORIGINAL ORIGINAL_FINGERPRINT \
+#          CANDIDATE CANDIDATE_FINGERPRINT
+_dev_update_show_planned_diff() {
+  emulate -L zsh
+  local original="$1" expected_original="$2"
+  local candidate="$3" expected_candidate="$4"
+  local REPLY="" diff_text="" diff_line
+  _dev_python_toml_resolve || return 1
+  diff_text=$(command "$REPLY" -I -S - \
+    "$original" "$expected_original" "$candidate" "$expected_candidate" \
+    <<'PY_PLANNED_DIFF' 2>/dev/null
+import difflib
+import hashlib
+import os
+import re
+import stat
+import sys
+
+
+def display_line(line):
+    # Match the captured-output credential vocabulary, and withhold URL
+    # authorities and query/fragment data even without a recognizable key.
+    normalized = line.lower()
+    sensitive = (
+        "password", "passwd", "passphrase", "token", "secret",
+        "authorization", "credential", "bearer", "api-key", "api_key",
+        "apikey", "access-key", "access_key", "private key", "private-key",
+        "private_key", "signature", "cookie",
+    )
+    if (
+        any(word in normalized for word in sensitive)
+        or re.search(r"://[^/@\s]*@", line)
+        or re.search(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s]*[?#]", line)
+    ):
+        return line[:1] + "[redacted potentially sensitive diff line]\n"
+    return line
+
+
+def read_snapshot(path, expected):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        linked = os.lstat(path)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or before.st_size > 2 * 1024 * 1024
+            or (linked.st_dev, linked.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise ValueError
+        with os.fdopen(os.dup(descriptor), "rb") as stream:
+            data = stream.read(2 * 1024 * 1024 + 1)
+        after = os.fstat(descriptor)
+        linked_after = os.lstat(path)
+
+        def identity(value):
+            return (
+                value.st_dev, value.st_ino, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns, value.st_mode,
+                value.st_uid, value.st_nlink,
+            )
+
+        fingerprint = (
+            f"{after.st_dev}:{after.st_ino}:{after.st_size}:"
+            f"{after.st_mtime_ns}:{stat.S_IMODE(after.st_mode)}:"
+            f"{hashlib.sha256(data).hexdigest()}"
+        )
+        if (
+            identity(before) != identity(after)
+            or (linked_after.st_dev, linked_after.st_ino)
+            != (after.st_dev, after.st_ino)
+            or len(data) != after.st_size
+            or fingerprint != expected
+        ):
+            raise ValueError
+        return data.decode("utf-8").splitlines(keepends=True)
+    finally:
+        os.close(descriptor)
+
+
+try:
+    original = read_snapshot(sys.argv[1], sys.argv[2])
+    candidate = read_snapshot(sys.argv[3], sys.argv[4])
+    for line in difflib.unified_diff(
+        original, candidate,
+        fromfile="pyproject.toml (original)",
+        tofile="pyproject.toml (planned)",
+    ):
+        sys.stdout.write(display_line(line))
+        if not line.endswith("\n"):
+            sys.stdout.write("\n\\ No newline at end of file\n")
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+PY_PLANNED_DIFF
+  ) || {
+    _dev_error "Could not read the exact private dependency diff."
+    return 1
+  }
+  [[ -n "$diff_text" ]] || return 0
+  _dev_info "Planned changes to pyproject.toml:"
+  for diff_line in "${(@f)diff_text}"; do
+    _dev_dim "${(V)diff_line}"
+  done
 }
 
 # Publishes a private planned snapshot only while the destination still matches

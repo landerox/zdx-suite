@@ -841,11 +841,23 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   `--yes`. Interactive cleanup independently previews and confirms its exact
   targets immediately before removal; `--yes` bypasses both prompts without
   bypassing validation.
+- Developer pre-commit lock interruptions restore the exact invocation metadata
+  backup and original mode while retaining `130`/`143`; stage interruptions stop
+  later effects, with concurrent configuration edits preserved for recovery.
+  Dependency/pre-commit diffs bind bounded nofollow private snapshots before
+  publication, independent of Git/index/pagers. Conservative credential terms
+  and URL userinfo/query/fragment checks visibly withhold potentially sensitive
+  lines before rendering; package summaries remain separate, and matching
+  legitimate context can be withheld too.
 - Developer temporary update workspaces freeze both the configured temporary
   root and workspace identities. Cleanup renames the proven inode to an
   unpredictable quarantine path, checks it again, and only then removes it.
   Changed paths are retained for recovery rather than recursively deleted.
-  PyPI and update temporary roots must be safely owned by the current EUID or
+  Cleanup names use the actual worker PID so forked parallel queries do not
+  inherit identical quarantine names; same-EUID final pathname races remain.
+  All canonical ancestors are checked for root/current-user ownership and
+  safe write modes, with only the root-owned sticky exception, on setup and
+  revalidation. PyPI and update temporary roots must be safely owned by the current EUID or
   root-owned and sticky; non-sticky group/world-writable roots and sticky roots
   owned by another non-root UID are refused.
 - Developer restore and update publication validate the direct write
@@ -1608,10 +1620,14 @@ in a compromised release channel and then installed, potentially as root.
 - `dev-update-actions` updates the GitHub Actions a project's CI runs
   without executing any action code. It reaches github.com only through
   `git ls-remote --tags` over HTTPS and, for the optional release-age
-  cooldown, `gh api --hostname github.com`. Git runs with prompts disabled, an
-  empty askpass, no credential helper, and `protocol.allow=never` except
-  HTTPS, so an `insteadOf` rewrite cannot move the query to SSH, a local path,
-  or another transport and no token is sent. Every query and API call is
+  cooldown, `gh api --hostname github.com`. Tag-query Git runs in an empty
+  private workspace with private HOME/XDG roots, disabled system/global
+  configuration and cleared inherited `GIT_*` parameters, including inline
+  settings and traces. Unset/readonly failure refuses execution. Fixed
+  arguments disable prompts, askpass and credential helpers, reset extra
+  headers and allow only HTTPS to the literal github.com URL, so caller Git
+  rewrites/headers cannot alter it. Installed Git and ambient proxy/TLS
+  behavior remain transport trust boundaries. Every query and API call is
   bounded by `DEV_ACTIONS_TIMEOUT` through the core timeout service, Git's
   HTTP low-speed limit, and a 16 MiB listing limit, and a timed-out batch stops
   later queries. Each updated reference is pinned to a release's commit SHA

@@ -440,6 +440,7 @@ _dev_precommit_display_repo() {
 #   Status:    0 on success, a passive preview, or a declined trust decision;
 #              1 when consent is unavailable, validation or a stage fails,
 #              or the published hooks report findings; 2 on invalid arguments.
+#              Interrupted stages return 130 or 143.
 dev-update-precommit() {
   emulate -L zsh
   (( ${+_DEV_RUN_PYTHON} )) || local _DEV_RUN_PYTHON=""
@@ -470,15 +471,20 @@ dev-update-precommit() {
     return 0
   fi
 
+  setopt LOCAL_OPTIONS LOCAL_TRAPS NO_MONITOR
+  local -i interrupted=0
+  trap 'interrupted=130' INT
+  trap 'interrupted=143' TERM
+
   local -i _DEV_PREVIEW_EXEC_TRUST=$dry_run
   (( ${+_DEV_PREVIEW_EXEC_IDENTITIES} )) \
     || local -A _DEV_PREVIEW_EXEC_IDENTITIES=()
   _dev_header "Updating Pre-commit (Package and Hooks)"
-  _dev_require_command uv || return 1
-  _dev_require_python_toml || return 1
-  _dev_require_file ".pre-commit-config.yaml" || return 1
-  _dev_require_file "pyproject.toml" || return 1
-  _dev_pypi_validate_config || return 1
+  _dev_require_command uv || return $(( interrupted ? interrupted : 1 ))
+  _dev_require_python_toml || return $(( interrupted ? interrupted : 1 ))
+  _dev_require_file ".pre-commit-config.yaml" || return $(( interrupted ? interrupted : 1 ))
+  _dev_require_file "pyproject.toml" || return $(( interrupted ? interrupted : 1 ))
+  _dev_pypi_validate_config || return $(( interrupted ? interrupted : 1 ))
   local -i pypi_ready=1
   _dev_update_pypi_ready || pypi_ready=0
 
@@ -487,26 +493,24 @@ dev-update-precommit() {
   local -x GIT_HTTP_LOW_SPEED_LIMIT=1
   local -x GIT_HTTP_LOW_SPEED_TIME="$DEV_PYPI_TIMEOUT"
 
-  setopt LOCAL_OPTIONS LOCAL_TRAPS NO_MONITOR
-
   local project_root="${PWD:A}"
   local project_identity
   project_identity=$(
     _dev_directory_identity "$project_root" "project directory"
-  ) || return 1
+  ) || return $(( interrupted ? interrupted : 1 ))
 
   local pyproject_path="${project_root}/pyproject.toml"
   local config_path="${project_root}/.pre-commit-config.yaml"
   _dev_owned_file_identity "$pyproject_path" "pyproject.toml" \
-    >/dev/null || return 1
+    >/dev/null || return $(( interrupted ? interrupted : 1 ))
   _dev_owned_file_identity "$config_path" "pre-commit configuration" \
-    >/dev/null || return 1
+    >/dev/null || return $(( interrupted ? interrupted : 1 ))
 
   local initial_pyproject_fingerprint=""
   local initial_config_fingerprint=""
-  _dev_update_file_fingerprint "$pyproject_path" || return 1
+  _dev_update_file_fingerprint "$pyproject_path" || return $(( interrupted ? interrupted : 1 ))
   initial_pyproject_fingerprint="$REPLY"
-  _dev_update_file_fingerprint "$config_path" || return 1
+  _dev_update_file_fingerprint "$config_path" || return $(( interrupted ? interrupted : 1 ))
   initial_config_fingerprint="$REPLY"
 
   # An aggregate's --yes authorizes only the configuration it displayed.
@@ -517,7 +521,7 @@ dev-update-precommit() {
         "${_DEV_PRECOMMIT_REVIEW_CONFIG_FINGERPRINT:-}" ) ]]; then
     _dev_error \
       "The pre-commit configuration differs from the authorized aggregate plan; start a new invocation to review it."
-    return 1
+    return $(( interrupted ? interrupted : 1 ))
   fi
 
   local transaction_root=""
@@ -528,37 +532,47 @@ dev-update-precommit() {
   local -a reply=()
 
   {
-    _dev_update_workspace_create || return 1
+    (( interrupted )) && return $interrupted
+    _dev_update_workspace_create || return $(( interrupted ? interrupted : 1 ))
     transaction_root="${reply[1]}"
     transaction_root_identity="${reply[2]}"
     transaction_dir="${reply[3]}"
     transaction_dir_identity="${reply[4]}"
 
+    local original_pyproject="${transaction_dir}/pyproject.toml.original"
     local planned_pyproject="${transaction_dir}/pyproject.toml"
     local config_snapshot="${transaction_dir}/pre-commit-config.original"
     local planned_config="${transaction_dir}/pre-commit-config.candidate"
+    local original_pyproject_fingerprint=""
     local planned_pyproject_fingerprint=""
     local config_snapshot_fingerprint=""
     local planned_config_fingerprint=""
 
     _dev_update_copy_snapshot \
-      "$pyproject_path" "$planned_pyproject" \
+      "$pyproject_path" "$original_pyproject" \
       "$initial_pyproject_fingerprint" || {
+      _dev_error "Could not snapshot pyproject.toml for the pre-commit plan."
+      return $(( interrupted ? interrupted : 1 ))
+    }
+    original_pyproject_fingerprint="$REPLY"
+    _dev_update_copy_snapshot \
+      "$original_pyproject" "$planned_pyproject" \
+      "$original_pyproject_fingerprint" || {
       _dev_error "Could not create the private pre-commit dependency plan."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     planned_pyproject_fingerprint="$REPLY"
     _dev_update_copy_snapshot \
       "$config_path" "$config_snapshot" "$initial_config_fingerprint" || {
       _dev_error "Could not snapshot the pre-commit configuration."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     config_snapshot_fingerprint="$REPLY"
     _dev_update_copy_snapshot \
       "$config_snapshot" "$planned_config" \
       "$config_snapshot_fingerprint" || {
       _dev_error "Could not create the private hook update plan."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     planned_config_fingerprint="$REPLY"
 
@@ -566,9 +580,10 @@ dev-update-precommit() {
       "$transaction_root" "$transaction_root_identity" \
       "$transaction_dir" "$transaction_dir_identity" || {
       _dev_error "The pre-commit update workspace changed during setup."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
 
+    (( interrupted )) && return $interrupted
     _dev_info "Planning the pre-commit specifier update..."
     local plan_result
     if (( pypi_ready )); then
@@ -576,7 +591,7 @@ dev-update-precommit() {
       # it; a first initialization inside the planning subshell would leak.
       _dev_pypi_cache_init 2>/dev/null || true
       plan_result=$(
-        builtin cd -- "$transaction_dir" || return 1
+        builtin cd -- "$transaction_dir" || return $(( interrupted ? interrupted : 1 ))
         _dev_update_specifier "pre-commit" 0 all 1
         print -r -- "$_DEV_UPDATE_RESULT"
       ) || plan_result="failed|pre-commit|—|—|planning failed"
@@ -587,46 +602,52 @@ dev-update-precommit() {
     local specifier_status specifier_old specifier_new specifier_note
     IFS='|' read -r specifier_status _ specifier_old specifier_new \
       specifier_note <<< "$plan_result"
+    (( interrupted )) && return $interrupted
 
     _dev_update_workspace_validate \
       "$transaction_root" "$transaction_root_identity" \
       "$transaction_dir" "$transaction_dir_identity" || {
       _dev_error "The pre-commit update workspace changed during planning."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$planned_pyproject" || return 1
+    _dev_update_file_fingerprint "$planned_pyproject" || return $(( interrupted ? interrupted : 1 ))
     planned_pyproject_fingerprint="$REPLY"
-    _dev_update_file_fingerprint "$config_snapshot" || return 1
+    _dev_update_file_fingerprint "$config_snapshot" || return $(( interrupted ? interrupted : 1 ))
     if [[ "$REPLY" != "$config_snapshot_fingerprint" ]]; then
       _dev_error "The pre-commit configuration snapshot changed unexpectedly."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
-    _dev_update_file_fingerprint "$planned_config" || return 1
+    _dev_update_file_fingerprint "$planned_config" || return $(( interrupted ? interrupted : 1 ))
     if [[ "$REPLY" != "$planned_config_fingerprint" ]]; then
       _dev_error "The private hook update plan changed unexpectedly."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     local current_project_identity
     current_project_identity=$(
       _dev_directory_identity "$project_root" "project directory"
-    ) || return 1
+    ) || return $(( interrupted ? interrupted : 1 ))
     if [[ "$current_project_identity" != "$project_identity" \
       || "${PWD:A}" != "$project_root" ]]; then
       _dev_error "The project context changed during pre-commit planning."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
-    _dev_update_file_fingerprint "$pyproject_path" || return 1
+    _dev_update_file_fingerprint "$pyproject_path" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$initial_pyproject_fingerprint" ]] || {
       _dev_error "pyproject.toml changed during pre-commit planning."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$config_path" || return 1
+    _dev_update_file_fingerprint "$config_path" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$initial_config_fingerprint" ]] || {
       _dev_error \
         ".pre-commit-config.yaml changed during pre-commit planning."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
+
+    _dev_update_show_planned_diff \
+      "$original_pyproject" "$original_pyproject_fingerprint" \
+      "$planned_pyproject" "$planned_pyproject_fingerprint" || return $(( interrupted ? interrupted : 1 ))
+    (( interrupted )) && return $interrupted
 
     case "$specifier_status" in
       updated)
@@ -667,12 +688,13 @@ dev-update-precommit() {
       } always {
         _DEV_AUTO_YES=$previous_auto_yes
       }
+      (( interrupted )) && return $interrupted
       case "$trust_outcome" in
         confirmed) ;;
         unavailable)
           _dev_error \
             "Pre-commit updates need an explicit trust decision; pass --yes in a non-interactive shell."
-          return 1
+          return $(( interrupted ? interrupted : 1 ))
           ;;
         *)
           _dev_info "Cancelled. No package or hook update was started."
@@ -681,111 +703,137 @@ dev-update-precommit() {
       esac
     fi
 
+    (( interrupted )) && return $interrupted
     # Consent does not authorize a different project or configuration.
     _dev_update_workspace_validate \
       "$transaction_root" "$transaction_root_identity" \
-      "$transaction_dir" "$transaction_dir_identity" || return 1
+      "$transaction_dir" "$transaction_dir_identity" || return $(( interrupted ? interrupted : 1 ))
     current_project_identity=$(
       _dev_directory_identity "$project_root" "project directory"
-    ) || return 1
+    ) || return $(( interrupted ? interrupted : 1 ))
     [[ "$current_project_identity" == "$project_identity" \
       && "${PWD:A}" == "$project_root" ]] || {
       _dev_error "The project context changed during trust review."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$pyproject_path" || return 1
+    _dev_update_file_fingerprint "$pyproject_path" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$initial_pyproject_fingerprint" ]] || {
       _dev_error "pyproject.toml changed during trust review."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint" || {
       _dev_error ".pre-commit-config.yaml changed during trust review."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
 
     local invocation_backup=""
     local invocation_backup_fingerprint=""
     local applied_pyproject_fingerprint=""
     if [[ "$specifier_status" == "updated" ]] && (( ! dry_run )); then
+      (( interrupted )) && return $interrupted
       _dev_info "Creating an invocation-owned backup of pyproject.toml..."
       reply=()
       _dev_update_prepare_pyproject_backup \
-        "$initial_pyproject_fingerprint" || return 1
+        "$initial_pyproject_fingerprint" || return $(( interrupted ? interrupted : 1 ))
       invocation_backup="${reply[1]}"
       invocation_backup_fingerprint="${reply[2]}"
+      (( interrupted )) && return $interrupted
 
       _dev_update_workspace_validate \
         "$transaction_root" "$transaction_root_identity" \
         "$transaction_dir" "$transaction_dir_identity" || {
         _dev_error "The pre-commit update workspace changed before publication."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "$planned_pyproject" || return 1
+      _dev_update_file_fingerprint "$planned_pyproject" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$planned_pyproject_fingerprint" ]] || {
         _dev_error "The finished pre-commit dependency plan changed."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "$config_snapshot" || return 1
+      _dev_update_file_fingerprint "$config_snapshot" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$config_snapshot_fingerprint" ]] || {
         _dev_error "The pre-commit configuration snapshot changed."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "$planned_config" || return 1
+      _dev_update_file_fingerprint "$planned_config" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$planned_config_fingerprint" ]] || {
         _dev_error "The private hook update plan changed."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "$pyproject_path" || return 1
+      _dev_update_file_fingerprint "$pyproject_path" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$initial_pyproject_fingerprint" ]] || {
         _dev_error "pyproject.toml changed while its backup was created."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "$config_path" || return 1
+      _dev_update_file_fingerprint "$config_path" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$initial_config_fingerprint" ]] || {
         _dev_error \
           ".pre-commit-config.yaml changed before dependency publication."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
 
+      (( interrupted )) && return $interrupted
       if ! _dev_update_publish_snapshot \
         "$planned_pyproject" "$pyproject_path" \
         "$initial_pyproject_fingerprint" "$planned_pyproject_fingerprint"; then
         _dev_error \
           "Could not publish the pre-commit dependency plan atomically."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       fi
       applied_pyproject_fingerprint="$REPLY"
       _dev_info \
         "pre-commit specifier applied to pyproject.toml after its backup."
-      _dev_show_diff pyproject.toml
 
-      if ! _dev_run_captured "uv lock --upgrade-package pre-commit" \
-        command uv lock --upgrade-package pre-commit; then
-        _dev_error \
-          "Lock failed — attempting an exact pyproject.toml rollback."
+      local -i precommit_lock_status=0
+      if (( ! interrupted )); then
+        _dev_run_captured "uv lock --upgrade-package pre-commit" \
+          command uv lock --upgrade-package pre-commit \
+          || precommit_lock_status=$?
+      fi
+      case "$precommit_lock_status" in
+        130|143) interrupted=$precommit_lock_status ;;
+      esac
+      if (( interrupted || precommit_lock_status != 0 )); then
+        if (( interrupted )); then
+          _dev_error \
+            "Interrupted — attempting an exact pyproject.toml rollback."
+        else
+          _dev_error \
+            "Lock failed — attempting an exact pyproject.toml rollback."
+        fi
         if ! _dev_update_rollback_pyproject \
           "$invocation_backup" "$invocation_backup_fingerprint" \
           "$applied_pyproject_fingerprint" \
           "$initial_pyproject_fingerprint"; then
           _dev_error "Lock failed and pyproject.toml rollback also failed."
           _dev_report_result failed "lock failed; pyproject.toml rollback failed"
-          return 1
+          return $(( interrupted ? interrupted : 1 ))
         fi
         _dev_warn \
           "pyproject.toml was restored from the exact invocation backup."
         _dev_report_result failed "lock failed; pyproject.toml restored"
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       fi
     fi
 
-    if (( ! dry_run )) && ! _dev_run_captured "uv sync --all-groups" \
-      command uv sync --all-groups; then
-      _dev_error "Sync failed — pre-commit autoupdate needs the environment."
-      _dev_report_result failed "sync failed"
-      return 1
+    (( interrupted )) && return $interrupted
+    if (( ! dry_run )); then
+      local -i precommit_sync_status=0
+      _dev_run_captured "uv sync --all-groups" \
+        command uv sync --all-groups || precommit_sync_status=$?
+      case "$precommit_sync_status" in
+        130|143) interrupted=$precommit_sync_status ;;
+      esac
+      if (( interrupted || precommit_sync_status != 0 )); then
+        _dev_error "Sync failed — pre-commit autoupdate needs the environment."
+        _dev_report_result failed "sync failed"
+        return $(( interrupted ? interrupted : 1 ))
+      fi
+
     fi
 
+    (( interrupted )) && return $interrupted
     reply=()
     _dev_exact_project_python_tool_runner \
       pre-commit pre_commit "uv add --dev pre-commit" configured || {
@@ -796,7 +844,7 @@ dev-update-precommit() {
         _dev_error \
           "Sync completed, but the project pre-commit runner is unavailable."
       fi
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     local -a precommit_runner=("${reply[@]}")
     local preview_runner_fingerprint=""
@@ -804,23 +852,23 @@ dev-update-precommit() {
       # Execute only the existing runner, never uv run or a newly synced tool.
       _dev_preview_exec_guard "${precommit_runner[1]}" || {
         _dev_error "The installed preview runner is not trusted."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
       local -A preview_runner_stat
-      zmodload -F zsh/stat b:zstat || return 1
+      zmodload -F zsh/stat b:zstat || return $(( interrupted ? interrupted : 1 ))
       zstat -H preview_runner_stat -- "${precommit_runner[1]}" \
-        2>/dev/null || return 1
+        2>/dev/null || return $(( interrupted ? interrupted : 1 ))
       [[ -f "${precommit_runner[1]}" && -x "${precommit_runner[1]}" \
         && ( "${preview_runner_stat[uid]}" == "$EUID" \
           || "${preview_runner_stat[uid]}" == 0 ) ]] \
         && (( (preview_runner_stat[mode] & 8#022) == 0 )) || {
         _dev_error "The installed preview runner is not trusted."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return 1
+      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return $(( interrupted ? interrupted : 1 ))
       preview_runner_fingerprint="$REPLY"
       local -x PRE_COMMIT_HOME="${transaction_dir}/pre-commit-cache"
-      command mkdir -m 700 -- "$PRE_COMMIT_HOME" || return 1
+      command mkdir -m 700 -- "$PRE_COMMIT_HOME" || return $(( interrupted ? interrupted : 1 ))
       _dev_info \
         "DRY-RUN — executing installed pre-commit only, with an invocation-private cache; no package or hook installation or publication."
     fi
@@ -829,45 +877,46 @@ dev-update-precommit() {
       "$transaction_root" "$transaction_root_identity" \
       "$transaction_dir" "$transaction_dir_identity" || {
       _dev_error "The pre-commit update workspace changed before autoupdate."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$config_snapshot" || return 1
+    _dev_update_file_fingerprint "$config_snapshot" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$config_snapshot_fingerprint" ]] || {
       _dev_error "The pre-commit configuration snapshot changed."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$planned_config" || return 1
+    _dev_update_file_fingerprint "$planned_config" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$planned_config_fingerprint" ]] || {
       _dev_error "The private hook update plan changed before autoupdate."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     current_project_identity=$(
       _dev_directory_identity "$project_root" "project directory"
-    ) || return 1
+    ) || return $(( interrupted ? interrupted : 1 ))
     if [[ "$current_project_identity" != "$project_identity" \
       || "${PWD:A}" != "$project_root" ]]; then
       _dev_error "The project context changed before pre-commit autoupdate."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
-    _dev_update_file_fingerprint "$config_path" || return 1
+    _dev_update_file_fingerprint "$config_path" || return $(( interrupted ? interrupted : 1 ))
     if [[ "$REPLY" != "$initial_config_fingerprint" ]]; then
       _dev_error \
         ".pre-commit-config.yaml changed before autoupdate; refusing to overwrite it."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     local -i autoupdate_status=0
     if (( dry_run )); then
       _dev_preview_exec_guard "${precommit_runner[1]}" || {
         _dev_error "The installed preview runner changed before execution."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
-      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return 1
+      _dev_update_file_fingerprint "${precommit_runner[1]:A}" || return $(( interrupted ? interrupted : 1 ))
       [[ "$REPLY" == "$preview_runner_fingerprint" ]] || {
         _dev_error "The installed preview runner changed before execution."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       }
     fi
+    (( interrupted )) && return $interrupted
     _dev_run_captured "pre-commit autoupdate --freeze" \
       "${precommit_runner[@]}" autoupdate --freeze \
       --config "$planned_config" || autoupdate_status=$?
@@ -883,12 +932,12 @@ dev-update-precommit() {
       _dev_error \
         ".pre-commit-config.yaml changed during autoupdate; refusing to overwrite concurrent or unexpected edits."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
-    if (( autoupdate_status == 130 || autoupdate_status == 143 )); then
+    if (( interrupted || autoupdate_status == 130 || autoupdate_status == 143 )); then
       _dev_warn "pre-commit autoupdate was interrupted."
-      return $autoupdate_status
+      return $(( interrupted ? interrupted : autoupdate_status ))
     elif (( autoupdate_status != 0 )); then
       _dev_warn \
         "pre-commit autoupdate was incomplete (status $autoupdate_status); checking the available revision changes."
@@ -905,26 +954,26 @@ dev-update-precommit() {
       _dev_error \
         ".pre-commit-config.yaml changed while the private plan was sanitized; refusing to overwrite it."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     if (( guard_status != 0 )); then
       _dev_error \
         "The private hook update plan was unsafe; it was not published."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     _dev_update_workspace_validate \
       "$transaction_root" "$transaction_root_identity" \
       "$transaction_dir" "$transaction_dir_identity" || {
       _dev_error "The pre-commit update workspace changed after autoupdate."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$config_snapshot" || return 1
+    _dev_update_file_fingerprint "$config_snapshot" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$config_snapshot_fingerprint" ]] || {
       _dev_error "The pre-commit configuration snapshot changed."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$planned_config" || return 1
+    _dev_update_file_fingerprint "$planned_config" || return $(( interrupted ? interrupted : 1 ))
     planned_config_fingerprint="$REPLY"
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
@@ -932,7 +981,7 @@ dev-update-precommit() {
       _dev_error \
         ".pre-commit-config.yaml changed while the private plan was validated."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     local guard_record guard_outcome guard_repo guard_previous guard_final
@@ -952,7 +1001,7 @@ dev-update-precommit() {
           || -z "$guard_repo" || -z "$guard_previous" \
           || -z "$guard_final" || -z "$guard_detail" ]]; then
         _dev_error "The hook revision guard returned an invalid record."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       fi
       _dev_precommit_display_repo "$guard_repo"
       guard_display="$REPLY"
@@ -977,6 +1026,7 @@ dev-update-precommit() {
     (( ${#revision_rows[@]} > 0 )) && _dev_table --outcome-column 3 \
       $'Hook repository\tRevision\tResult\tDetail' "${revision_rows[@]}"
 
+    (( interrupted )) && return $interrupted
     if (( dry_run )); then
       _dev_info "Dry run complete. No package, hook, or project file was installed or published."
       (( autoupdate_status == 0 )) \
@@ -984,60 +1034,70 @@ dev-update-precommit() {
       return $?
     fi
 
+    (( interrupted )) && return $interrupted
     local -i validate_config_status=0
     _dev_run_captured "pre-commit validate-config" \
       "${precommit_runner[@]}" validate-config "$planned_config" \
       || validate_config_status=$?
+    case "$validate_config_status" in
+      130|143) interrupted=$validate_config_status ;;
+    esac
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
       preserve_workspace=1
       _dev_error \
         ".pre-commit-config.yaml changed during candidate validation; refusing to overwrite it."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
+    (( interrupted )) && return $interrupted
     if (( validate_config_status != 0 )); then
       _dev_error \
         "The private hook configuration is invalid; it was not published."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
+    (( interrupted )) && return $interrupted
     local -i install_hooks_status=0
     _dev_run_captured "pre-commit install-hooks" \
       "${precommit_runner[@]}" install-hooks \
       --config "$planned_config" || install_hooks_status=$?
+    case "$install_hooks_status" in
+      130|143) interrupted=$install_hooks_status ;;
+    esac
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
       preserve_workspace=1
       _dev_error \
         ".pre-commit-config.yaml changed while hook environments were installed; refusing to overwrite it."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
+    (( interrupted )) && return $interrupted
     if (( install_hooks_status != 0 )); then
       _dev_error \
         "A planned hook environment could not be installed; the candidate was not published."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     _dev_update_workspace_validate \
       "$transaction_root" "$transaction_root_identity" \
       "$transaction_dir" "$transaction_dir_identity" || {
       _dev_error "The pre-commit update workspace changed during validation."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
-    _dev_update_file_fingerprint "$planned_config" || return 1
+    _dev_update_file_fingerprint "$planned_config" || return $(( interrupted ? interrupted : 1 ))
     [[ "$REPLY" == "$planned_config_fingerprint" ]] || {
       _dev_error "The private hook update plan changed during validation."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     }
     current_project_identity=$(
       _dev_directory_identity "$project_root" "project directory"
-    ) || return 1
+    ) || return $(( interrupted ? interrupted : 1 ))
     if [[ "$current_project_identity" != "$project_identity" \
       || "${PWD:A}" != "$project_root" ]]; then
       _dev_error "The project context changed during hook validation."
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$initial_config_fingerprint"; then
@@ -1045,9 +1105,10 @@ dev-update-precommit() {
       _dev_error \
         ".pre-commit-config.yaml changed during private hook validation."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
+    (( interrupted )) && return $interrupted
     local expected_installed_config_fingerprint="$initial_config_fingerprint"
     if [[ "${planned_config_fingerprint##*:}" != \
       "${config_snapshot_fingerprint##*:}" ]]; then
@@ -1060,10 +1121,10 @@ dev-update-precommit() {
           _dev_error \
             ".pre-commit-config.yaml changed at publication; refusing recovery overwrite."
           _dev_info "Original snapshot retained: $config_snapshot"
-          return 1
+          return $(( interrupted ? interrupted : 1 ))
         fi
         _dev_error "Could not publish the frozen hook revision plan."
-        return 1
+        return $(( interrupted ? interrupted : 1 ))
       fi
       expected_installed_config_fingerprint="$REPLY"
       _dev_success "Published the validated frozen hook revisions."
@@ -1071,22 +1132,27 @@ dev-update-precommit() {
       _dev_dim "  No safe hook revision change needs publication."
     fi
 
+    (( interrupted )) && return $interrupted
     local -i hook_install_status=0
     _dev_run_captured "pre-commit install --install-hooks" \
       "${precommit_runner[@]}" install --install-hooks \
       || hook_install_status=$?
+    case "$hook_install_status" in
+      130|143) interrupted=$hook_install_status ;;
+    esac
     if ! _dev_precommit_live_config_matches \
       "$config_path" "$expected_installed_config_fingerprint"; then
       preserve_workspace=1
       _dev_error \
         ".pre-commit-config.yaml changed while Git hooks were installed; refusing recovery overwrite."
       _dev_info "Original snapshot retained: $config_snapshot"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
+    (( interrupted )) && return $interrupted
     if (( hook_install_status != 0 )); then
       _dev_warn "Hook installation failed after revision validation."
       _dev_report_result failed "hook installation failed"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     _dev_precommit_hook_types "$config_path"
     if [[ -n "$REPLY" ]]; then
@@ -1100,8 +1166,17 @@ dev-update-precommit() {
     # are installed, so a lint finding or a fixer rewrite cannot discard a
     # safe update or leave the repository on stale hook revisions.
     _dev_info "Running the configured file-stage hooks against all files..."
+    (( interrupted )) && return $interrupted
     "${precommit_runner[@]}" run --all-files --config "$config_path" >&2
     local -i hook_run_status=$?
+    case "$hook_run_status" in
+      130|143) interrupted=$hook_run_status ;;
+    esac
+    if (( interrupted )); then
+      _dev_warn \
+        "Hook execution was interrupted; published revisions and installed Git hooks stay in place."
+      return $interrupted
+    fi
     if (( hook_run_status != 0 )); then
       _dev_warn "Some hooks reported issues (exit status: $hook_run_status)."
       _dev_info \
@@ -1139,19 +1214,19 @@ dev-update-precommit() {
       _dev_info "Retry the package update: dev-menu dev-update-precommit"
       _dev_report_result failed \
         "pre-commit package query failed${result_detail:+; $result_detail}"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     if (( autoupdate_status != 0 )); then
       _dev_report_result failed \
         "some hook repositories could not be updated${result_detail:+; $result_detail}"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     if (( hook_run_status != 0 )); then
       _dev_warn \
         "Pre-commit revisions were published, but the hook run reported issues."
       _dev_report_result failed \
         "hook run reported issues${result_detail:+; $result_detail}"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
     if [[ "$specifier_status" == "updated" ]] || (( updated_revisions > 0 )); then
       _dev_report_result updated "$result_detail" \

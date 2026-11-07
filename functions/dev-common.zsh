@@ -1951,6 +1951,42 @@ _dev_node_tool_runner() {
   _dev_refuse_ephemeral "$tool_name" "npm install --save-dev $package_name"
 }
 
+# Rechecks the canonical temporary root's ancestors without changing the
+# shared trusted-alias resolver. Writable parents must be root-owned sticky
+# directories; other parents must be owned by root or the current user.
+_dev_temp_ancestors_trusted() {
+  emulate -L zsh
+  local temp_root="${1-}" ancestor
+  [[ -n "$temp_root" && "$temp_root" == /* \
+    && "$temp_root" == "${temp_root:A}" ]] || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local -A root_metadata=() ancestor_metadata=()
+  zstat -LH root_metadata -- / 2>/dev/null || return 1
+  [[ "${root_metadata[uid]-}" == <-> ]] || return 1
+  ancestor="${temp_root:h}"
+  while true; do
+    ancestor_metadata=()
+    [[ -d "$ancestor" && ! -L "$ancestor" ]] \
+      && zstat -LH ancestor_metadata -- "$ancestor" 2>/dev/null \
+      || return 1
+    [[ "${ancestor_metadata[uid]-}" == <-> \
+      && "${ancestor_metadata[mode]-}" == <-> ]] || return 1
+    if (( ancestor_metadata[uid] != EUID \
+      && ancestor_metadata[uid] != root_metadata[uid] )); then
+      _dev_error "A temporary-root ancestor has an untrusted owner: ${(V)ancestor}"
+      return 1
+    fi
+    if (( (ancestor_metadata[mode] & 8#22) != 0 \
+      && (ancestor_metadata[uid] != root_metadata[uid] \
+        || (ancestor_metadata[mode] & 8#1000) == 0) )); then
+      _dev_error "A temporary-root ancestor is writable by others: ${(V)ancestor}"
+      return 1
+    fi
+    [[ "$ancestor" == / ]] && break
+    ancestor="${ancestor:h}"
+  done
+}
+
 # --- Diff rendering ---------------------------------------------------------
 
 _dev_show_diff() {

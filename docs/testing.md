@@ -464,6 +464,13 @@ already-set `GPG_TTY`; they do not establish native pinentry initialization.
 
 ### Developer coverage
 
+`dev_update_transaction_boundaries.bats` covers private real INT/TERM during
+pre-commit locks, exact rollback and ordinary/interrupted stage policy,
+pre-consent/dry-run/non-Git diffs and credential-bearing context/changed lines,
+isolated Git headers/rewrites/HOME/inline config/traces, ancestor changes and
+parallel query cleanup with synchronized owned children and inode canaries.
+No host project, interpreter, hook, network or global process is changed.
+
 `dev_precommit_trust.bats` covers direct/nested grammar, pre-consent refusal,
 passive installed-runner previews, exact runner/configuration revalidation,
 credential-safe labels, aggregate disclosure and child forwarding, and
