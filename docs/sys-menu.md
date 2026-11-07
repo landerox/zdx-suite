@@ -337,6 +337,14 @@ stays unset. Nothing is sourced, expanded, or executed: a value such as
 indicator, such as `password=` in a mount command, is withheld from the report
 and from JSON.
 
+The value policy includes Authorization, signature and spaced private-key
+indicators. Withheld networking-mode values also stay out of derived network
+facts and jq arguments: text reports withholding, JSON uses `null`, and the
+source remains `.wslconfig`. A withheld primary value does not authorize a
+fallback value. Unknown key names retain the same value-based policy.
+Withheld boot commands produce no derived MTU pin. A withheld automount root
+cannot supply derived Windows profile or configuration paths.
+
 The Windows profile comes from `wslvar USERPROFILE` when it is installed,
 otherwise from `cmd.exe /c echo %USERPROFILE%` started in the directory of
 `cmd.exe` so that it does not warn about a UNC working directory, and is
@@ -503,7 +511,8 @@ automatically. Its contract covers:
 - direct plan, dry-run, and confirmation controls for APT, Snap, Homebrew,
   AWS CLI, Starship, Git-owned fzf, Oh My Zsh, and custom Zsh plugin updates;
 - fast-forward-only pulls for Git-owned update paths;
-- origin and current-commit display before executable-code updates;
+- origin and current-commit display before executable-code updates, with URL
+  user information, queries and fragments redacted before UI output;
 - one aggregate authorization over a frozen set of applicable step entries:
   the interactive plan confirmation grants the same per-step consent as
   `--yes`, and execution neither replans nor inserts a newly applicable step;
@@ -1054,6 +1063,10 @@ contains a control character, or starts with `-` or whitespace, which is
 refused before anything is installed; and a failed installation. The
 aggregate's single pre-authentication still covers this step when its plan is
 frozen, because the list is read only at execution.
+
+SSH origin authorities that contain a percent sign or cannot be separated
+safely use a fixed withheld label. Ordinary repository path data remains
+visible under the documented redaction policy.
 
 Git-owned fzf, Oh My Zsh, and custom plugin updates require owned,
 symlink-free checkouts below `HOME`. Their plans show the origin and current

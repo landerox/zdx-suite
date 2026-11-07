@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- System: redact URL credentials, queries and fragments in Git-owned update
+  plans. Withhold Authorization, signature and private-key values in WSL
+  reports, including derived networking-mode facts and JSON arguments.
+
 - System: require a complete bounded APT source inventory before automatic
   signing-key renewal, count every multi-valued or aliased keyring consumer, recognize
   tab-separated deb822 types, and restore pending keys after interrupted

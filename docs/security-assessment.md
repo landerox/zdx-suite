@@ -223,6 +223,19 @@ included in a backup, or exposed through an error log.
 - `sys-wsl` withholds any `/etc/wsl.conf` or `.wslconfig` value that contains
   a common credential indicator, such as `password=` in a `[boot]` mount
   command, from its report and its JSON document, and names only the key.
+  Authorization, signature and spaced private-key indicators use the same
+  policy. A withheld networking mode remains absent from derived facts and
+  jq arguments; unknown key names still follow the value-based policy.
+  Withheld boot commands and automount roots cannot reappear as MTU pins or
+  Windows profile/configuration paths.
+- System Git-owned update plans redact URL user information, queries and
+  fragments in fzf, Oh My Zsh and plugin displays, including aggregate plans.
+  SSH authorities that contain a percent sign or cannot be separated safely
+  use a fixed withheld label rather than exposing decoded user information.
+  Full raw origins remain private authorization fingerprints, so changing only
+  credentials still invalidates consent. Disposable stream and jq-argument
+  canaries cover these boundaries; arbitrary secrets in URL path segments or
+  values without a recognized indicator remain outside this heuristic.
 - The telemetry writer validates its five fields, excludes arguments and
   output, enforces owner-only state, and bounds record retention.
 - Git, Developer, Py, System, and VPN commands capture child-tool output

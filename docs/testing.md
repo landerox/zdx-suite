@@ -278,6 +278,17 @@ Apple Silicon runner. They do not replace acceptance of host-only behavior.
 
 ### System coverage
 
+Secret-surface cases in `sys_maintenance.bats` cover direct and aggregate
+Git-owned plans, separate UI/data streams, URL components and credential-only
+origin changes. SSH cases cover literal query/fragment delimiters and encoded
+user-information separators while retaining ordinary path controls.
+`sys_wsl.bats` checks Authorization, signature and private-key
+values, withheld primary/fallback networking modes, ordinary last-value
+behavior and canaries in JSON and jq arguments. Checks also cover derived
+MTU pins and Windows profile paths from withheld configuration values. These
+remain fixture-based
+read-only checks, without Git transport or native Windows configuration.
+
 The APT key-scope cases in `sys_apt_keys.bats` cover multi-valued foreign
 consumers, physical aliases and unresolved consumer identities, unreadable
 files/directories, file/entry limits, tab-separated

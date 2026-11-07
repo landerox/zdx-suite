@@ -4,6 +4,88 @@
 # fixture tree below the sandbox and from mocked Windows interop programs, so
 # the review runs the same on Linux, WSL, and macOS hosts.
 
+wsl_secret_jq_recorder() {
+  export WSL_SECRET_REAL_JQ
+  WSL_SECRET_REAL_JQ=$(command -v jq)
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/jq"
+  cat >> "$TEST_MOCK_BIN/jq" <<'MOCK'
+printf '%s\0' "$@" >> "$HOME/jq.argv"
+exec "$WSL_SECRET_REAL_JQ" "$@"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/jq"
+}
+
+wsl_secret_value_case() {
+  require_jq
+  printf '[boot]\ncommand = %s\n' "$1" > "$WSL_ROOT/etc/wsl.conf"
+  wsl_secret_jq_recorder
+  run_wsl '
+    NO_COLOR=1 sys-wsl >"$HOME/text.out" 2>"$HOME/text.err" || exit 81
+    sys-wsl --json >"$HOME/json" 2>"$HOME/json.err"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/text.out" ]
+  run grep -Fq -- "$2" "$HOME/text.err" "$HOME/json" "$HOME/json.err" "$HOME/jq.argv"
+  [ "$status" -eq 1 ]
+  jq -e '.schema == "zdx.sys-wsl.v1" and .wsl_conf.settings.boot.command == null
+    and .wsl_conf.withheld_keys == ["[boot] command"]' "$HOME/json"
+}
+
+@test "sys secret surfaces: Authorization values stay out of reports JSON and jq argv" {
+  wsl_secret_value_case 'curl -H "Authorization: Basic AuthzCanary47" https://example.invalid' AuthzCanary47  # gitleaks:allow -- intentional fixture credential
+}
+
+@test "sys secret surfaces: signature values stay out of reports JSON and jq argv" {
+  wsl_secret_value_case 'signature=SigmaCanary47' SigmaCanary47
+}
+
+@test "sys secret surfaces: spaced private key values stay out of reports JSON and jq argv" {
+  wsl_secret_value_case 'private key=PiCanary47' PiCanary47
+}
+
+wsl_secret_mode_case() {
+  require_jq
+  if [[ "$1" == wsl2 ]]; then
+    printf '[experimental]\nnetworkingMode = nat\n[wsl2]\nnetworkingMode = password=ModeCanary47\n' \
+      > "$PROFILE_DIR/.wslconfig"
+  else
+    printf '[experimental]\nnetworkingMode = password=ModeCanary47\n' \
+      > "$PROFILE_DIR/.wslconfig"
+  fi
+  wsl_secret_jq_recorder
+  run_wsl '
+    NO_COLOR=1 sys-wsl >"$HOME/text.out" 2>"$HOME/text.err" || exit 81
+    sys-wsl --json >"$HOME/json" 2>"$HOME/json.err"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/text.out" ]
+  run grep -Fq -- ModeCanary47 "$HOME/text.err" "$HOME/json" "$HOME/json.err" "$HOME/jq.argv"
+  [ "$status" -eq 1 ]
+  grep -Eq '^  Networking mode:.*withheld' "$HOME/text.err"
+  jq -e '.network.networking_mode == null
+    and .network.networking_mode_source == "wslconfig"' "$HOME/json"
+}
+
+@test "sys secret surfaces: the primary networking mode cannot republish a withheld value" {
+  wsl_secret_mode_case wsl2
+}
+
+@test "sys secret surfaces: the experimental networking mode cannot republish a withheld value" {
+  wsl_secret_mode_case experimental
+}
+
+@test "sys secret surfaces: the final ordinary networking mode remains available" {
+  require_jq
+  printf '[wsl2]\nnetworkingMode = password=ModeCanary47\nnetworkingMode = mirrored\n' \
+    > "$PROFILE_DIR/.wslconfig"
+  run_wsl 'sys-wsl --json >"$HOME/json" 2>"$HOME/json.err"'
+  [ "$status" -eq 0 ]
+  jq -e '.network.networking_mode == "mirrored"
+    and .windows.wslconfig.settings.wsl2.networking_mode == "mirrored"' "$HOME/json"
+  run grep -Fq -- ModeCanary47 "$HOME/json" "$HOME/json.err"
+  [ "$status" -eq 1 ]
+}
+
 setup() {
   load test_helper
 
@@ -576,4 +658,39 @@ write_clean_fixture() {
     echo "$output" >&2
   fi
   [ "$status" -eq 0 ]
+}
+
+@test "sys secret surfaces: withheld commands do not republish derived MTU facts" {
+  require_jq
+  printf '[boot]\ncommand = ip link set dev signatureCAN47 mtu 1280\n' > "$WSL_ROOT/etc/wsl.conf"
+  wsl_secret_jq_recorder
+  run_wsl '
+    NO_COLOR=1 sys-wsl >"$HOME/text.out" 2>"$HOME/text.err" || exit 81
+    sys-wsl --json >"$HOME/json" 2>"$HOME/json.err"
+  '
+  [ "$status" -eq 0 ]
+  jq -e '.wsl_conf.settings.boot.command == null and .wsl_conf.withheld_keys == ["[boot] command"]' "$HOME/json"
+  run grep -Fq -- signatureCAN47 "$HOME/text.err" "$HOME/json" "$HOME/json.err" "$HOME/jq.argv"
+  if [ "$status" -ne 1 ]; then
+    cat "$HOME/text.err" "$HOME/json" >&2
+    false
+  fi
+}
+
+@test "sys secret surfaces: withheld automount root stays out of profile facts" {
+  require_jq
+  export MOCK_WSLPATH_FAIL=1
+  printf '[automount]\nroot = %s/password=RootCanary47/\n' "$TEST_TEMP_DIR" > "$WSL_ROOT/etc/wsl.conf"
+  wsl_secret_jq_recorder
+  run_wsl '
+    NO_COLOR=1 sys-wsl >"$HOME/text.out" 2>"$HOME/text.err" || exit 81
+    sys-wsl --json >"$HOME/json" 2>"$HOME/json.err"
+  '
+  [ "$status" -eq 0 ]
+  jq -e '.wsl_conf.settings.automount.root == null and .wsl_conf.withheld_keys == ["[automount] root"]' "$HOME/json"
+  run grep -Fq -- RootCanary47 "$HOME/text.err" "$HOME/json" "$HOME/json.err" "$HOME/jq.argv"
+  if [ "$status" -ne 1 ]; then
+    cat "$HOME/text.err" "$HOME/json" >&2
+    false
+  fi
 }
