@@ -372,25 +372,55 @@ _dev_actions_version_key() {
 
 # Lists the tags of one public github.com repository into <output-file>, with
 # stderr in <error-file>. No token is used: credential helpers and askpass
-# programs are disabled, terminal prompts are off, only HTTPS is allowed even
-# when a url.<base>.insteadOf rule rewrites the address, Git's HTTP low-speed
-# limit aborts a stalled transfer, and the whole query has a deadline. The
-# listing is capped at 16 MiB.
+# programs and headers are disabled. The query runs in a private empty
+# workspace, with private HOME, no inherited Git environment or configuration,
+# and a discovery ceiling. Its literal github.com HTTPS scope cannot be
+# rewritten by caller configuration. The listing is capped at 16 MiB and the
+# HTTP low-speed window and whole-query deadline remain in force.
 # Usage: _dev_actions_list_tags <owner> <repo> <output-file> <error-file>
 _dev_actions_list_tags() {
+  emulate -L zsh
   local owner="$1" repo="$2" output_file="$3" error_file="$4"
   _dev_actions_valid_repository "$owner" "$repo" || return 2
-  (
-    limit -s filesize 16m 2>/dev/null || exit 125
-    unset SSH_ASKPASS
-    export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="" GCM_INTERACTIVE=never
-    export GIT_HTTP_LOW_SPEED_LIMIT=1
-    export GIT_HTTP_LOW_SPEED_TIME="$DEV_ACTIONS_TIMEOUT"
-    _dev_run_with_timeout "$DEV_ACTIONS_TIMEOUT" git \
-      -c credential.helper= -c core.askPass= \
-      -c protocol.allow=never -c protocol.https.allow=always \
-      ls-remote --tags -- "https://github.com/${owner}/${repo}"
-  ) </dev/null >"$output_file" 2>"$error_file"
+  local query_git=""
+  query_git=$(builtin whence -p git 2>/dev/null) || return 1
+  query_git="${query_git:A}"
+  [[ -f "$query_git" && -x "$query_git" ]] || return 1
+  local -a reply=() query_workspace=()
+  _dev_update_workspace_create || return 1
+  query_workspace=("${reply[@]}")
+  local -i query_status=0 cleanup_status=0
+  {
+    (
+      limit -s filesize 16m 2>/dev/null || exit 125
+      local git_parameter
+      for git_parameter in "${(@k)parameters}"; do
+        [[ "$git_parameter" == GIT_* ]] || continue
+        unset "$git_parameter" || exit 1
+      done
+      unset SSH_ASKPASS || exit 1
+      export HOME="${query_workspace[3]}" \
+        XDG_CONFIG_HOME="${query_workspace[3]}" || exit 1
+      export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CEILING_DIRECTORIES="${query_workspace[3]}" \
+        GIT_DISCOVERY_ACROSS_FILESYSTEM=0 || exit 1
+      export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="" \
+        GCM_INTERACTIVE=never GIT_HTTP_LOW_SPEED_LIMIT=1 \
+        GIT_HTTP_LOW_SPEED_TIME="$DEV_ACTIONS_TIMEOUT" || exit 1
+      builtin cd -- "${query_workspace[3]}" || exit 1
+      _dev_update_workspace_validate "${query_workspace[@]}" || exit 1
+      _dev_run_with_timeout "$DEV_ACTIONS_TIMEOUT" "$query_git" \
+        --no-pager -c credential.helper= -c core.askPass= \
+        -c http.extraHeader= \
+        -c protocol.allow=never -c protocol.https.allow=always \
+        ls-remote --tags -- "https://github.com/${owner}/${repo}"
+    ) </dev/null >"$output_file" 2>"$error_file" || query_status=$?
+  } always {
+    _dev_update_workspace_cleanup "${query_workspace[@]}" || cleanup_status=$?
+  }
+  (( query_status != 0 )) && return $query_status
+  (( cleanup_status == 0 ))
 }
 
 # Lists the tags of every repository in the caller's repo_keys with at most

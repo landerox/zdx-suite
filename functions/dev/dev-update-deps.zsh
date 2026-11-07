@@ -252,6 +252,11 @@ dev-update-deps() {
     planned_fingerprint="$REPLY"
 
     _dev_print_summary_table "${summary_rows[@]}"
+    _dev_update_show_planned_diff \
+      "$original_snapshot" "$snapshot_fingerprint" \
+      "$planned_snapshot" "$planned_fingerprint" \
+      || return $(( interrupted ? interrupted : 1 ))
+    (( interrupted )) && return $interrupted
 
     _dev_update_file_fingerprint "$pyproject_path" || {
       _dev_error "Unable to revalidate pyproject.toml after planning."
@@ -385,8 +390,6 @@ dev-update-deps() {
 
     _dev_count_noun "$updated" specifier
     _dev_info "$REPLY applied to pyproject.toml."
-    _dev_info "Changes to pyproject.toml:"
-    _dev_show_diff pyproject.toml
 
     (( failed > 0 )) \
       && _dev_warn "$failed_label could not be queried from PyPI."

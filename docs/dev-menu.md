@@ -596,7 +596,13 @@ Project-file changes do have exact transaction boundaries:
 
 1. Dependency updates are constructed in an invocation-owned private workspace.
    The completed plan and live `pyproject.toml` identities are fingerprinted
-   before authorization.
+   before authorization. A unified diff compares the exact bounded private
+   original and candidate snapshots before confirmation and in dry-run mode,
+   including outside Git; it never consults the index, an external diff driver
+   or a pager. Potential credential-bearing lines are visibly withheld using
+   conservative credential markers and URL userinfo/query/fragment checks;
+   the package summary and unchanged snapshot fingerprints remain authoritative.
+   Legitimate matching text can be withheld too.
 2. After authorization, the command creates and validates the exact
    invocation-owned backup before publishing the planned file atomically.
 3. A lock failure restores that exact backup, including the original mode. A
@@ -611,8 +617,14 @@ Project-file changes do have exact transaction boundaries:
    without `--yes` refuses before a backup, publication, lock, sync, new hook
    installation or hook run. `--yes` skips only the prompt. The live project,
    configuration, private plans and workspace are revalidated after consent.
-   Specifier changes follow the same plan, backup, publication, and
-   lock-failure rollback sequence. Hook revisions are autoupdated with
+   Specifier changes follow the same plan, private original-to-plan
+   diff, backup, publication, and lock-failure rollback sequence. Scoped INT/TERM
+   and returned `130`/`143` during its lock restore the exact invocation backup
+   and original mode, retain the interruption status, and stop later stages;
+   a failed rollback stays explicit. Other interrupted stages stop later work
+   while preserving their documented external-tool effects. Existing live
+   configuration checks still retain the original snapshot when a concurrent
+   edit is observed, including interrupted validation or installation. Hook revisions are autoupdated with
    `--freeze` in a separate private candidate. An ordinary non-zero autoupdate
    result may still leave usable proposals, such as when one repository has
    incompatible hooks; these changes proceed through the complete guard and
@@ -646,6 +658,13 @@ file changed by another actor is never automatically replaced or rolled back.
 `uv.lock`, the active environment, installed tools, and hook-managed files
 remain external-tool effects; their owners may have changed them before
 returning a failure.
+
+Update and PyPI temporary roots validate every canonical ancestor as well as
+the leaf: root/current-user ownership and safe write modes, with only the
+root-owned sticky shared-directory exception. Revalidation repeats this chain.
+Parallel query cleanup uses the actual process PID, avoiding names inherited
+by forked workers; it retains destination-absence and post-move inode checks,
+with the final same-EUID pathname race still explicit.
 
 Temporary update workspaces freeze the configured temporary root and workspace
 identities. Cleanup first moves the proven workspace inode to an unpredictable
@@ -879,8 +898,14 @@ will run. It pins every updated reference to an immutable commit SHA with the
 release named in a comment, never follows a moving tag or branch, never
 downgrades, stays within the current major version unless `--major` is
 given, and holds back a release younger than the configured cooldown when
-`gh` can prove its age. The tag listing comes from github.com over HTTPS
-without credentials; a SHA pin protects against later tag movement, not
+`gh` can prove its age. The tag listing uses a literal validated github.com HTTPS URL from a new
+private empty workspace. Git receives private HOME/XDG configuration roots,
+no system/global/inline or repository configuration, cleared inherited
+`GIT_*` variables, no credential helper/askpass, and an explicit empty HTTP
+extra-header list. A readonly variable that cannot be cleared refuses the
+query. Git URL rewrites, headers and traces from the caller cannot redirect
+or disclose this query; the installed Git and ambient proxy/TLS transport
+remain trusted. The existing timeout, listing bound and concurrency remain; a SHA pin protects against later tag movement, not
 against a release that was already malicious when it was pinned.
 
 **Ephemeral runners are opt-in.** `uvx` and `npx` can fetch and execute an

@@ -635,7 +635,7 @@ EOF
   write_ci_workflow
   run_actions 'dev-update-actions --dry-run'
   [ "$status" -eq 0 ]
-  grep -Fxq 'ls-remote:-c credential.helper= -c core.askPass= -c protocol.allow=never -c protocol.https.allow=always ls-remote --tags -- https://github.com/actions/checkout' "$ACTIONS_LOG"
+  grep -Fxq 'ls-remote:--no-pager -c credential.helper= -c core.askPass= -c http.extraHeader= -c protocol.allow=never -c protocol.https.allow=always ls-remote --tags -- https://github.com/actions/checkout' "$ACTIONS_LOG"
   [ "$(grep -c '^env:0::1$' "$ACTIONS_LOG")" -eq 3 ]
 }
 
