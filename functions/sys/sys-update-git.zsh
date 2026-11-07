@@ -21,6 +21,67 @@ _sys_update_counted_noun() {
   fi
 }
 
+# Display only: authorization keeps the complete original URL fingerprint.
+_sys_update_git_origin_display() {
+  emulate -L zsh
+  local origin="${1-}" suffix="" scheme="" remainder="" authority="" tail=""
+  # Git SSH user information may contain literal query/fragment delimiters.
+  # Remove it while its authority boundary still exists; HTTP queries are
+  # removed below before their at-signs can be considered authority data.
+  if [[ "$origin" == *://* ]]; then
+    scheme="${origin%%://*}"
+    case "${scheme:l}" in
+      ssh|git+ssh|ssh+git)
+        remainder="${origin#*://}"
+        authority="${remainder%%/*}"
+        # Git decodes escapes before parsing SSH user information. Withhold
+        # the whole origin when its raw authority has an ambiguous escape.
+        if [[ "$authority" == *%* ]]; then
+          _sys_display_escape "[origin withheld: ambiguous SSH authority]"
+          return 0
+        fi
+        tail="${remainder#"$authority"}"
+        if [[ "$authority" == *@* ]]; then
+          authority="${authority##*@}"
+          if [[ -z "$authority" ]]; then
+            _sys_display_escape "[origin withheld: ambiguous SSH authority]"
+            return 0
+          fi
+          authority="***@$authority"
+        elif [[ "$authority" == *[\?\#]* ]]; then
+          _sys_display_escape "[origin withheld: ambiguous SSH authority]"
+          return 0
+        fi
+        origin="$scheme://$authority$tail"
+        ;;
+    esac
+  elif [[ "$origin" == *@*:* && "${origin%%:*}" != */* ]]; then
+    authority="${origin%%:*}"
+    tail="${origin#*:}"
+    if [[ "$authority" == *@* ]]; then
+      authority="${authority##*@}"
+      if [[ -z "$authority" ]]; then
+        _sys_display_escape "[origin withheld: ambiguous SSH authority]"
+        return 0
+      fi
+      origin="***@${authority}:$tail"
+    fi
+  fi
+  if [[ "$origin" == *[\?\#]* ]]; then
+    suffix=" (query or fragment redacted)"
+    origin="${origin%%[\?\#]*}"
+  fi
+  if [[ "$origin" == *://* ]]; then
+    scheme="${origin%%://*}"
+    remainder="${origin#*://}"
+    authority="${remainder%%/*}"
+    tail="${remainder#"$authority"}"
+    [[ "$authority" != *@* ]] || authority="***@${authority##*@}"
+    origin="$scheme://$authority$tail"
+  fi
+  _sys_display_escape "$origin$suffix"
+}
+
 # Validate an existing path below an owner-bound trust root. The trust root and
 # every child component must be owned by the current user and must not be a
 # symbolic link. Set REPLY to the canonical candidate path on success.
@@ -919,7 +980,7 @@ update-fzf() {
     local expected_program_fingerprint="$REPLY"
     _sys_info "Git-owned fzf update plan:"
     _sys_label "Repository:" "${fzf_dir/#$HOME/~}"
-    _sys_label "Origin:" "$(_sys_display_escape "$origin")"
+    _sys_label "Origin:" "$(_sys_update_git_origin_display "$origin")"
     _sys_label "Current commit:" "$current_commit"
     _sys_label "Binary policy:" "Exact checkout version; upstream release checksum required before download and execution"
     _sys_label "Release owner:" "github.com/junegunn/fzf; GitHub release CDN over HTTPS"
@@ -1044,7 +1105,7 @@ update-omz() {
 
   _sys_info "Oh My Zsh update plan:"
   _sys_label "Directory:" "${omz_dir/#$HOME/~}"
-  _sys_label "Origin:" "$(_sys_display_escape "$origin")"
+  _sys_label "Origin:" "$(_sys_update_git_origin_display "$origin")"
   _sys_label "Current commit:" "$current_commit"
   _sys_dim "Uses Git fast-forward only; tools/upgrade.sh will not be executed."
   (( dry_run )) && {
@@ -1206,7 +1267,7 @@ update-zsh-plugins() {
     repository_index <= ${#git_repositories[@]};
     repository_index++ )); do
     repository="${git_repositories[repository_index]}"
-    plan_rows+=("${repository:t}"$'\t'"${repository_heads[repository_index][1,7]}"$'\t'"${repository_origins[repository_index]}")
+    plan_rows+=("${repository:t}"$'\t'"${repository_heads[repository_index][1,7]}"$'\t'"$(_sys_update_git_origin_display "${repository_origins[repository_index]}")")
   done
   _sys_table $'Repository\tCommit\tOrigin' "${plan_rows[@]}"
   if (( validation_failures > 0 )); then

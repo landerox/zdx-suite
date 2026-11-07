@@ -60,7 +60,8 @@ _sys_wsl_value_sensitive() {
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
   local normalized="${(L)1-}"
-  [[ "$normalized" == *(password|passwd|passphrase|token|secret|credential|bearer|api-key|api_key|apikey|access-key|access_key|private-key|private_key|cookie)* ]] \
+  [[ "$normalized" == *(password|passwd|passphrase|token|secret|authorization|signature|credential|bearer|api-key|api_key|apikey|access-key|access_key|private-key|private_key|cookie)* \
+    || "$normalized" == *"private key"* ]] \
     && return 0
   [[ "$normalized" =~ '://[^/@[:space:]]+:[^/@[:space:]]*@' ]]
 }
@@ -229,7 +230,8 @@ _sys_wsl_review_collect() {
     value=$(_sys_wsl_diag_interface_mtu "$value" 2>/dev/null) || value=""
     wsl_facts[default_mtu]="$value"
   fi
-  if _sys_wsl_boot_mtu_pin "${wsl_values[wsl.conf:boot.command]-}"; then
+  if ! _sys_wsl_value_sensitive "${wsl_values[wsl.conf:boot.command]-}" \
+    && _sys_wsl_boot_mtu_pin "${wsl_values[wsl.conf:boot.command]-}"; then
     wsl_facts[pin_interface]="${reply[1]}"
     wsl_facts[pin_mtu]="${reply[2]}"
     value=$(_sys_wsl_diag_interface_mtu "${reply[1]}" 2>/dev/null) || value=""
@@ -242,9 +244,14 @@ _sys_wsl_review_collect() {
 
   # A relocated [automount] root also moves the Windows profile.
   value="${wsl_values[wsl.conf:automount.root]-}"
-  [[ "$value" == /* ]] || value=""
-  value=$(_sys_wsl_diag_windows_profile "$value" 2>/dev/null) \
-    || profile_rc=$?
+  if _sys_wsl_value_sensitive "$value"; then
+    value=""
+    profile_rc=1
+  else
+    [[ "$value" == /* ]] || value=""
+    value=$(_sys_wsl_diag_windows_profile "$value" 2>/dev/null) \
+      || profile_rc=$?
+  fi
   case $profile_rc in
     0) wsl_facts[profile_path]="$value" ;;
     3) wsl_facts[profile_reason]="Windows interop is unavailable" ;;
@@ -276,7 +283,11 @@ _sys_wsl_review_collect() {
     [[ -n "$value" ]] \
       || value="${wsl_values[.wslconfig:experimental.networkingmode]-}"
     if [[ -n "$value" ]]; then
-      wsl_facts[networking_mode]="${(L)value}"
+      if _sys_wsl_value_sensitive "$value"; then
+        wsl_facts[networking_mode]=""
+      else
+        wsl_facts[networking_mode]="${(L)value}"
+      fi
       wsl_facts[networking_mode_source]=wslconfig
     else
       wsl_facts[networking_mode]=nat
@@ -559,7 +570,9 @@ _sys_wsl_review_render() {
   else
     case "${wsl_facts[networking_mode_source]-}" in
       default)   value="NAT (default)" ;;
-      wslconfig) value="${wsl_facts[networking_mode]} (.wslconfig)" ;;
+      wslconfig)
+        value="${wsl_facts[networking_mode]:-[withheld: may contain a credential]} (.wslconfig)"
+        ;;
       *)         value="unknown (.wslconfig not read)" ;;
     esac
   fi

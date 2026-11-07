@@ -1017,6 +1017,8 @@ whitespace require manual key maintenance. Ordinary CRLF files remain supported.
 Git-owned fzf, Oh My Zsh, and custom Zsh plugin repositories are included
 unless `--safe-only` is present.
 The Git-owned repository paths display their origin and current commit,
+with URL user information, query strings and fragments redacted. The complete
+origin still binds authorization, including credential-only changes. They
 require owned symlink-free checkouts below `HOME`, repeat identity and origin
 checks after authorization, and use fast-forward-only pulls. The fzf installer
 is read only as tracked version metadata and is never executed; Oh My Zsh does not execute

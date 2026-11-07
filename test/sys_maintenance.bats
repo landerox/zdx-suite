@@ -472,6 +472,78 @@ create_maintenance_git_repo() {
   fi
 }
 
+prepare_secret_plan_repositories() {
+  export PLAN_ORIGIN='https://PLAN_USER:PLAN_PASSWORD@example.invalid/team/repo.git?access_token=PLAN_QUERY#PLAN_FRAGMENT'
+  export PLAN_FZF="$HOME/.fzf" ZSH="$HOME/.oh-my-zsh"
+  export PLAN_CUSTOM="$ZSH/custom"
+  create_maintenance_git_repo "$PLAN_FZF" "$PLAN_ORIGIN"
+  create_maintenance_git_repo "$ZSH" "$PLAN_ORIGIN"
+  create_maintenance_git_repo "$PLAN_CUSTOM/plugins/example" "$PLAN_ORIGIN"
+  mkdir -p "$PLAN_FZF/bin"
+  printf '#!/usr/bin/env zsh\nprint -r -- "0.99.0 (fixture)"\n' > "$PLAN_FZF/bin/fzf"
+  chmod -- 0755 "$PLAN_FZF/bin/fzf"
+  export PLAN_UI="$TEST_TEMP_DIR/plan-ui" PLAN_DATA="$TEST_TEMP_DIR/plan-data"
+}
+
+assert_secret_plan_hidden() {
+  local selected_command="$1"
+  prepare_secret_plan_repositories
+  run run_maintenance_zsh '
+    ZSH_CUSTOM="$PLAN_CUSTOM"
+    path=("$PLAN_FZF/bin" $path)
+    brew() { return 1; }
+    dpkg() { return 1; }
+    _sys_step_applies() {
+      case "$1" in
+        update-fzf|update-omz|update-zsh-plugins) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+    '"$selected_command"' --dry-run --yes > "$PLAN_DATA" 2> "$PLAN_UI"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$PLAN_DATA" ]
+  local canary
+  for canary in PLAN_USER PLAN_PASSWORD PLAN_QUERY PLAN_FRAGMENT; do
+    run grep -F -- "$canary" "$PLAN_UI" "$PLAN_DATA"
+    [ "$status" -eq 1 ]
+  done
+  grep -Fq -- 'example.invalid/team/repo.git' "$PLAN_UI"
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys secret plans: fzf withholds origin credentials" { assert_secret_plan_hidden update-fzf; }
+@test "sys secret plans: Oh My Zsh withholds origin credentials" { assert_secret_plan_hidden update-omz; }
+@test "sys secret plans: plugin table withholds origin credentials" { assert_secret_plan_hidden update-zsh-plugins; }
+@test "sys secret plans: aggregate withholds origin credentials" { assert_secret_plan_hidden update-system; }
+
+@test "sys secret plans: credential-only origin changes still invalidate authorization" {
+  export PLAN_REPOSITORY="$HOME/plan-repository"
+  create_maintenance_git_repo "$PLAN_REPOSITORY" 'https://first:private@example.invalid/repo.git?token=one'
+  run run_maintenance_zsh '
+    _sys_update_git_fingerprint "$HOME" "$PLAN_REPOSITORY" || return 81
+    expected_fingerprint="$REPLY"
+    git -C "$PLAN_REPOSITORY" remote set-url origin \
+      "https://second:changed@example.invalid/repo.git?token=two" || return 82
+    _sys_update_git_revalidate "$HOME" "$PLAN_REPOSITORY" "$expected_fingerprint"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"changed after authorization"* ]]
+  [[ "$output" != *"private"* && "$output" != *"changed@example"* ]]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys secret plans: ordinary at-sign paths remain visible" {
+  export ZSH="$HOME/.oh-my-zsh"
+  create_maintenance_git_repo "$ZSH" 'https://example.invalid/team@work/repo.git'
+  run run_maintenance_zsh 'update-omz --dry-run --yes'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'https://example.invalid/team@work/repo.git'* ]]
+  assert_no_privilege_network_or_signal
+}
+
 assert_no_privilege_network_or_signal() {
   [ ! -s "$MOCK_SUDO_LOG" ]
   [ ! -s "$MAINT_NETWORK_LOG" ]
@@ -6262,4 +6334,119 @@ EOF_JOURNAL
 
   [ "$status" -eq 0 ]
   [ "$(cat "$MAINT_MUTATION_LOG")" = "git=1[] ssh=0 prompt=0" ]
+}
+
+@test "sys secret plans: all scp user information is withheld" {
+  export ZSH="$HOME/.oh-my-zsh"
+  create_maintenance_git_repo "$ZSH" 'account@SCP_CANARY47@example.invalid:team/repo.git'
+  run run_maintenance_zsh 'update-omz --dry-run --yes >"$HOME/review-data" 2>"$HOME/review-ui"'
+  [ "$status" -eq 0 ]
+  [ ! -s "$HOME/review-data" ]
+  run grep -Fq -- SCP_CANARY47 "$HOME/review-ui" "$HOME/review-data"
+  if [ "$status" -ne 1 ]; then
+    cat "$HOME/review-ui" >&2
+    false
+  fi
+  grep -Fq -- 'example.invalid:team/repo.git' "$HOME/review-ui"
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys secret plans: scp path at-signs remain visible" {
+  export ZSH="$HOME/.oh-my-zsh"
+  create_maintenance_git_repo "$ZSH" 'ordinary@example.invalid:team@work/repo.git'
+  run run_maintenance_zsh 'update-omz --dry-run --yes'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'***@example.invalid:team@work/repo.git'* ]]
+  [[ "$output" != *'ordinary@'* ]]
+  assert_no_privilege_network_or_signal
+}
+
+assert_ssh_boundary_public_plan() {
+  local origin="$1" expected="$2"
+  shift 2
+  export ZSH="$HOME/.oh-my-zsh"
+  create_maintenance_git_repo "$ZSH" "$origin"
+  export SSH_BOUNDARY_UI="$TEST_TEMP_DIR/ssh-boundary-ui"
+  export SSH_BOUNDARY_DATA="$TEST_TEMP_DIR/ssh-boundary-data"
+  run run_maintenance_zsh '
+    update-omz --dry-run --yes >"$SSH_BOUNDARY_DATA" 2>"$SSH_BOUNDARY_UI"
+  '
+  [ "$status" -eq 0 ]
+  [ ! -s "$SSH_BOUNDARY_DATA" ]
+  local canary
+  for canary in "$@"; do
+    run grep -F -- "$canary" "$SSH_BOUNDARY_UI" "$SSH_BOUNDARY_DATA"
+    [ "$status" -eq 1 ]
+  done
+  grep -Fq -- "$expected" "$SSH_BOUNDARY_UI"
+  [ "$(git -C "$ZSH" remote get-url origin)" = "$origin" ]
+  [ ! -s "$MAINT_MUTATION_LOG" ]
+  assert_no_privilege_network_or_signal
+}
+
+@test "sys secret SSH boundary: public SCP question-mark user information stays hidden" {
+  assert_ssh_boundary_public_plan \
+    'SCP_PUBLIC_Q_CANARY?rest@example.invalid:team/repo.git' \
+    '***@example.invalid:team/repo.git' SCP_PUBLIC_Q_CANARY
+}
+
+@test "sys secret SSH boundary: public SCP hash user information stays hidden" {
+  assert_ssh_boundary_public_plan \
+    'SCP_PUBLIC_H_CANARY#rest@example.invalid:team/repo.git' \
+    '***@example.invalid:team/repo.git' SCP_PUBLIC_H_CANARY
+}
+
+@test "sys secret SSH boundary: public SSH URI question-mark user information stays hidden" {
+  assert_ssh_boundary_public_plan \
+    'ssh://SSH_PUBLIC_Q_CANARY?rest@example.invalid/team/repo.git' \
+    'ssh://***@example.invalid/team/repo.git' SSH_PUBLIC_Q_CANARY
+}
+
+@test "sys secret SSH boundary: public SSH URI hash user information stays hidden" {
+  assert_ssh_boundary_public_plan \
+    'ssh://SSH_PUBLIC_H_CANARY#rest@example.invalid/team/repo.git' \
+    'ssh://***@example.invalid/team/repo.git' SSH_PUBLIC_H_CANARY
+}
+
+@test "sys secret SSH boundary: public HTTPS query at-signs never become authority" {
+  assert_ssh_boundary_public_plan \
+    'https://example.invalid/team/repo.git?token=HTTPS_PUBLIC_QUERY_CANARY@other.invalid#HTTPS_PUBLIC_FRAGMENT_CANARY' \
+    'https://example.invalid/team/repo.git (query or fragment redacted)' \
+    HTTPS_PUBLIC_QUERY_CANARY HTTPS_PUBLIC_FRAGMENT_CANARY
+}
+
+@test "sys secret SSH boundary: public host-only HTTPS query at-signs stay hidden" {
+  assert_ssh_boundary_public_plan \
+    'https://example.invalid?token=HTTPS_PUBLIC_NOSLASH_CANARY@other.invalid' \
+    'https://example.invalid (query or fragment redacted)' HTTPS_PUBLIC_NOSLASH_CANARY
+}
+
+@test "sys secret SSH boundary: public SSH path at-signs remain ordinary path data" {
+  assert_ssh_boundary_public_plan \
+    'ssh://ordinary:SSH_PUBLIC_PASSWORD_CANARY@example.invalid/team@work/repo.git' \
+    'ssh://***@example.invalid/team@work/repo.git' SSH_PUBLIC_PASSWORD_CANARY
+}
+
+@test "sys secret SSH encoded: public encoded user information uses an exact placeholder" {
+  assert_ssh_boundary_public_plan \
+    'ssh://SSH_ENCODED_PUBLIC_CANARY%40example.invalid/team/repo.git' \
+    '[origin withheld: ambiguous SSH authority]' SSH_ENCODED_PUBLIC_CANARY
+  grep -Eq 'Origin:.* \[origin withheld: ambiguous SSH authority\]$' "$SSH_BOUNDARY_UI"
+}
+
+@test "sys secret SSH encoded: public Git SSH aliases with encoded authorities stay hidden" {
+  local scheme
+  for scheme in git+ssh ssh+git; do
+    assert_ssh_boundary_public_plan \
+      "$scheme://SSH_ALIAS_ENCODED_CANARY%40example.invalid/team/repo.git" \
+      '[origin withheld: ambiguous SSH authority]' SSH_ALIAS_ENCODED_CANARY
+    grep -Eq 'Origin:.* \[origin withheld: ambiguous SSH authority\]$' "$SSH_BOUNDARY_UI"
+    git -C "$ZSH" remote remove origin
+  done
+}
+
+@test "sys secret SSH encoded: public percent-encoded SSH paths remain visible" {
+  assert_ssh_boundary_public_plan \
+    'ssh://example.invalid/team%40work/repo.git' \
+    'ssh://example.invalid/team%40work/repo.git'
 }
