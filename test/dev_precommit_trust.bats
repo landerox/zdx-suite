@@ -4,6 +4,7 @@
 
 setup() {
   load test_helper
+  _zdx_test_dev_preview_private_python || return 1
   export DEV_PROJECT="$HOME/project"
   export TMPDIR="$TEST_TEMP_DIR/tmp"
   export TRUST_LOG="$HOME/trust.log"

@@ -4,6 +4,7 @@
 
 setup() {
   load test_helper
+  _zdx_test_dev_preview_private_python || return 1
   export DEV_PROJECT="$HOME/project" TRUST_LOG="$HOME/preview.log"
   export TMPDIR="$TEST_TEMP_DIR/tmp" PREVIEW_MARKER="$HOME/untrusted-ran"
   mkdir -m 700 "$DEV_PROJECT" "$TMPDIR"
@@ -45,33 +46,17 @@ teardown() {
   cleanup_sandbox
 }
 
-preview_find_python() {
-  local candidate resolved
-  for candidate in /usr/bin/python3 python3 python3.14 python3.13 python3.12 python3.11; do
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    # Never probe Apple's system placeholder while constructing a fixture.
-    [[ "$TEST_HOST_OS" != Darwin || "$resolved" != /usr/bin/python3 ]] || continue
-    REAL_PREVIEW_PYTHON=$("$resolved" -I -S -c \
-      'from pathlib import Path; import sys, tomllib; print(Path(sys._base_executable).resolve())' \
-      2>/dev/null) || continue
-    [[ "$REAL_PREVIEW_PYTHON" == /* && -x "$REAL_PREVIEW_PYTHON" ]] || continue
-    export REAL_PREVIEW_PYTHON
-    return 0
-  done
-  return 1
-}
-
 preview_environment() {
-  preview_find_python || return 1
   export PREVIEW_KIND="$1"
-  local version python_home
-  version=$("$REAL_PREVIEW_PYTHON" -I -S -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
-  python_home="${REAL_PREVIEW_PYTHON%/*}"
-  mkdir -p "$DEV_PROJECT/.venv/bin"
-  printf 'home = %s\ninclude-system-site-packages = false\n' "$python_home" \
-    > "$DEV_PROJECT/.venv/pyvenv.cfg"
-  ln -s "$REAL_PREVIEW_PYTHON" "$DEV_PROJECT/.venv/bin/python"
-  cat > "$HOME/preview-main.py" <<'EOF'
+  local version
+  version=$("$REAL_PREVIEW_PYTHON" -B -I -S -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")') || return 1
+  [[ ! -e "$DEV_PROJECT/.venv" && ! -L "$DEV_PROJECT/.venv" ]] || return 1
+  mkdir -p "$DEV_PROJECT/.venv/bin" || return 1
+  # Preserve the builder's real base home; Meta/bin is not the base stdlib home.
+  cp "$PREVIEW_PYTHON_CONFIG" "$DEV_PROJECT/.venv/pyvenv.cfg" || return 1
+  # Keep a genuine link outside this venv: canonicalizing argv loses project prefix.
+  ln -s "$REAL_PREVIEW_PYTHON" "$DEV_PROJECT/.venv/bin/python" || return 1
+  cat > "$HOME/preview-main.py" <<'EOF' || return 1
 from pathlib import Path
 import os
 import sys
@@ -96,13 +81,13 @@ candidate.write_text(candidate.read_text().replace(
 EOF
   if [[ "$PREVIEW_KIND" == module ]]; then
     local package="$DEV_PROJECT/.venv/lib/python$version/site-packages/pre_commit"
-    mkdir -p "$package"
-    : > "$package/__init__.py"
-    cp "$HOME/preview-main.py" "$package/__main__.py"
+    mkdir -p "$package" || return 1
+    : > "$package/__init__.py" || return 1
+    cp "$HOME/preview-main.py" "$package/__main__.py" || return 1
   else
-    printf '#!%s\n' "$DEV_PROJECT/.venv/bin/python" > "$DEV_PROJECT/.venv/bin/pre-commit"
-    cat "$HOME/preview-main.py" >> "$DEV_PROJECT/.venv/bin/pre-commit"
-    chmod 755 "$DEV_PROJECT/.venv/bin/pre-commit"
+    printf '#!%s\n' "$DEV_PROJECT/.venv/bin/python" > "$DEV_PROJECT/.venv/bin/pre-commit" || return 1
+    cat "$HOME/preview-main.py" >> "$DEV_PROJECT/.venv/bin/pre-commit" || return 1
+    chmod -- 755 "$DEV_PROJECT/.venv/bin/pre-commit" || return 1
   fi
 }
 
@@ -184,7 +169,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: unsafe PATH metadata Python never executes before a safe candidate" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   ln -s "$REAL_PREVIEW_PYTHON" "$TEST_MOCK_BIN/python3.14"
   preview_unsafe_program "$TEST_MOCK_BIN/python3"
   run run_actual_preview 'dev-update-precommit --dry-run'
@@ -194,19 +179,19 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: a legitimate interpreter symlink keeps real module and project prefix" {
-  preview_environment module || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment module
   run run_actual_preview 'dev-update-precommit --dry-run'
   assert_actual_preview
 }
 
 @test "dev preview trust control: a legitimate installed script keeps real interpreter provenance" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   run run_actual_preview 'dev-update-precommit --dry-run'
   assert_actual_preview
 }
 
 @test "dev preview trust: installed uv metadata discovery is trusted offline and download-free" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   export PREVIEW_UV_FIND=1
   local hidden
   hidden=$(preview_hide_path_python)
@@ -216,7 +201,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: unsafe uv cannot execute before an installed metadata fallback" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   preview_unsafe_program "$TEST_MOCK_BIN/uv"
   local hidden
   hidden=$(preview_hide_path_python)
@@ -238,7 +223,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust control: an unrelated script shebang never proves project installation" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   printf '#!/usr/bin/env python3\nraise SystemExit(97)\n' > "$DEV_PROJECT/.venv/bin/pre-commit"
   run run_actual_preview 'dev-update-precommit --dry-run'
   [ "$status" -eq 1 ]
@@ -247,7 +232,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust control: a launcher symlink outside the environment stays refused" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   mv "$DEV_PROJECT/.venv/bin/pre-commit" "$HOME/external-pre-commit"
   ln -s "$HOME/external-pre-commit" "$DEV_PROJECT/.venv/bin/pre-commit"
   run run_actual_preview 'dev-update-precommit --dry-run'
@@ -269,7 +254,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: replacement of a qualified interpreter link stops the next qualification" {
-  preview_environment module || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment module
   preview_unsafe_program "$HOME/second-python"
   chmod 755 "$HOME/second-python"
   run run_actual_preview '
@@ -287,7 +272,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: changed bytes of a qualified interpreter stop the next qualification" {
-  preview_environment module || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment module
   rm "$DEV_PROJECT/.venv/bin/python"
   cp "$REAL_PREVIEW_PYTHON" "$DEV_PROJECT/.venv/bin/python"
   chmod 755 "$DEV_PROJECT/.venv/bin/python"
@@ -338,7 +323,7 @@ assert_actual_preview() {
 }
 
 @test "dev preview trust: a known CLT placeholder keeps the validated private venv fallback" {
-  preview_environment script || skip "a Python 3.11+ fixture interpreter is required"
+  preview_environment script
   preview_unsafe_program "$TEST_MOCK_BIN/uv"
   chmod 755 "$TEST_MOCK_BIN/uv"
   local hidden

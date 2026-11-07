@@ -688,6 +688,50 @@ run_zsh() {
   " < /dev/null
 }
 
+# Build real private metadata launchers; the base stdlib/framework remains installed.
+_zdx_test_dev_preview_private_python() {
+  local candidate resolved bootstrap="" binary
+  [[ "$HOME" == "$TEST_TEMP_DIR/home" && -d "$HOME" && ! -L "$HOME" ]] || return 1
+  for candidate in /usr/bin/python3 python3 python3.15 python3.14 python3.13 python3.12 python3.11; do
+    resolved=$(command -v "$candidate" 2>/dev/null) || continue
+    # Do not execute Apple's Command Line Tools placeholder during setup.
+    [[ "$TEST_HOST_OS" != Darwin || "$resolved" != /usr/bin/python3 ]] || continue
+    if "$resolved" -B -I -S -c 'import sys, tomllib, venv; assert sys.version_info >= (3, 11)' \
+      >/dev/null 2>&1; then
+      bootstrap="$resolved"
+      break
+    fi
+  done
+  [[ -n "$bootstrap" ]] || { printf '%s\n' 'A real installed Python 3.11+ with venv and tomllib is required.' >&2; return 1; }
+  export PREVIEW_PYTHON_ENV="$HOME/preview-python"
+  [[ ! -e "$PREVIEW_PYTHON_ENV" && ! -L "$PREVIEW_PYTHON_ENV" ]] || return 1
+  (umask 077; "$bootstrap" -B -I -S -m venv --without-pip --copies "$PREVIEW_PYTHON_ENV") || return 1
+  export REAL_PREVIEW_PYTHON="$PREVIEW_PYTHON_ENV/bin/python"
+  export PREVIEW_PYTHON_CONFIG="$PREVIEW_PYTHON_ENV/pyvenv.cfg"
+  [[ -d "$PREVIEW_PYTHON_ENV" && ! -L "$PREVIEW_PYTHON_ENV" \
+    && "$(file_mode "$PREVIEW_PYTHON_ENV")" == 700 \
+    && "$(file_owner_uid "$PREVIEW_PYTHON_ENV")" == "$EUID" \
+    && -f "$PREVIEW_PYTHON_CONFIG" && ! -L "$PREVIEW_PYTHON_CONFIG" ]] || return 1
+  # The resolver probes this capability name; sys.version remains the real version.
+  if [[ ! -e "$PREVIEW_PYTHON_ENV/bin/python3.14" && ! -L "$PREVIEW_PYTHON_ENV/bin/python3.14" ]]; then
+    cp "$REAL_PREVIEW_PYTHON" "$PREVIEW_PYTHON_ENV/bin/python3.14" || return 1
+    chmod -- 755 "$PREVIEW_PYTHON_ENV/bin/python3.14" || return 1
+  fi
+  for binary in "$REAL_PREVIEW_PYTHON" "$PREVIEW_PYTHON_ENV/bin/python3" "$PREVIEW_PYTHON_ENV/bin/python3.14"; do
+    [[ -f "$binary" && ! -L "$binary" && -x "$binary" \
+      && "$(file_owner_uid "$binary")" == "$EUID" \
+      && "$(file_mode "$binary")" == 755 ]] || return 1
+  done
+  [[ "$(file_identity "$REAL_PREVIEW_PYTHON")" != "$(file_identity "$PREVIEW_PYTHON_ENV/bin/python3")" \
+    && "$(file_identity "$REAL_PREVIEW_PYTHON")" != "$(file_identity "$PREVIEW_PYTHON_ENV/bin/python3.14")" ]] || return 1
+  "$REAL_PREVIEW_PYTHON" -B -I -S -c 'import sys, tomllib; assert sys.version_info >= (3, 11)' || return 1
+  "$REAL_PREVIEW_PYTHON" -B -I -c \
+    'from pathlib import Path; import sys; assert Path(sys.prefix).resolve() == Path(sys.argv[1])' \
+    "$PREVIEW_PYTHON_ENV" || return 1
+  # Hostile mock-bin entries must still be considered before a safe fallback.
+  export PATH="$TEST_MOCK_BIN:$PREVIEW_PYTHON_ENV/bin:$PATH"
+}
+
 # Emit fixed test-only observers; their original calls retain all streams and status.
 _zdx_test_dev_preview_diagnostic_program() {
   cat <<'ZSH'

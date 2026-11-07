@@ -4,6 +4,7 @@
 
 setup() {
   load test_helper
+  _zdx_test_dev_preview_private_python || return 1
   REAL_GIT=$(command -v git)
   export REAL_GIT
   export DEV_PROJECT="$HOME/project"
