@@ -494,6 +494,14 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_report_state_safety.bats` covers report-name lookalikes, full-length and
+dotted hostnames, same-second publication, candidate replacement, protected
+publication and retention-off controls. Default clearing covers interrupted,
+unsafe, unknown and absent caches alongside stale-pointer consent behavior.
+Exact report escapes and saved provider link/emphasis canaries stay literal.
+All clocks, providers and mutations are private fixtures; actual macOS/WSL
+acceptance remains separate.
+
 `vpn_wsl_keys.bats` covers lower/mixed-case keys and sections, padding, CRLF,
 comments, repeated DNS declarations and the first validated resolver, protected
 reads, absent-versus-invalid fallback, NUL fields, IPv6-only refusal, existing

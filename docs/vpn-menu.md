@@ -736,6 +736,12 @@ user's `NO_CLOBBER` option cannot break them. A pointer to a profile that does n
 menu can show and clear it, but `_vpn_read_cached_iface` refuses it, so a stale
 pointer is never acted on.
 
+Default clearing distinguishes demonstrated absence from an unsafe or unknown
+cache. An inaccessible ancestor cannot prove that a pointer is absent.
+Interrupted inspection returns `130` or `143` before confirmation or deletion;
+unsafe/unknown state refuses with `1`. A validated stale name retains the
+usual confirmation, `--yes`, nonterminal and decline behavior.
+
 A report contains the public exit IP, geolocation, endpoints, the hostname, and
 resolver addresses. It never contains profile file contents. Cache entries and
 reports are written to owner-only temporary files and published atomically;
@@ -747,6 +753,17 @@ and never deleting an entry that fails owner-only validation. Failed report gene
 invocation-local target. Cache entries are capped at 128 bytes; preview panes
 at 64 KiB; and a completed report at 1 MiB. External `wg`, routing, resolver,
 and provider output is bounded before it reaches a report.
+
+Retention admits only the reserved ASCII naming grammar with fixed-width
+timestamp fields, a 1–64 character hostname and an optional `.1` through
+`.999` collision suffix. Dotted numeric hostname endings remain valid names.
+Similar prefix files outside that grammar are kept. Directory, just-published
+report and candidate fingerprints are renewed before deletion; replacements
+are retained. Shape membership is not provenance: a hand-made private file
+inside the exact reserved grammar remains eligible, and a final pathname
+replacement race remains. External report values use literal Markdown
+escaping, including stars and square brackets, so provider text does not
+become links or emphasis.
 
 Ephemeral staging resolves an explicit `TMPDIR` through trusted aliases only,
 such as macOS `/var/folders`, and accepts the canonical directory only when it

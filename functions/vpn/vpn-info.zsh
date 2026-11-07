@@ -27,14 +27,15 @@ _vpn_rpt() {
   }
 }
 _vpn_rpt_escape() {
+  emulate -L zsh
   local value="${(V)1}"
   value="${value//\\/\\\\}"
   value="${value//|/\\|}"
   value="${value//\`/\\\`}"
-  value="${value//\*/\\\*}"
+  value="${value//\*/\\*}"
   value="${value//_/\\_}"
-  value="${value//\[/\\\[}"
-  value="${value//\]/\\\]}"
+  value="${value//\[/\\[}"
+  value="${value//\]/\\]}"
   value="${value//</\\<}"
   value="${value//>/\\>}"
   print -r -- "$value"

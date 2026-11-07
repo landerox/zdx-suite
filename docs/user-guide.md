@@ -437,6 +437,9 @@ profile management that do not need the missing tool remain usable.
   picture. Same-second runs receive distinct filenames. After each successful
   report, `VPN_MENU_REPORT_RETENTION` (default 20; `0` keeps everything)
   prunes the oldest reports while always keeping the one just written.
+  Retention selects only reserved generated-name shapes and keeps changed
+  candidates. Similar names outside that grammar survive; a hand-made file
+  using the exact reserved grammar is still eligible.
 - `vpn-config-dir` — show a bounded inventory of safe private profiles,
   backup availability, and safe orphaned backup/undo names; it
   is not an unrestricted directory listing.

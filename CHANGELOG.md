@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: narrow report retention to reserved generated-name shapes, keep changed
+  candidates, refuse unsafe or interrupted default-pointer inspection, and
+  escape provider link/emphasis delimiters as literal Markdown text.
+
 - VPN: interpret WireGuard DNS and IPv6 fields without ASCII case sensitivity,
   validate all ordered DNS declarations before choosing a resolver, and refuse
   obscured or invalid fields before staged WSL publication.
