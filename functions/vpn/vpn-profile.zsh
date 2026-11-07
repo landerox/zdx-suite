@@ -229,14 +229,14 @@ vpn-profile-create() {
   fi
   local iface="${positional[1]:-}"
 
-  _vpn_require_platform || return 1
-  _vpn_ensure_profile_dir || return 1
-
   if [[ -n "$iface" ]] && ! _vpn_validate_new_iface_name "$iface"; then
     _vpn_error "Invalid profile name: $iface"
     _vpn_info "Use at most 15 characters from letters, digits, . _ and -."
     return 2
   fi
+
+  _vpn_require_platform || return 1
+  _vpn_ensure_profile_dir || return 1
 
   if [[ -z "$iface" ]]; then
     local -i prompt_rc=0
@@ -512,18 +512,19 @@ vpn-profile-rename() {
   old_iface="${positional[1]:-}"
   new_iface="${positional[2]:-}"
 
-  _vpn_require_platform || return 1
-  _vpn_ensure_profile_access || return 1
-
   if [[ -n "$old_iface" ]] && ! _vpn_validate_iface_name "$old_iface"; then
     _vpn_error "Invalid profile name: $old_iface"
     return 2
   fi
+
   if [[ -n "$new_iface" ]] && ! _vpn_validate_new_iface_name "$new_iface"; then
     _vpn_error "Invalid profile name: $new_iface"
     _vpn_info "Use at most 15 characters from letters, digits, . _ and -."
     return 2
   fi
+
+  _vpn_require_platform || return 1
+  _vpn_ensure_profile_access || return 1
 
   if [[ -z "$old_iface" ]]; then
     local picked
@@ -683,11 +684,22 @@ vpn-profile-rename() {
   }
   _vpn_blank
 
+  local -a rename_argv=() backup_argv=() rollback_argv=()
+  _vpn_privileged_argv mv -- "$old_conf" "$new_conf" || return 1
+  rename_argv=("${reply[@]}")
+  _vpn_announce_privileged "${(j: :)${(@q)rename_argv}}"
+  if [[ "$old_backup_state" == safe ]]; then
+    _vpn_privileged_argv mv -- "$old_backup" "$new_backup" || return 1
+    backup_argv=("${reply[@]}")
+    _vpn_announce_privileged "${(j: :)${(@q)backup_argv}}"
+    _vpn_privileged_argv mv -- "$new_conf" "$old_conf" || return 1
+    rollback_argv=("${reply[@]}")
+    _vpn_announce_privileged \
+      "${(j: :)${(@q)rollback_argv}} (rollback if backup rename fails)"
+  fi
   if (( old_active )); then
     _vpn_tunnel_down "$old_iface" || return 1
   fi
-
-  _vpn_announce_privileged "mv -- $old_conf $new_conf"
   _vpn_ensure_sudo_access "Renaming the VPN profile" || return 1
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
@@ -720,16 +732,16 @@ vpn-profile-rename() {
     return 1
   }
 
-  if ! _vpn_sudo_exec mv -- "$old_conf" "$new_conf"; then
+  if ! _vpn_sudo_exec "${rename_argv[@]}"; then
     _vpn_error "Failed to rename the profile."
     return 1
   fi
   _vpn_success "${old_conf:t} → ${new_conf:t}"
 
   if [[ "$old_backup_state" == "safe" ]]; then
-    if ! _vpn_sudo_exec mv -- "$old_backup" "$new_backup"; then
+    if ! _vpn_sudo_exec "${backup_argv[@]}"; then
       _vpn_error "Could not rename the backup; rolling the profile name back."
-      if _vpn_sudo_exec mv -- "$new_conf" "$old_conf"; then
+      if _vpn_sudo_exec "${rollback_argv[@]}"; then
         _vpn_info "Rollback completed; nothing remains renamed."
       else
         _vpn_error "Rollback failed; the profile remains at $new_conf."
@@ -801,13 +813,13 @@ vpn-profile-remove() {
   fi
   local iface="${positional[1]:-}"
 
-  _vpn_require_platform || return 1
-  _vpn_ensure_profile_access || return 1
-
   if [[ -n "$iface" ]] && ! _vpn_validate_iface_name "$iface"; then
     _vpn_error "Invalid profile name: $iface"
     return 2
   fi
+
+  _vpn_require_platform || return 1
+  _vpn_ensure_profile_access || return 1
 
   if [[ -z "$iface" ]]; then
     local picked
@@ -947,11 +959,18 @@ vpn-profile-remove() {
   }
   _vpn_blank
 
+  local -a remove_argv=() backup_argv=()
+  _vpn_privileged_argv rm -- "$conf_file" || return 1
+  remove_argv=("${reply[@]}")
+  _vpn_announce_privileged "${(j: :)${(@q)remove_argv}}"
+  if (( with_backup && backup_present )); then
+    _vpn_privileged_argv rm -- "$bak_file" || return 1
+    backup_argv=("${reply[@]}")
+    _vpn_announce_privileged "${(j: :)${(@q)backup_argv}}"
+  fi
   if (( profile_active )); then
     _vpn_tunnel_down "$iface" || return 1
   fi
-
-  _vpn_announce_privileged "rm -f -- $conf_file"
   _vpn_ensure_sudo_access "Removing the VPN profile" || return 1
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
@@ -974,13 +993,13 @@ vpn-profile-remove() {
   fi
 
   local -i failures=0 changes=$(( file_count + ${#cleared[@]} ))
-  if ! _vpn_sudo_exec rm -- "$conf_file"; then
+  if ! _vpn_sudo_exec "${remove_argv[@]}"; then
     _vpn_error "Could not remove $conf_file; cached pointers were preserved."
     return 1
   fi
   _vpn_success "Deleted ${conf_file:t}"
   if (( with_backup && backup_present )); then
-    if _vpn_sudo_exec rm -- "$bak_file"; then
+    if _vpn_sudo_exec "${backup_argv[@]}"; then
       _vpn_success "Deleted ${bak_file:t}"
     else
       _vpn_error "Could not delete ${bak_file:t}."

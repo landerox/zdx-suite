@@ -494,6 +494,18 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+The privilege-boundary fixture also covers existing profile directories hidden
+below owned mode000/0600 parents. Public create must refuse before consent or
+authentication and preserve the hidden profile bytes without permission repair.
+
+`vpn_privilege_boundaries.bats` covers invalid names before access, appeared
+creation targets and replaced parents after authentication, unsafe hidden
+executable-link hops with safe-chain controls, unsafe runtime/completion
+inventories, and exact Linux/Darwin rename/removal/rollback announcements.
+The sudo recorder accepts only fixed operations and disposable operands.
+Root ownership and Darwin administration are modeled; no real tunnel, root
+action or host configuration is changed.
+
 VPN privilege/hardening cases cover locale-sensitive IP, DNS and provider
 responses; every ASCII control byte in `VPN_CONFIG_DIR`; public refusal before
 filesystem access; unsafe temporary ancestors; and safe canonical alias or

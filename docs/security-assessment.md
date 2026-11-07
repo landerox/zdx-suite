@@ -1013,6 +1013,21 @@ through `sudo`, or a keepalive outlives its operation.
 
 **Current controls.**
 
+- VPN treats hidden profile paths below an unsearchable existing ancestor as
+  unsafe, rather than absent. Missing-directory creation requires actual parent
+  search access before consent and after authentication, without permission repair.
+
+- VPN validates supplied create/rename/remove names before runtime access.
+  Missing directory creation freezes the complete absent chain and nearest
+  existing parent, then renews both after authentication. Executable trust
+  follows every literal link hop and its parents, bounded to 40 hops, while
+  preserving the existing root/user and Darwin admin-group policy. Unsafe
+  profile directories expose no runtime or completion inventory. Rename and
+  removal disclose frozen platform-mapped argv, including conditional
+  rollback, before credentials or active-tunnel authentication. Exact private
+  recorders cover refusals and safe controls; these pathname observations
+  retain final replacement races and do not establish native host acceptance.
+
 - System update-lock release scopes the fallback descriptor-close stderr
   redirect. Failure cannot silently discard later session diagnostics, and
   the owned descriptor state is cleared. `sys_session_safety.bats` exercises

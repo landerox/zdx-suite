@@ -433,6 +433,27 @@ Least privilege is enforced by four primitives in `vpn-common.zsh`:
 | `_vpn_sudo_exec` | Runs one already-authorized narrow command with `sudo -n --` |
 | `_vpn_sudo_probe` | Read-only privileged probe; failure is expected and silent |
 
+A failed child lookup does not prove that a profile directory is absent.
+Missing-directory creation requires a real, searchable nearest observable
+existing ancestor before confirmation and again after authentication. A visible
+protected final directory under a searchable parent keeps its established
+locked/sudo access flow; unknown paths are not repaired to inspect them.
+
+Create, rename and remove validate every supplied profile name before
+platform or directory access, authentication or creation. An invalid supplied
+name returns `2`; omitted-name prompts and pickers keep their usual flow.
+Before creating a missing profile directory, the plan freezes every missing
+component and the nearest existing parent's identity. After authentication,
+each missing component must remain absent and the parent must match before
+the exact mapped install operation runs.
+
+Rename and removal disclose their frozen platform-mapped operation arrays,
+including selected backups and conditional rollback, before credentials are
+requested, including authentication for an active tunnel. Executed argv match
+those announcements. Tool trust follows literal symlink targets and their
+parent chains through at most 40 hops, preserving the platform's existing
+ownership policy and accepting safe relative or Homebrew link chains.
+
 Every mutation follows the same sequence:
 
 1. **Announce** the exact privileged operation with `_vpn_announce_privileged`,
@@ -709,6 +730,10 @@ owned by root or the current user and must not be group/world writable. A usable
 backup must be a private, singly linked regular file owned by root or the
 current user and no larger than 1 MiB. Inventory commands omit unsafe entries
 instead of displaying or acting on them.
+
+An unsafe profile directory is rejected before inventory. Runtime access
+reports it as unsafe, and loaded or standalone completion emits no profile
+candidates under the same owner/write-bit policy, without authentication.
 
 ## Exit statuses
 

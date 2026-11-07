@@ -823,7 +823,7 @@ _vpn_trusted_dir_chain() {
 
 # True when an absolute executable is controlled only by root or, with
 # --user, by root and the current user: the canonical file, every directory
-# above it, and every symbolic link on the literal path with its directory.
+# above it, and every symbolic link reached while resolving its path.
 # Usage: _vpn_trusted_executable [--user] <absolute-path>
 _vpn_trusted_executable() {
   emulate -L zsh
@@ -842,17 +842,38 @@ _vpn_trusted_executable() {
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
 
   local -A state=()
-  local -a components=("${(@s:/:)literal}")
-  local prefix="" component=""
-  for component in "${components[@]}"; do
-    [[ -n "$component" ]] || continue
-    prefix+="/$component"
-    [[ -L "$prefix" ]] || continue
-    state=()
-    zstat -LH state -- "$prefix" 2>/dev/null || return 1
-    (( state[uid] == 0 || (allow_user && state[uid] == EUID) )) || return 1
-    _vpn_trusted_dir_chain "${owner_flag[@]}" "${prefix:h:A}" || return 1
+  local -a components=()
+  local pending="$literal" prefix="" link_text="" rest=""
+  local -i depth=0 index=0 followed=0
+  while true; do
+    components=("${(@s:/:)pending}")
+    components=("${(@)components:#}")
+    prefix="" followed=0
+    for (( index = 1; index <= ${#components}; ++index )); do
+      prefix+="/${components[index]}"
+      state=()
+      zstat -LH state -- "$prefix" 2>/dev/null || return 1
+      if [[ -L "$prefix" ]]; then
+        (( ++depth <= 40 )) || return 1
+        (( state[uid] == 0 || (allow_user && state[uid] == EUID) )) || return 1
+        _vpn_trusted_dir_chain "${owner_flag[@]}" "${prefix:h:A}" || return 1
+        link_text="${state[link]-}"
+        [[ -n "$link_text" && "$link_text" != *[[:cntrl:]]* ]] || return 1
+        [[ "$link_text" == /* ]] || link_text="${prefix:h}/$link_text"
+        rest="${(j:/:)components[index+1,-1]}"
+        pending="${link_text}${rest:+/$rest}"
+        followed=1
+        break
+      fi
+      if (( index < ${#components} )); then
+        [[ -d "$prefix" ]] || return 1
+        _vpn_trusted_owner_mode \
+          "${state[uid]}" "${state[gid]}" "${state[mode]}" "$allow_user" || return 1
+      fi
+    done
+    (( followed )) || break
   done
+  [[ "${literal:A}" == "$canonical" ]] || return 1
 
   state=()
   zstat -H state -- "$canonical" 2>/dev/null || return 1
@@ -1594,9 +1615,30 @@ _vpn_configs_access_state() {
   }
 
   if [[ ! -d "$dir" ]]; then
+    if [[ -e "$dir" || -L "$dir" ]]; then
+      print -r -- "unsafe"
+      return 0
+    fi
+    local observable_parent="${dir:h}"
+    while [[ ! -e "$observable_parent" && ! -L "$observable_parent" ]]; do
+      [[ "$observable_parent" != / ]] || {
+        print -r -- "unsafe"
+        return 0
+      }
+      observable_parent="${observable_parent:h}"
+    done
+    if [[ ! -d "$observable_parent" || -L "$observable_parent" \
+      || ! -x "$observable_parent" ]]; then
+      print -r -- "unsafe"
+      return 0
+    fi
     print -r -- "missing"
     return 0
   fi
+  _vpn_config_dir_identity >/dev/null 2>&1 || {
+    print -r -- "unsafe"
+    return 0
+  }
 
   # Direct access also requires readable profiles: a user-owned directory may
   # hold root-owned mode-600 profiles, as the suite's own installer creates.
@@ -1693,6 +1735,7 @@ _vpn_ensure_profile_access() {
 }
 
 _vpn_ensure_profile_dir() {
+  emulate -L zsh
   _vpn_require_platform || return 1
 
   local dir state
@@ -1709,6 +1752,25 @@ _vpn_ensure_profile_dir() {
     missing)
       _vpn_warn "WireGuard profile directory is missing: $dir"
 
+      # Freeze the nearest existing parent and every path install would make.
+      # An appeared target must never be re-moded or re-owned by install -d.
+      local creation_parent="$dir" missing_path=""
+      local -a missing_paths=()
+      while [[ ! -e "$creation_parent" && ! -L "$creation_parent" ]]; do
+        missing_paths+=("$creation_parent")
+        [[ "$creation_parent" != / ]] || return 1
+        creation_parent="${creation_parent:h}"
+      done
+      (( ${#missing_paths} )) && [[ -d "$creation_parent" \
+        && ! -L "$creation_parent" && -x "$creation_parent" ]] || {
+        _vpn_error "The profile directory target is not missing or its parent is unsafe."
+        return 1
+      }
+      zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+      local -A parent_before=() parent_after=()
+      zstat -LH parent_before -- "$creation_parent" 2>/dev/null || return 1
+      local parent_identity="${parent_before[device]}:${parent_before[inode]}:${parent_before[uid]}:${parent_before[gid]}:${parent_before[mode]}"
+
       local outcome
       outcome=$(_vpn_confirm_outcome "Create ${dir} now?")
       case "$outcome" in
@@ -1724,9 +1786,31 @@ _vpn_ensure_profile_dir() {
           ;;
       esac
 
-      _vpn_announce_privileged "install -d -m 700 -o 0 -g 0 -- $dir"
-      _vpn_ensure_sudo_access "Creating the VPN profile directory" || return 1
-      if _vpn_sudo_exec install -d -m 700 -o 0 -g 0 -- "$dir"; then
+      local -a reply=() creation_argv=()
+      _vpn_privileged_argv install -d -m 700 -o 0 -g 0 -- "$dir" || return 1
+      creation_argv=("${reply[@]}")
+      _vpn_announce_privileged "${(j: :)${(@q)creation_argv}}"
+      _vpn_ensure_sudo_access "Creating the VPN profile directory" || return $?
+
+      [[ -d "$creation_parent" && ! -L "$creation_parent" && -x "$creation_parent" ]] \
+        && zstat -LH parent_after -- "$creation_parent" 2>/dev/null \
+        && [[ "${parent_after[device]}:${parent_after[inode]}:${parent_after[uid]}:${parent_after[gid]}:${parent_after[mode]}" == "$parent_identity" ]] || {
+        _vpn_error "The profile directory parent changed during authentication."
+        return 1
+      }
+      for missing_path in "${missing_paths[@]}"; do
+        [[ ! -e "$missing_path" && ! -L "$missing_path" ]] || {
+          _vpn_error "The profile directory target appeared during authentication."
+          return 1
+        }
+      done
+      local current_dir=""
+      current_dir=$(_vpn_config_dir_resolve) || return 1
+      [[ "$current_dir" == "$dir" ]] || {
+        _vpn_error "VPN_CONFIG_DIR changed during authentication."
+        return 1
+      }
+      if _vpn_sudo_exec "${creation_argv[@]}"; then
         _vpn_config_dir_identity >/dev/null || {
           _vpn_error "Created $dir, but its ownership or permissions are unsafe."
           return 1
@@ -1897,6 +1981,7 @@ _vpn_get_configs() {
   dir=$(_vpn_config_dir_resolve) || return 1
 
   [[ -d "$dir" ]] || return 0
+  _vpn_config_dir_identity >/dev/null 2>&1 || return 1
 
   local candidate name state
   local -i count=0
