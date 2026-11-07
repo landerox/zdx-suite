@@ -97,6 +97,7 @@ test/
 ├── vpn_contract.bats      frozen VPN public-surface parity
 ├── vpn_interface.bats     VPN routing, menu, preview, and load-mode behavior
 ├── vpn_privilege.bats     VPN privilege, secret, and destructive safety
+├── vpn_profile_safety.bats VPN profile and pointer mutation transactions
 ├── vpn_grammar.bats       VPN parser and completion grammar parity
 ├── vpn_hardening.bats     VPN filesystem, import, state, and report hardening
 ├── vpn_regressions.bats   VPN WSL, network, stream, bound, and signal regressions
@@ -492,6 +493,15 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 [`dev-menu.md`](dev-menu.md) for the recorded residual gaps.
 
 ### VPN coverage
+
+`vpn_profile_safety.bats` adds 25 public workflow cases for rename, remove,
+restore and default-clear. Allowlisted sudo and WireGuard fixtures check exact
+plans, decline and nonterminal refusal, explicit consent, post-authentication
+target changes, rollback and recovery paths, and completed mutation with failed
+pointer publication. Eight additional recorder controls check its exact privilege grammar and
+path containment. All filesystem operands stay inside the disposable
+profile root. This is behavioral coverage of existing controls, with no live
+tunnel, DNS or privileged host mutation.
 
 | File | Covered boundary |
 | --- | --- |

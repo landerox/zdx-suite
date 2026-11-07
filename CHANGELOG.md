@@ -102,6 +102,10 @@ verification, and remaining limitations.
 
 ### Changed
 
+- Add isolated public VPN profile rename/removal, restore and default-clear
+  tests for exact scope, consent, authentication races, rollback and partial
+  failures. Runtime behavior is unchanged.
+
 - Add a private core delegation context for literal current-shell calls,
   subordinate headings and suppressed child timing footers. Delegation leaves
   actual timer events and aggregate result ownership unchanged; suites adopt

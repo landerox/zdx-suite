@@ -520,6 +520,13 @@ wrong base directory causes deletion or overwrite outside the intended scope.
 
 **Current controls.**
 
+- Public VPN profile rename/removal, configuration restore and default-clear
+  have isolated transaction tests for reviewed scope, authorization,
+  post-authentication revalidation, rollback and partial state publication.
+  Allowlisted privilege recorders reject targets outside their disposable
+  root. These tests exercise the existing T3/T4/T7 controls and do not change
+  runtime policy or replace native VPN acceptance.
+
 - Git publication and cleanup proofs ignore replacement refs and disable
   legacy grafts for each proof invocation. Explicit force
   leases require integration of the leased tip into the current local branch
