@@ -952,20 +952,29 @@ _sys_apt_index_update() {
 # reply=(<status> <tail> <renewed-key-label> <guidance-record>)
 _sys_apt_refresh_indexes() {
   local REPLY tail="" guidance="" renewed_label=""
-  local -i renewal=0 update_rc=0
+  local -i renewal=0 update_rc=0 observation_rc=0
   local -A apt_key_context=() apt_key_outcomes=()
   local -a apt_key_pending=() apt_key_renewed=()
   _sys_apt_key_renewal_enabled 2>/dev/null && renewal=1
   {
-    (( renewal )) && _sys_apt_key_renew_expired
-    _sys_apt_index_update
-    update_rc=$?
-    tail="$REPLY"
+    if (( renewal )); then
+      _sys_apt_key_renew_expired || observation_rc=$?
+    fi
+    if (( observation_rc == 130 || observation_rc == 143 )); then
+      update_rc=$observation_rc
+    else
+      _sys_apt_index_update
+      update_rc=$?
+      tail="$REPLY"
+    fi
     (( ${#apt_key_pending} == 0 )) \
       || _sys_apt_key_settle "$update_rc" "$tail"
     if (( update_rc != 0 && update_rc != 130 && update_rc != 143 && renewal )); then
-      _sys_apt_key_renew_reported "$tail"
-      if (( ${#apt_key_pending} > 0 )); then
+      observation_rc=0
+      _sys_apt_key_renew_reported "$tail" || observation_rc=$?
+      if (( observation_rc == 130 || observation_rc == 143 )); then
+        update_rc=$observation_rc
+      elif (( ${#apt_key_pending} > 0 )); then
         _sys_info "Retrying the APT index update once to verify the renewed key."
         _sys_apt_index_update
         update_rc=$?
@@ -973,9 +982,14 @@ _sys_apt_refresh_indexes() {
         _sys_apt_key_settle "$update_rc" "$tail"
       fi
     fi
-    if (( update_rc != 0 )); then
-      _sys_apt_key_guidance "$tail" "$renewal"
-      guidance="$REPLY"
+    if (( update_rc != 0 && update_rc != 130 && update_rc != 143 )); then
+      observation_rc=0
+      _sys_apt_key_guidance "$tail" "$renewal" || observation_rc=$?
+      if (( observation_rc == 130 || observation_rc == 143 )); then
+        update_rc=$observation_rc
+      else
+        guidance="$REPLY"
+      fi
     fi
   } always {
     (( ${#apt_key_pending} == 0 )) || _sys_apt_key_abandon

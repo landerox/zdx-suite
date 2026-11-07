@@ -1323,6 +1323,22 @@ in a compromised release channel and then installed, potentially as root.
 
 **Current controls.**
 
+- APT key renewal requires a complete bounded source inventory. Multi-valued
+  keyring paths and physical aliases count as consumers. Unresolved consumer
+  identities, unreadable, changed, oversized or truncated
+  observations cannot establish a dedicated keyring. deb822 type words include
+  tabs. Unsupported one-line quote/escape/comment/encoding syntax and unusual
+  ASCII control whitespace fail closed before parsing can hide consumers;
+  ordinary CRLF and valid fingerprint selectors have positive controls.
+  Unparsed deb822 lines and orphan continuations cannot be silently
+  omitted to authorize a renewal.
+  Verification interrupted with `130` or `143` restores the prior key
+  rather than accepting earlier fetch output, and source-read interruptions
+  stop planning/refresh work. Confined key-scope fixtures cover these controls.
+  The source snapshot and final file checks retain concurrent configuration
+  and replacement races; publisher transport, GPG and installed tools remain
+  trusted.
+
 - System binds fzf checkout ownership and AWS CLI/Starship package ownership
   to the canonical active executable. Trusted manager inventories cannot let
   an inactive formula claim an unrelated binary. Executable identity, write

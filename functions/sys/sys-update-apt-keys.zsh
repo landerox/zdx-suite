@@ -132,10 +132,13 @@ _sys_apt_key_normalize_uri() {
 
 # REPLY: the signed-by classification of one option value: an absolute
 # keyring path, "-" for none, "inline" for an embedded key block, or "other"
-# for fingerprints and several keyrings.
+# for fingerprints. Multi-valued entries retain every absolute consumer path
+# as "multi:<comma-separated-paths>" without making that entry renewable.
 _sys_apt_key_signed_by_kind() {
-  local value="${1-}"
-  local -a words=(${=value})
+  emulate -L zsh
+  local value="${1-}" word="" normalized="${1-}" fingerprint=""
+  normalized="${normalized//,/ }"
+  local -a words=(${=normalized}) paths=()
   if [[ -z "${value//[[:space:]]/}" ]]; then
     REPLY="-"
   elif [[ "$value" == *"BEGIN PGP PUBLIC KEY BLOCK"* ]]; then
@@ -145,51 +148,87 @@ _sys_apt_key_signed_by_kind() {
     REPLY="${words[1]}"
   else
     REPLY="other"
+    for word in "${words[@]}"; do
+      if [[ "$word" == /* ]]; then
+        paths+=("$word")
+      else
+        fingerprint="${word%\!}"
+        (( ${#fingerprint} == 40 || ${#fingerprint} == 64 )) || return 1
+        [[ "$fingerprint" != *[^0-9A-Fa-f]* ]] || return 1
+      fi
+    done
+    (( ${#paths} > 0 )) && REPLY="multi:${(j:,:)paths}"
   fi
+  return 0
 }
 
 # Appends one-line-style entries of <file> to the caller's records.
 # Record: <uri><TAB><suite><TAB><signed-by><TAB><file>.
 _sys_apt_key_parse_one_line() {
   emulate -L zsh
-  local source_file="${1-}" line="" option="" option_text="" signed_by=""
-  local uri="" suite=""
+  setopt EXTENDED_GLOB
+  local source_file="${1-}" source_text="${2-}"
+  local line="" option="" option_text="" signed_by=""
+  local uri="" suite="" raw_options="" raw_type="" option_block=""
   local -a words=() options=()
-  local -i index=0
+  local -i index=0 options_closed=0 signed_by_count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    raw_options="${line##[[:space:]]#}"
+    [[ -n "$raw_options" && "$raw_options" != \#* ]] || continue
+    raw_type="${raw_options%%[[:space:]]*}"
+    raw_options="${raw_options#"$raw_type"}"
+    raw_options="${raw_options##[[:space:]]#}"
+    if [[ "$raw_options" == \[* ]]; then
+      [[ "$raw_options" == *\]* ]] || return 1
+      option_block="${raw_options%%\]*}"
+      # APT dequotes and percent-decodes options. Unsupported syntax must
+      # invalidate the inventory before comment stripping can hide a path.
+      [[ "$option_block" != *[\"\'%#\\]* ]] || return 1
+      option_block="${option_block//$'\t'/}"
+      [[ "$option_block" != *[[:cntrl:]]* ]] || return 1
+    fi
     line="${line%%\#*}"
     words=(${=line})
-    (( ${#words} >= 3 )) || continue
-    [[ "${words[1]}" == deb || "${words[1]}" == deb-src ]] || continue
+    (( ${#words} >= 3 )) || return 1
+    [[ "${words[1]}" == deb || "${words[1]}" == deb-src ]] || return 1
     index=2
     options=()
     if [[ "${words[2]}" == \[* ]]; then
       option_text=""
+      options_closed=0
       while (( index <= ${#words} )); do
         option_text+=" ${words[index]}"
         if [[ "${words[index]}" == *\] ]]; then
+          options_closed=1
           (( ++index ))
           break
         fi
         (( ++index ))
       done
+      (( options_closed )) || return 1
       option_text="${option_text#*\[}"
       option_text="${option_text%\]*}"
       options=(${=option_text})
     fi
     uri="${words[index]:-}"
     suite="${words[index+1]:-}"
-    [[ -n "$uri" && -n "$suite" ]] || continue
+    [[ -n "$uri" && -n "$suite" ]] || return 1
     signed_by="-"
+    signed_by_count=0
     for option in "${options[@]}"; do
-      if [[ "$option" == signed-by=* ]]; then
-        _sys_apt_key_signed_by_kind "${option#signed-by=}"
+      if [[ "${option:l}" == signed-by=* ]]; then
+        (( ++signed_by_count == 1 )) || return 1
+        _sys_apt_key_signed_by_kind "${option#*=}" || return $?
         signed_by="$REPLY"
+      elif [[ "${option:l}" == signed-by* ]]; then
+        return 1
       fi
     done
     _sys_apt_key_normalize_uri "$uri"
     records+=("$REPLY"$'\t'"$suite"$'\t'"$signed_by"$'\t'"$source_file")
-  done < "$source_file"
+    (( ${#records} <= 2048 )) || return 1
+  done <<< "$source_text"
   return 0
 }
 
@@ -197,19 +236,21 @@ _sys_apt_key_parse_one_line() {
 _sys_apt_key_emit_stanza() {
   emulate -L zsh
   local uri="" suite="" signed_by=""
+  local type_text="${stanza[types]-}"
+  local -a source_types=(${=type_text})
   [[ -n "${stanza[uris]-}" && -n "${stanza[suites]-}" ]] || return 0
-  [[ " ${stanza[types]-} " == *" deb "* \
-    || " ${stanza[types]-} " == *" deb-src "* ]] || return 0
+  (( ${source_types[(Ie)deb]} || ${source_types[(Ie)deb-src]} )) || return 0
   case "${${stanza[enabled]-yes}:l}" in
     no|false|0) return 0 ;;
   esac
-  _sys_apt_key_signed_by_kind "${stanza[signed-by]-}"
+  _sys_apt_key_signed_by_kind "${stanza[signed-by]-}" || return $?
   signed_by="$REPLY"
   for uri in ${=stanza[uris]}; do
     _sys_apt_key_normalize_uri "$uri"
     uri="$REPLY"
     for suite in ${=stanza[suites]}; do
       records+=("$uri"$'\t'"$suite"$'\t'"$signed_by"$'\t'"$source_file")
+      (( ${#records} <= 2048 )) || return 1
     done
   done
   return 0
@@ -219,19 +260,21 @@ _sys_apt_key_emit_stanza() {
 _sys_apt_key_parse_deb822() {
   emulate -L zsh
   setopt EXTENDED_GLOB
-  local source_file="${1-}" line="" field="" value="" current=""
+  local source_file="${1-}" source_text="${2-}"
+  local line="" field="" value="" current=""
   local -A stanza=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ "$line" == \#* ]] && continue
     if [[ -z "${line//[[:space:]]/}" ]]; then
-      _sys_apt_key_emit_stanza
+      _sys_apt_key_emit_stanza || return $?
       stanza=()
       current=""
       continue
     fi
     if [[ "$line" == [[:space:]]* ]]; then
-      [[ -n "$current" ]] && stanza[$current]+=$'\n'"${line##[[:space:]]#}"
+      [[ -n "$current" ]] || return 1
+      stanza[$current]+=$'\n'"${line##[[:space:]]#}"
       continue
     fi
     if [[ "$line" == [A-Za-z][A-Za-z0-9-]#:* ]]; then
@@ -241,43 +284,74 @@ _sys_apt_key_parse_deb822() {
       value="${value%%[[:space:]]#}"
       stanza[$field]="$value"
       current="$field"
+    else
+      return 1
     fi
-  done < "$source_file"
-  _sys_apt_key_emit_stanza
+  done <<< "$source_text"
+  _sys_apt_key_emit_stanza || return $?
   return 0
 }
 
 # reply: "<uri><TAB><suite><TAB><signed-by><TAB><file>" for every enabled APT
 # source entry, read from sources.list and the *.list and *.sources files of
-# sources.list.d. Files larger than 1 MiB are skipped; at most 256 files and
-# 2048 entries are read. Nothing is written.
+# sources.list.d. Unreadable, changed, oversized or truncated inventories
+# fail closed rather than authorizing renewal from a partial source list.
+# Limits: 1 MiB per file, 256 files, 2048 entries. Nothing is published.
 _sys_apt_key_source_entries() {
   emulate -L zsh
   setopt EXTENDED_GLOB NULL_GLOB
   local -a layout=() source_files=() records=()
-  local source_file=""
-  local -A file_state=()
+  local source_file="" source_text="" control_text="" cat_program="" field=""
+  local source_crlf=$'\r\n' source_lf=$'\n'
+  local -x LC_ALL=C
+  local -i read_rc=0
+  local -A file_state=() after_state=()
   _sys_apt_key_layout
   layout=("${reply[@]}")
   reply=()
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
-  [[ -f "${layout[1]}" ]] && source_files+=("${layout[1]}")
-  if [[ -d "${layout[2]}" ]]; then
-    source_files+=("${layout[2]}"/*.list(N-.) "${layout[2]}"/*.sources(N-.))
+  if [[ -e "${layout[1]}" || -L "${layout[1]}" ]]; then
+    source_files+=("${layout[1]}")
   fi
-  for source_file in "${(@)source_files[1,256]}"; do
-    [[ -r "$source_file" ]] || continue
+  if [[ -e "${layout[2]}" || -L "${layout[2]}" ]]; then
+    [[ -d "${layout[2]}" && -r "${layout[2]}" && -x "${layout[2]}" ]] || return 1
+    source_files+=("${layout[2]}"/*.list(N) "${layout[2]}"/*.sources(N))
+  fi
+  (( ${#source_files} <= 256 )) || return 1
+  _sys_tool_program cat || return $?
+  cat_program="$REPLY"
+  for source_file in "${source_files[@]}"; do
+    [[ -f "$source_file" && -r "$source_file" \
+      && "$source_file" != *[[:cntrl:]]* ]] || return 1
     file_state=()
-    zstat -H file_state -- "$source_file" 2>/dev/null || continue
-    (( file_state[size] <= 1048576 )) || continue
+    zstat -H file_state -- "$source_file" 2>/dev/null || return 1
+    (( file_state[size] <= 1048576 )) || return 1
+    read_rc=0
+    source_text=$(_sys_run_bounded_probe 5 1048577 \
+      "$cat_program" -- "$source_file" 2>/dev/null) || read_rc=$?
+    (( read_rc == 0 )) || return $read_rc
+    (( ${#source_text} <= 1048576 )) || return 1
+    [[ "$source_text" != *$'\0'* ]] || return 1
+    # Preserve ordinary Windows line endings while refusing whitespace that
+    # APT would split but this deliberately narrow parser does not model.
+    source_text="${source_text%$'\r'}"
+    source_text="${source_text//$source_crlf/$source_lf}"
+    control_text="${source_text//$'\t'/}"
+    control_text="${control_text//$'\n'/}"
+    [[ "$control_text" != *[[:cntrl:]]* ]] || return 1
+    after_state=()
+    zstat -H after_state -- "$source_file" 2>/dev/null || return 1
+    for field in device inode mode size mtime; do
+      [[ "${file_state[$field]}" == "${after_state[$field]}" ]] || return 1
+    done
     if [[ "$source_file" == *.sources ]]; then
-      _sys_apt_key_parse_deb822 "$source_file"
+      _sys_apt_key_parse_deb822 "$source_file" "$source_text" || return $?
     else
-      _sys_apt_key_parse_one_line "$source_file"
+      _sys_apt_key_parse_one_line "$source_file" "$source_text" || return $?
     fi
-    (( ${#records} <= 2048 )) || break
+    (( ${#records} <= 2048 )) || return 1
   done
-  reply=("${(@)records[1,2048]}")
+  reply=("${records[@]}")
   return 0
 }
 
@@ -311,16 +385,36 @@ _sys_apt_key_source_lookup() {
 
 # reply: the "<uri> <suite>" repositories of every entry that uses <keyring>.
 # Status 1 when they belong to different registry entries or to a repository
-# ZDX does not know. Usage: _sys_apt_key_keyring_repositories <keyring> <url>
+# ZDX does not know; status 2 when a consumer identity cannot be established.
+# Usage: _sys_apt_key_keyring_repositories <keyring> <url>
 #   <entry>...
 _sys_apt_key_keyring_repositories() {
   emulate -L zsh
-  local keyring="${1-}" key_url="${2-}" record=""
+  local keyring="${1-}" key_url="${2-}" record="" paths="" consumer=""
   shift 2
-  local -a fields=() repositories=()
+  local -a fields=() repositories=() consumers=()
+  local -A keyring_state=() consumer_state=()
+  local -i consumes_keyring=0
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 2
+  zstat -H keyring_state -- "$keyring" 2>/dev/null || return 2
   for record in "$@"; do
     fields=("${(@ps:\t:)record}")
-    [[ "${fields[3]}" == "$keyring" ]] || continue
+    consumers=("${fields[3]}")
+    if [[ "${fields[3]}" == multi:* ]]; then
+      paths="${fields[3]#multi:}"
+      consumers=("${(@s:,:)paths}")
+    fi
+    consumes_keyring=0
+    for consumer in "${consumers[@]}"; do
+      [[ "$consumer" == /* ]] || continue
+      consumer_state=()
+      zstat -H consumer_state -- "$consumer" 2>/dev/null || return 2
+      if [[ "${consumer_state[device]}" == "${keyring_state[device]}" \
+        && "${consumer_state[inode]}" == "${keyring_state[inode]}" ]]; then
+        consumes_keyring=1
+      fi
+    done
+    (( consumes_keyring )) || continue
     _sys_apt_key_registry_match "${fields[1]}" || return 1
     [[ "${reply[2]}" == "$key_url" ]] || return 1
     repositories+=("${fields[1]} ${fields[2]}")
@@ -915,7 +1009,9 @@ _sys_apt_key_settle() {
   for record in "${apt_key_pending[@]}"; do
     fields=("${(@ps:\t:)record}")
     verified=1
-    if (( update_rc != 0 )); then
+    if (( update_rc == 130 || update_rc == 143 )); then
+      verified=0
+    elif (( update_rc != 0 )); then
       for repository in "${(@ps:\x1f:)fields[6]}"; do
         if (( ${failed[(Ie)$repository]} )) \
           || ! _sys_apt_key_refreshed "$tail" "$repository"; then
@@ -966,7 +1062,7 @@ _sys_apt_key_expired_keyrings() {
   local gpg_program="${1-}" gnupg_home="${2-}" record="" keyring=""
   local name="" key_url="" latest=""
   local -a entries=() fields=() candidates=() seen=() repositories=()
-  _sys_apt_key_source_entries || return 1
+  _sys_apt_key_source_entries || return $?
   entries=("${reply[@]}")
   for record in "${entries[@]}"; do
     fields=("${(@ps:\t:)record}")
@@ -995,12 +1091,15 @@ _sys_apt_key_expired_keyrings() {
 _sys_apt_key_renew_expired() {
   local record=""
   local -a candidates=() fields=()
+  local -i inventory_rc=0
   _sys_apt_key_prepare || {
     _sys_verbose_dim "Expired signing keys are not checked: $REPLY."
     return 0
   }
   _sys_apt_key_expired_keyrings "${apt_key_context[gpg]}" \
-    "${apt_key_context[session]}/gnupg" || return 0
+    "${apt_key_context[session]}/gnupg" || inventory_rc=$?
+  (( inventory_rc == 130 || inventory_rc == 143 )) && return $inventory_rc
+  (( inventory_rc == 0 )) || return 0
   candidates=("${reply[@]}")
   for record in "${candidates[@]}"; do
     fields=("${(@ps:\t:)record}")
@@ -1071,8 +1170,14 @@ _sys_apt_key_assess() {
       ;;
   esac
   local -a assessed=("${reply[@]}")
-  if ! _sys_apt_key_keyring_repositories "$signed_by" "$key_url" \
-    "${entries[@]}"; then
+  local -i consumer_rc=0
+  _sys_apt_key_keyring_repositories "$signed_by" "$key_url" \
+    "${entries[@]}" || consumer_rc=$?
+  if (( consumer_rc == 2 )); then
+    reply=("${assessed[@]}"
+      "ZDX could not establish every keyring consumer's file identity, so automatic renewal is disabled.")
+    return 0
+  elif (( consumer_rc != 0 )); then
     reply=("${assessed[@]}"
       "Its keyring is shared with another publisher's repository, so ZDX does not replace it.")
     return 0
@@ -1116,7 +1221,7 @@ _sys_apt_key_renew_reported() {
   _sys_apt_key_reported "$tail"
   problems=("${reply[@]}")
   (( ${#problems} > 0 )) || return 0
-  _sys_apt_key_source_entries
+  _sys_apt_key_source_entries || return $?
   entries=("${reply[@]}")
   for record in "${problems[@]}"; do
     fields=("${(@ps:\t:)record}")
@@ -1155,7 +1260,14 @@ _sys_apt_key_guidance() {
   _sys_apt_key_reported "$tail"
   problems=("${reply[@]}")
   (( ${#problems} > 0 )) || return 0
-  _sys_apt_key_source_entries
+  local -i inventory_rc=0
+  _sys_apt_key_source_entries || inventory_rc=$?
+  if (( inventory_rc != 0 )); then
+    (( inventory_rc == 130 || inventory_rc == 143 )) && return $inventory_rc
+    fields=("${(@ps:\t:)problems[1]}")
+    REPLY="${fields[1]}"$'\t'"${fields[3]}"$'\t\t\t'"The APT source inventory is incomplete; ZDX cannot prove that its keyring is dedicated."
+    return 0
+  fi
   entries=("${reply[@]}")
   record="${problems[1]}"
   fields=("${(@ps:\t:)record}")
@@ -1185,7 +1297,7 @@ _sys_apt_key_guidance() {
 _sys_apt_key_plan() {
   local record="" date="" session="" gpg_program=""
   local -a candidates=() fields=()
-  local -i enabled_rc=0 explain=1
+  local -i enabled_rc=0 explain=1 inventory_rc=0
   REPLY=0
   _sys_step_active && [[ "${ZDX_VERBOSE:-0}" != 1 ]] && explain=0
   _sys_apt_key_renewal_enabled || enabled_rc=$?
@@ -1205,10 +1317,12 @@ _sys_apt_key_plan() {
   session="$REPLY"
   {
     _sys_apt_key_expired_keyrings "$gpg_program" "$session/gnupg" \
-      && candidates=("${reply[@]}")
+      || inventory_rc=$?
+    (( inventory_rc == 0 )) && candidates=("${reply[@]}")
   } always {
     _sys_apt_key_session_close "$session" || true
   }
+  (( inventory_rc == 130 || inventory_rc == 143 )) && return $inventory_rc
   for record in "${candidates[@]}"; do
     fields=("${(@ps:\t:)record}")
     date=""

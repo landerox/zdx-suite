@@ -1004,6 +1004,16 @@ and the key ID APT wants, and shows the two ways forward: install the
 publisher's current key into the named keyring, or disable the source. Set
 `SYS_APT_KEY_RENEWAL=0` in `config.zsh` to keep only that guidance.
 
+Automatic renewal requires a complete readable source inventory. Unreadable,
+changed, oversized or truncated input keeps the existing keys and gives
+manual guidance. A keyring listed alongside other keyrings still counts as a
+consumer when ZDX checks publisher ownership. Interrupted verification restores
+the previous key even if APT had already printed a download line.
+Alternate paths to the same key file also count as consumers; unresolved
+consumer identities prevent automatic renewal.
+Complex quoted or encoded one-line source options and unsupported control
+whitespace require manual key maintenance. Ordinary CRLF files remain supported.
+
 Git-owned fzf, Oh My Zsh, and custom Zsh plugin repositories are included
 unless `--safe-only` is present.
 The Git-owned repository paths display their origin and current commit,

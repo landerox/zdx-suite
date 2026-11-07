@@ -278,6 +278,16 @@ Apple Silicon runner. They do not replace acceptance of host-only behavior.
 
 ### System coverage
 
+The APT key-scope cases in `sys_apt_keys.bats` cover multi-valued foreign
+consumers, physical aliases and unresolved consumer identities, unreadable
+files/directories, file/entry limits, tab-separated
+deb822 types, quoted/encoded/comment-bearing options, VT/FF/interior CR,
+padded deb822 fields, valid CRLF and fingerprint controls, a complete same-publisher control, and pending-key restoration
+after returned `130`/`143` despite fetch output. Bounded source-read
+interruptions stop passive plans and executing index work. These use confined
+APT, curl, GPG and privilege recorders, with separate native fixture execution
+where UID semantics matter; they do not establish real-host APT acceptance.
+
 `sys_active_ownership.bats` also drives the public aggregate planner through
 real bounded owner observations returning `130` or `143`, proving no later
 mutation or false success, with an ordinary inapplicable-step control.
