@@ -254,7 +254,7 @@ EOF
   [[ "$output" == *"STEP:toolchain:"* ]]
   [[ "$output" == *"STEP:deps:--yes"* ]]
   [[ "$output" == *"STEP:lock:"* ]]
-  [[ "$output" == *"STEP:precommit:"* ]]
+  [[ "$output" == *"STEP:precommit:--yes"* ]]
   [[ "$output" == *"STEP:clean:"* ]]
   [[ "$output" != *"STEP:clean:--yes"* ]]
   [[ "$output" == *"Maintenance Summary"* ]]
@@ -327,7 +327,7 @@ EOF
   printf '%s\n' "$output" | grep -Eq \
     '^  3  Lockfile refresh +Upgrade uv[.]lock and sync the environment[.]$'
   printf '%s\n' "$output" | grep -Eq \
-    '^  4  Pre-commit hooks +Update, validate, and install frozen hook revisions[.]$'
+    '^  4  Pre-commit hooks +Trust dynamic upstream pre-commit packages and configured hook repositories; install and execute their code, including local hooks and file rewrites[.]$'
   printf '%s\n' "$output" | grep -Eq \
     "^  5  Terraform ownership +Report Terraform's owner and update workflow[.]$"
   [[ "$output" != *"Report TFLint's owner and update workflow."* ]]
@@ -597,7 +597,7 @@ EOF
       _dev_error "Cannot reach PyPI (HTTP 000). Check network, DNS, or proxy."
       return 1
     }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1284,7 +1284,7 @@ EOF
     }
 
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 0 ]
@@ -1399,7 +1399,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 0 ]
@@ -1482,7 +1482,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1554,7 +1554,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1621,7 +1621,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1681,7 +1681,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1715,7 +1715,7 @@ EOF
     _dev_pypi_latest() { print -r -- "2.0.0"; }
 
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1764,7 +1764,7 @@ EOF
     _dev_pypi_latest() { print -r -- "1.0.0"; }
 
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1811,7 +1811,7 @@ EOF
 
     local captured
     _dev_pypi_check_connectivity() { return 0; }
-    captured=$(dev-update-precommit)
+    captured=$(dev-update-precommit --yes)
     local -i update_result=$?
     print -u2 -r -- "CAPTURED_STDOUT=<$captured>"
     return $update_result
@@ -1848,7 +1848,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_pypi_latest() { print -r -- "1.0.0"; }
     _dev_pypi_check_connectivity() { return 0; }
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
@@ -1934,7 +1934,7 @@ EOF
       builtin command "$@"
     }
 
-    dev-update-precommit
+    dev-update-precommit --yes
   '
 
   [ "$status" -eq 1 ]
