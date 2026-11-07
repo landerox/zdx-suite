@@ -648,6 +648,7 @@ _vpn_config_dir_canonical() {
 # roots, control characters, and every symlink component other than a
 # root-owned system alias.
 _vpn_config_dir_resolve() {
+  emulate -L zsh
   local configured
   configured=$(_vpn_config_dir)
 
@@ -660,8 +661,7 @@ _vpn_config_dir_resolve() {
     _vpn_error "VPN_CONFIG_DIR must not contain '..' path segments."
     return 1
   fi
-  if [[ "$configured" == *$'\n'* || "$configured" == *$'\r'* \
-    || "$configured" == *$'\0'* ]]; then
+  if [[ "$configured" == *[[:cntrl:]]* || "$configured" == *$'\0'* ]]; then
     _vpn_error "VPN_CONFIG_DIR contains unsupported control characters."
     return 1
   fi
@@ -1226,6 +1226,7 @@ _vpn_resolve_trusted_dir() {
 # instead of weakening the ownership rule. A candidate may be reached through
 # a trusted alias (macOS /var/folders, /tmp); stdout is the canonical root.
 _vpn_temp_root_candidate() {
+  emulate -L zsh
   local configured="${1:-}"
   [[ -n "$configured" && "$configured" == /* ]] || return 1
 
@@ -1236,16 +1237,34 @@ _vpn_temp_root_candidate() {
     && -w "$literal" && -x "$literal" ]] || return 1
 
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
-  local -A metadata=()
+  local -A metadata=() root_state=() ancestor_state=()
+  zstat -LH root_state -- / 2>/dev/null || return 1
   zstat -H metadata -- "$literal" 2>/dev/null || return 1
   if (( metadata[uid] == EUID )); then
     (( (metadata[mode] & 8#22) == 0 \
       || (metadata[mode] & 8#1000) != 0 )) || return 1
-  elif (( metadata[uid] == 0 && (metadata[mode] & 8#1000) != 0 )); then
+  elif (( metadata[uid] == root_state[uid] \
+    && (metadata[mode] & 8#1000) != 0 )); then
     :
   else
     return 1
   fi
+
+  # A private leaf can still be replaced through a writable or foreign parent.
+  # Only a sticky shared ancestor owned by the filesystem root is exempt.
+  local ancestor="$literal"
+  while [[ "$ancestor" != / ]]; do
+    ancestor="${ancestor:h}"
+    ancestor_state=()
+    [[ -d "$ancestor" && ! -L "$ancestor" ]] \
+      && zstat -LH ancestor_state -- "$ancestor" 2>/dev/null || return 1
+    (( ancestor_state[uid] == EUID \
+      || ancestor_state[uid] == root_state[uid] )) || return 1
+    (( (ancestor_state[mode] & 8#22) == 0 \
+      || (ancestor_state[uid] == root_state[uid] \
+        && (ancestor_state[mode] & 8#1000) != 0 \
+        && (ancestor_state[mode] & 8#2) != 0) )) || return 1
+  done
   print -r -- "$literal"
 }
 
@@ -2359,7 +2378,10 @@ _vpn_pick_profile() {
 # It is therefore validated as a strict comma-separated list of IP literals: a
 # value carrying shell metacharacters is rejected, not escaped.
 _vpn_validate_ip_literal() {
-  setopt LOCAL_OPTIONS EXTENDED_GLOB
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
 
   local address="${1:-}"
   [[ -n "$address" ]] || return 1
@@ -2404,7 +2426,9 @@ _vpn_validate_ip_literal() {
 }
 
 _vpn_validate_dns_list() {
-  setopt LOCAL_OPTIONS EXTENDED_GLOB
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C
 
   local raw="${1:-}"
   [[ -n "$raw" ]] || return 1
@@ -2425,7 +2449,10 @@ _vpn_validate_dns_list() {
 # Validates an HTTPS provider URL before curl sees it. Provider overrides are
 # data, never additional curl options or local-file schemes.
 _vpn_validate_provider_url() {
-  setopt LOCAL_OPTIONS EXTENDED_GLOB
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
 
   local url="${1:-}"
   [[ ${#url} -le 2048 && "$url" == https://* ]] || return 1

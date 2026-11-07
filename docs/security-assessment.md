@@ -280,6 +280,12 @@ snippet and executes unintended code.
 
 **Current controls.**
 
+- VPN IP, DNS-list and provider URL validators use a local C locale, retaining
+  strict ASCII protocol operands regardless of the caller's collation.
+  Profile-directory paths reject the complete control class, including NUL
+  and DEL. Disposable validator and public-path fixtures exercise refusal
+  before staging, network or privilege; human Unicode labels remain data.
+
 - Top-level Git and System dispatchers use explicit `case` arms.
 - Owned core probe adapters resolve executable files with `whence -p`, freeze
   their absolute paths, and exclude WSL Windows programs using Linux/WSL
@@ -2043,6 +2049,9 @@ unintended targets.
   root. It prefers standard
   per-user runtime/cache locations when a host's `/tmp` has a foreign owner;
   an explicitly unsafe `TMPDIR` fails closed.
+  Every canonical ancestor must also be owner/root controlled and nonwritable
+  by other users, except a root-owned sticky shared directory. This remains
+  pathname validation rather than protection from a later replacement.
 - VPN preview panes live in an owner-only `mktemp` directory removed through an
   `always` block and local signal handlers, and never contain `PrivateKey` or
   `PresharedKey`. The fzf selection is captured privately and must match the

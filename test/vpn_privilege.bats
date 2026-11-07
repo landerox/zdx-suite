@@ -97,6 +97,148 @@ write_profile() {
   [ "$status" -eq 0 ]
 }
 
+# Pick a real locale whose regex ranges demonstrate the original widening.
+# The mandatory ASCII controls below also run on hosts without such a locale.
+vpn_widening_locale() {
+  local candidate
+  while IFS= read -r candidate; do
+    if zsh -f -c '
+      emulate -R zsh
+      export LC_ALL="$1"
+      [[ "É" =~ "^[A-F]$" ]]
+    ' _ "$candidate" 2>/dev/null; then
+      export VPN_WIDENING_LOCALE="$candidate"
+      return 0
+    fi
+  done < <(locale -a)
+  return 1
+}
+
+vpn_ascii_curl_fixture() {
+  export VPN_ASCII_CURL_LOG="$HOME/ascii-curl.log"
+  : > "$VPN_ASCII_CURL_LOG"
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/curl"
+  cat >> "$TEST_MOCK_BIN/curl" <<'MOCK'
+printf '%s\n' "$@" >> "$VPN_ASCII_CURL_LOG"
+printf '%s\n' "$VPN_ASCII_RESPONSE"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/curl"
+}
+
+@test "vpn ASCII validation: widened IP and DNS characters are refused without changing the caller locale" {
+  vpn_widening_locale || skip "no installed locale widens ASCII regex ranges"
+
+  run run_zsh '
+    export LC_ALL="$VPN_WIDENING_LOCALE"
+    local original_locale="$LC_ALL" address
+    for address in "É::1" "٣::1" "１::１" "ａ::1"; do
+      if _vpn_validate_ip_literal "$address"; then return 41; fi
+      if _vpn_validate_dns_list "1.1.1.1, $address"; then return 42; fi
+      [[ "$LC_ALL" == "$original_locale" ]] || return 43
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn ASCII validation: widened provider hosts are refused before curl" {
+  vpn_widening_locale || skip "no installed locale widens ASCII regex ranges"
+  vpn_ascii_curl_fixture
+  export VPN_ASCII_RESPONSE='203.0.113.1'
+
+  run run_zsh '
+    export LC_ALL="$VPN_WIDENING_LOCALE"
+    local url
+    for url in https://éxample.com/json https://１.example/ip https://٣.example/ip "https://[É::1]/ip"; do
+      if _vpn_validate_provider_url "$url"; then return 41; fi
+      if _vpn_curl_bounded "$url"; then return 42; fi
+      [[ "$LC_ALL" == "$VPN_WIDENING_LOCALE" ]] || return 43
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$VPN_ASCII_CURL_LOG" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn ASCII validation: all provider response formats refuse widened public addresses" {
+  vpn_widening_locale || skip "no installed locale widens ASCII regex ranges"
+  vpn_ascii_curl_fixture
+
+  run run_zsh '
+    export LC_ALL="$VPN_WIDENING_LOCALE"
+    local response_type result observation_rc
+    local -x VPN_ASCII_RESPONSE=""
+    for response_type in json plain trace; do
+      case "$response_type" in
+        json) VPN_ASCII_RESPONSE="{\"ip\":\"É::1\"}" ;;
+        plain) VPN_ASCII_RESPONSE="É::1" ;;
+        trace) VPN_ASCII_RESPONSE=$'"'"'ip=É::1\nloc=XX'"'"' ;;
+      esac
+      observation_rc=0
+      result=$(_vpn_crosscheck_provider "$response_type" https://ascii.example/ip) || observation_rc=$?
+      [[ "$observation_rc" == 1 && -z "$result" ]] || return 41
+      _vpn_ipinfo_json_providers() { [[ "$response_type" == json ]] && print -r -- https://ascii.example/ip; return 0; }
+      _vpn_ipinfo_plain_providers() { [[ "$response_type" == plain ]] && print -r -- https://ascii.example/ip; return 0; }
+      _vpn_ipinfo_trace_providers() { [[ "$response_type" == trace ]] && print -r -- https://ascii.example/ip; return 0; }
+      observation_rc=0
+      result=$(_vpn_get_ip_info) || observation_rc=$?
+      [[ "$observation_rc" == 1 && -z "$result" ]] || return 42
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(grep -c '^--proto$' "$VPN_ASCII_CURL_LOG")" -eq 6 ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn ASCII validation: widened DNS is refused before hook staging or authentication" {
+  vpn_widening_locale || skip "no installed locale widens ASCII regex ranges"
+  write_profile wg0 'É::1'
+  cp "$VPN_PROFILE_DIR/wg0.conf" "$HOME/original-profile"
+
+  run run_zsh '
+    export LC_ALL="$VPN_WIDENING_LOCALE"
+    VPN_CONFIG_DIR="$VPN_PROFILE_DIR"
+    _vpn_test_resolv_conf() { return 0; }
+    _vpn_apply_wsl_dns_hooks "$VPN_PROFILE_DIR/wg0.conf" >"$HOME/hook.stdout" 2>"$HOME/hook.stderr"
+  '
+
+  [ "$status" -eq 1 ]
+  [ ! -s "$HOME/hook.stdout" ]
+  grep -qF 'not a plain list of IP addresses' "$HOME/hook.stderr"
+  cmp "$HOME/original-profile" "$VPN_PROFILE_DIR/wg0.conf"
+  [ ! -s "$MOCK_SUDO_LOG" ]
+  [ -z "$(ls -A "$TMPDIR")" ]
+}
+
+@test "vpn ASCII validation: ASCII literals and provider hosts retain their accepted grammar" {
+  run run_zsh '
+    local address url
+    for address in 0.0.0.0 255.255.255.255 203.0.113.7 :: ::1 fd00::1 2001:db8:0:0:0:0:0:1; do
+      _vpn_validate_ip_literal "$address" || return 41
+      _vpn_validate_dns_list "1.1.1.1, $address" || return 42
+    done
+    for address in 256.0.0.1 1.2.3 1:::2 1:2:3:4:5:6:7:8:9 1.2.3.4x; do
+      if _vpn_validate_ip_literal "$address"; then return 43; fi
+    done
+    for url in https://example.com/json https://a-1.example:443/ip "https://[2001:db8::1]:443/ip"; do
+      _vpn_validate_provider_url "$url" || return 44
+    done
+    for url in https://-bad.example/ip https://bad-.example/ip https://example.com:65536/ip; do
+      if _vpn_validate_provider_url "$url"; then return 45; fi
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
 @test "vpn privilege: a plain IP DNS list hardens the profile idempotently" {
   write_profile "wg0" "8.8.8.8, 8.8.4.4"
 

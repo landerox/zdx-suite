@@ -597,6 +597,11 @@ unchanged.
 
 ## Preview design
 
+IP literals, profile DNS lists and provider URL host validation use a
+function-local C locale. Non-ASCII host labels or widened hexadecimal ranges
+cannot enter those protocols through caller collation. Valid ASCII operands,
+Unicode human labels and the four-field menu records retain their behavior.
+
 `menu-spec.md` forbids substituting a selected record into shell program text
 and calling `sudo` from a preview. The VPN preview command therefore contains
 no record field and only reads a precomputed pane.
@@ -687,6 +692,13 @@ is writable and controlled by the current user, or is a root-owned sticky
 directory. Without `TMPDIR`, the suite prefers a safe per-user runtime or cache
 root and falls back to the user's home before considering `/tmp`; a
 foreign-owned sticky `/tmp` is not trusted.
+
+Every canonical ancestor must also be a real directory owned by the current
+user or the filesystem root owner and not group/world writable, except a
+root-owned sticky shared directory. Unsafe explicit `TMPDIR` fails closed
+without fallback or allocation; unsafe implicit runtime candidates may yield
+to a safe cache candidate. These pathname checks retain a replacement race
+after validation.
 
 `VPN_CONFIG_DIR` has a separate system-profile policy: it must be absolute,
 contain no `..` or control characters, name neither `/` nor the user's home,
