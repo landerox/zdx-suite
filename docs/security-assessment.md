@@ -292,6 +292,15 @@ snippet and executes unintended code.
 
 **Current controls.**
 
+- VPN WSL DNS hardening and IPv6 rewriting interpret bounded captured profile
+  text with local C locale and case-insensitive WireGuard field semantics.
+  Ordered Interface DNS declarations are validated together under existing
+  IP/count/byte bounds before a resolver is selected. Invalid, empty or
+  NUL-obscured declarations cannot authorize fallback or staged publication;
+  diagnostics do not echo the untrusted DNS text. Comments, non-target fields,
+  exact owned hooks and prior backups are preserved. Confined parser/backend
+  fixtures cover these controls without native WSL or DNS acceptance.
+
 - VPN IP, DNS-list and provider URL validators use a local C locale, retaining
   strict ASCII protocol operands regardless of the caller's collation.
   Profile-directory paths reject the complete control class, including NUL

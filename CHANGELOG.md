@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: interpret WireGuard DNS and IPv6 fields without ASCII case sensitivity,
+  validate all ordered DNS declarations before choosing a resolver, and refuse
+  obscured or invalid fields before staged WSL publication.
+
 - VPN: keep provider tokens out of curl arguments and retained diagnostics,
   filter private keys independently of WireGuard's hide-keys setting, and
   include credential-bearing undo copies in reviewed rename/removal plans.

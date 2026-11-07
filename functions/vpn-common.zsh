@@ -2186,21 +2186,63 @@ _vpn_redacted_backup_excerpt() {
   _vpn_sudo_probe cat -- "$bak_file" | _vpn_redact_stream
 }
 
+# stdout: all validated Interface DNS literals, in declaration order. Status3
+# means no declaration; an empty or invalid declaration fails with status1.
+_vpn_dns_from_text() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=() addresses=()
+  local text="${1-}" line data key value entry combined="" section=other
+  local -i found=0
+  [[ "$text" != *$'\0'* ]] || return 1
+
+  for line in "${(@f)text}"; do
+    data="${line%%\#*}"
+    key="${(L)${data%%=*}}"
+    case "$key" in
+      [[:space:]]#'[interface]'[[:space:]]#) section=interface; continue ;;
+      [[:space:]]#'['*) section=other; continue ;;
+    esac
+    [[ "$section" == interface ]] || continue
+    case "$key" in
+      [[:space:]]#dns[[:space:]]#)
+        found=1
+        [[ "$data" == *=* ]] || return 1
+        value="${data#*=}"
+        _vpn_validate_dns_list "$value" || return 1
+        for entry in "${(@s:,:)value}"; do
+          addresses+=("${entry//[[:space:]]/}")
+          (( ${#addresses} <= 8 )) || return 1
+        done
+        ;;
+    esac
+  done
+  (( found )) || return 3
+  # Formatting spaces must not reject an otherwise valid 256-byte list.
+  combined="${(j:,:)addresses}"
+  _vpn_validate_dns_list "$combined" || return 1
+  print -r -- "${(j:, :)addresses}"
+}
+
+# stdout: the configured DNS list, or empty when the profile declares none.
 _vpn_dns_from_conf() {
+  emulate -L zsh
+  setopt PIPE_FAIL
   local iface="${1:-}"
-  local conf_file
+  local conf_file content=""
+  local -i dns_status=0
   conf_file=$(_vpn_conf_path "$iface") || return 1
 
   if [[ -r "$conf_file" ]]; then
-    command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$conf_file" 2>/dev/null \
-      | command sed -n 's/^[[:space:]]*DNS[[:space:]]*=[[:space:]]*//p' \
-      | command head -1
-    return 0
+    content=$(command head -c "$_VPN_MAX_PROFILE_BYTES" -- "$conf_file" 2>/dev/null) || return $?
+  else
+    content=$(_vpn_sudo_probe head -c "$_VPN_MAX_PROFILE_BYTES" -- "$conf_file") || return $?
   fi
-
-  _vpn_sudo_probe head -c "$_VPN_MAX_PROFILE_BYTES" -- "$conf_file" \
-    | command sed -n 's/^[[:space:]]*DNS[[:space:]]*=[[:space:]]*//p' \
-    | command head -1
+  _vpn_dns_from_text "$content" || dns_status=$?
+  (( dns_status == 3 )) && return 0
+  return "$dns_status"
 }
 
 # --- Tunnel metrics ---------------------------------------------------------

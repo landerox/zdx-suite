@@ -598,17 +598,23 @@ same-directory temporary. Existing profiles are never overwritten by import.
 `_vpn_apply_wsl_dns_hooks`, offered after an import on WSL only, writes
 `PostUp`/`PostDown` hooks containing an `sh -c` body that **root executes on
 every tunnel transition**. The resolver
-address in that body comes from the profile's `DNS =` line, which for an
+address in that body comes from the profile's Interface DNS declarations, which for an
 imported profile is untrusted input.
 
 The value is therefore validated by `_vpn_validate_dns_list` as a strict
-comma-separated list of at most eight IPv4 or IPv6 literals. A value carrying
-shell metacharacters is **refused, not escaped**:
+comma-separated list of at most eight IPv4 or IPv6 literals.
+
+Keys and sections compare without ASCII letter case after stripping hash
+comments and surrounding whitespace. Repeated Interface DNS declarations
+retain encounter order; the complete aggregate must satisfy the eight-IP and
+256-byte compact-list bounds before the first literal becomes the tunnel
+resolver. Display spaces do not change that byte limit. Fallback applies only
+to genuine absence, never an empty, invalid or NUL-obscured declaration.
+A value carrying shell metacharacters is **refused, not escaped**:
 
 ```console
 $ vpn-profile-import ./hostile.conf     # DNS = 1.1.1.1'; curl … | sh; '
 ✘ The profile's DNS value is not a plain list of IP addresses.
-  Found: 1.1.1.1'; curl … | sh; '
 ➜ Refusing to write it into a root-executed hook. Fix the DNS line first.
 ```
 
@@ -633,6 +639,12 @@ connect fails before `wg-quick up` if the rewrite cannot retain the required
 IPv4 values. If requested DNS hardening fails after a validated import, the
 public command returns non-zero and reports that the imported profile remains
 unchanged.
+
+IPv6 rewriting applies the same field rules to Interface Address/DNS and each
+Peer AllowedIPs declaration, keeping IPv4 values, comments, hooks and unrelated
+text. If a required field has no IPv4 value left, publication fails closed.
+Existing safety backups and hook idempotency remain unchanged; this does not
+change the networking-mode/default gate.
 
 ## Preview design
 
