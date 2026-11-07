@@ -374,7 +374,7 @@ Linux-only by design, and no WSL1 host run is recorded.
 
 Focused coverage lives in `test/py.bats`, `test/py_contract.bats`,
 `test/py_safety.bats`, `test/py_recovery.bats`, `test/py_platform.bats`,
-`test/py_rebuild.bats`, and `test/py_rebuild_relocation.bats`, with trusted
+`test/py_mutation_layers.bats`, `test/py_rebuild.bats`, and `test/py_rebuild_relocation.bats`, with trusted
 working-directory aliases in `test/platform_paths.bats`. The rebuild
 transaction runs against mocked uv and interpreters for its scope,
 authorization, revalidation, failure, and rollback paths, and against the
@@ -390,3 +390,13 @@ kernels, picker setup failures, the early relocatable refusal,
 hint and detection, and the menu's unavailable form. Live PyPI,
 package-manager mutations, a real python.org installation, and macOS or WSL
 host acceptance remain manual boundaries.
+
+The mutation-layer cases exercise pin plans and result verification, all four
+package backends, isolated uv/pipx tools, confirmation-time changes,
+`.virtualenvs` discovery, malformed or oversized PyPI data, failed partial
+responses, status propagation and temporary cleanup. Strict recording
+managers and a read-only metadata wrapper keep mutations inside the disposable
+project/tool scope. Guard canaries check that fixture marker and response
+paths cannot escape that scope. These fixtures add evidence for existing
+controls; remaining metadata, inventory and quarantine edge cases retain their
+documented limits.

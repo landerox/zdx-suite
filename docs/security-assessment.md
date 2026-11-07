@@ -574,6 +574,13 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   as new copies. Private fixtures cover data preservation and consent-time
   changes. Final pathname/content races and installed tool trust remain.
 
+- Python mutation-layer fixtures exercise existing pin/package/tool
+  authorization, reviewed-fact revalidation, exact backend arguments,
+  unrelated-data preservation and PyPI failure cleanup. Strict recording
+  managers and response writers are constrained to their disposable scope,
+  with escape canaries. This is additional T3/T5/T8 test evidence and does
+  not certify native package transactions or add a new runtime control.
+
 - Git publication and cleanup proofs ignore replacement refs and disable
   legacy grafts for each proof invocation. Explicit force
   leases require integration of the leased tip into the current local branch

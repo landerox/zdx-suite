@@ -117,6 +117,7 @@ test/
 ├── env_dotenv.bats        Environment dotenv parser, hygiene, and JSON report
 ├── py_contract.bats       frozen Python public-surface parity
 ├── py_safety.bats         Python environment, package, and tool boundaries
+├── py_mutation_layers.bats Python pin, package, tool, and query behavior
 ├── py_rebuild.bats        Python staged .venv rebuild, scope, and rollback
 ├── zdx_status.bats        zdx status routing, probes, text, and JSON schema
 ├── zdx_widgets.bats       ZLE insert widgets, quoting, and key binding rules
@@ -661,6 +662,14 @@ cross-platform terminal behavior remain manual boundaries.
 
 ### Python coverage
 
+`py_mutation_layers.bats` adds public pin, four package-backend and uv/pipx
+tool workflows, changed reviewed facts, genuine environment children,
+malformed/oversized/failed PyPI responses, closed streams and cleanup.
+Strict fixture guards reject tool-marker and response-path escapes.
+Recording backends preserve unrelated markers and execute no host package or
+interpreter mutation; returned interruption statuses remain separate from
+native signal acceptance.
+
 | File | Covered boundary |
 | --- | --- |
 | `py.bats` | Double/failed sourcing, help and stream behavior, menu-record validation, the project scope line, read-only multi-select batches with step results, summary, verdict, and rerun hints, cancellation without a batch, and foreground result capture |
@@ -675,8 +684,8 @@ the rebuild relocation tests also create disposable environments with
 installed uv offline, without runtime or package downloads. No host
 interpreter or package installation is changed.
 `py_platform.bats` covers the refusal of a mount below an environment before
-removal on both mount-check branches. Poetry/TOML ambiguity, PyPI response
-bounds, inventory overflow, exact multi-backend upgrade revalidation, a mount
+removal on both mount-check branches. Poetry/TOML ambiguity,
+inventory overflow, exact multi-backend upgrade revalidation, a mount
 that appears during quarantine, and `.virtualenvs` count bounds still require
 focused regression cases.
 
