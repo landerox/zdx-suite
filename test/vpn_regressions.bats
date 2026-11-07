@@ -65,11 +65,12 @@ write_regression_profile() {
   [ "$status" -eq 0 ]
 }
 
-@test "vpn regressions: curl receives bounded HTTPS-only arguments before the URL" {
-  export VPN_CURL_ARGS_LOG="$HOME/curl.args"
+@test "vpn regressions: curl keeps the URL on stdin with bounded HTTPS-only arguments" {
+  export VPN_CURL_ARGS_LOG="$HOME/curl.args" VPN_CURL_CONFIG_LOG="$HOME/curl.config"
   cat > "$TEST_MOCK_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$VPN_CURL_ARGS_LOG"
+cat > "$VPN_CURL_CONFIG_LOG"
 printf '%s\n' '{"ip":"203.0.113.7"}'
 EOF
   chmod +x "$TEST_MOCK_BIN/curl"
@@ -84,7 +85,11 @@ EOF
     [[ "$args" == *$'"'"'--proto\n=https\n'"'"'* ]] || return 3
     [[ "$args" == *$'"'"'--proto-redir\n=https\n'"'"'* ]] || return 4
     [[ "$args" == *$'"'"'--max-filesize\n262144\n'"'"'* ]] || return 5
-    [[ "$args" == *$'"'"'\n--\nhttps://example.com/status'"'"'* ]] || return 6
+    [[ "$args" == *$'"'"'--config\n-'"'"'* ]] || return 6
+    [[ "$args" != *"https://example.com/status"* ]] || return 7
+    [[ "$(<"$VPN_CURL_CONFIG_LOG")" == "url = \"https://example.com/status\"" ]] || return 8
+    [[ "$args" == -q$'"'"'\n'"'"'* && "$args" == *$'"'"'--max-time\n4\n'"'"'* \
+      && "$args" == *$'"'"'--connect-timeout\n2\n'"'"'* ]] || return 9
   '
 
   [ "$status" -eq 0 ]

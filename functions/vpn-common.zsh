@@ -1462,6 +1462,27 @@ _vpn_sudo_exec() {
 # to reporting an unknown state rather than escalating.
 _vpn_sudo_probe() {
   (( $# > 0 )) || return 2
+  # This bounded mode is used only for the retained-copy inventory. Existing
+  # probes keep their established protocol until their owning change.
+  if [[ "$1" == --timeout ]]; then
+    (( $# >= 3 )) || return 2
+    local probe_seconds="$2" sudo_program=""
+    [[ "$probe_seconds" == <1-600> && ${#probe_seconds} -le 3 ]] || return 2
+    shift 2
+    _vpn_bounded_ready || return 1
+    sudo_program=$(whence -p -- sudo 2>/dev/null) || return 1
+    [[ "$sudo_program" == /* && -f "$sudo_program" && -x "$sudo_program" ]] || return 1
+    local -a reply=() cache_argv=() probe_argv=()
+    _vpn_privileged_argv true || return 1
+    cache_argv=("${reply[@]}")
+    _vpn_privileged_argv "$@" || return 1
+    probe_argv=("${reply[@]}")
+    _vpn_run_with_timeout "$probe_seconds" "$sudo_program" -n \
+      "${cache_argv[@]}" </dev/null >/dev/null 2>&1 || return $?
+    _vpn_run_with_timeout "$probe_seconds" "$sudo_program" -n -- \
+      "${probe_argv[@]}" </dev/null 2>/dev/null
+    return $?
+  fi
   local -a reply=()
   _vpn_privileged_argv "$@" || return 1
   local -a privileged_argv=("${reply[@]}")
@@ -1872,6 +1893,7 @@ _vpn_ensure_wg_access() {
 # Runs `wg` unprivileged first and only falls back to an already-warm sudo
 # cache. It never triggers an authentication prompt from a read path.
 _vpn_run_wg() {
+  local -x WG_HIDE_KEYS=always
   command -v wg &>/dev/null || return 1
 
   if command wg "$@" 2>/dev/null; then
@@ -1970,9 +1992,10 @@ _vpn_tunnel_device() {
 }
 
 _vpn_get_iface_details() {
+  setopt LOCAL_OPTIONS PIPE_FAIL
   local iface="${1:-}" REPLY=""
   _vpn_tunnel_device "$iface" || return 1
-  _vpn_run_wg show "$REPLY"
+  _vpn_run_wg show "$REPLY" | _vpn_redact_key_lines
 }
 
 # stdout: one profile name per line.
@@ -2071,8 +2094,8 @@ _vpn_backup_state() {
   print -r -- "unknown"
 }
 
-# Reports a profile's .conf.pre-restore undo copy. The undo file never enters
-# the *.conf inventory, so this state is its only visibility surface.
+# Reports a live profile's .conf.pre-restore undo copy. It stays out of the
+# *.conf inventory; vpn-config-dir also lists retained orphaned copies.
 _vpn_pre_restore_state() {
   local iface="${1:-}"
   local conf_file undo_file
@@ -2111,21 +2134,30 @@ _vpn_pre_restore_state() {
   print -r -- "unknown"
 }
 
-# Secrets are removed before any excerpt reaches the terminal, a preview, or a
-# report. The line cap bounds output from an arbitrarily large file.
-_vpn_redact_stream() {
-  command head -c "$_VPN_MAX_PREVIEW_BYTES" \
-    | command awk '
-      NR > 35 { exit }
+# Shared by live wg text and profile excerpts. Comments and inline copies of
+# rotated keys are still credentials; omit the whole line carrying them.
+_vpn_redact_key_lines() {
+  emulate -L zsh
+  local -x LC_ALL=C
+  local max_lines="${1:-0}"
+  [[ "$max_lines" == <-> ]] || return 2
+  command awk -v max_lines="$max_lines" '
+      max_lines && NR > max_lines { exit }
       {
         # wireguard-tools removes all whitespace before matching keys, so
         # "Private Key = ..." is still a secret.
         lowered = tolower($0)
         gsub(/[[:space:]]/, "", lowered)
-        if (lowered !~ /^(privatekey|presharedkey)=/) {
+        if (lowered !~ /(privatekey|presharedkey)[=:]/) {
           print
         }
       }'
+}
+
+# Secrets are removed before any excerpt reaches the terminal, a preview, or a
+# report. The byte and line caps retain the existing profile-excerpt bounds.
+_vpn_redact_stream() {
+  command head -c "$_VPN_MAX_PREVIEW_BYTES" | _vpn_redact_key_lines 35
 }
 
 _vpn_redacted_config_excerpt() {

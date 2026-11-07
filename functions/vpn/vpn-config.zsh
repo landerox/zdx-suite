@@ -651,6 +651,9 @@ vpn-config-restore() {
   fi
   _vpn_blank
   _vpn_table "$plan_header" "${plan_rows[@]}"
+  if [[ "$conf_fingerprint" != missing && "$undo_fingerprint" != missing ]]; then
+    _vpn_dim "The existing pre-restore copy ${undo_file:t} contains credentials and will be replaced."
+  fi
 
   if _vpn_state_iface_is_active "$iface"; then
     _vpn_warn "$iface is currently active; reconnect it after restoring."
@@ -710,6 +713,57 @@ vpn-config-restore() {
   return 1
 }
 
+# stdout: safe retained-copy basenames and kinds, bounded before publication.
+# Protected directories use the same fixed, nonprompting privileged read path.
+_vpn_config_copy_inventory() {
+  emulate -L zsh
+  setopt PIPE_FAIL
+  local LC_ALL=C
+  local dir candidate basename profile kind state listing=""
+  dir=$(_vpn_config_dir_resolve) || return 1
+  _vpn_config_dir_identity >/dev/null 2>&1 || return 1
+  local -a files=() records=()
+  if [[ -r "$dir" && -x "$dir" ]]; then
+    files=("$dir"/*.conf${VPN_BACKUP_SUFFIX}(N.) "$dir"/*.conf.pre-restore(N.))
+  else
+    listing=$(
+      _vpn_sudo_probe --timeout 5 find "$dir" -maxdepth 1 -type f \
+        '(' -name "*.conf${VPN_BACKUP_SUFFIX}" -o -name '*.conf.pre-restore' ')' -print \
+        | command head -c "$(( _VPN_MAX_PROFILE_BYTES + 1 ))"
+      local -i listing_rc=$?
+      # Preserve trailing newlines until the byte limit has been checked.
+      print -rn -- .
+      exit "$listing_rc"
+    ) || return $?
+    listing="${listing%?}"
+    (( ${#listing} <= _VPN_MAX_PROFILE_BYTES )) || return 1
+    [[ -z "$listing" ]] || files=("${(@f)listing}")
+  fi
+  for candidate in "${(@o)files}"; do
+    [[ "${candidate:h}" == "$dir" ]] || continue
+    basename="${candidate:t}"
+    if [[ "$basename" == *.conf.pre-restore ]]; then
+      profile="${basename%.conf.pre-restore}"
+      kind="pre-restore"
+    elif [[ "$basename" == *.conf${VPN_BACKUP_SUFFIX} ]]; then
+      profile="${basename%.conf${VPN_BACKUP_SUFFIX}}"
+      kind="backup"
+    else
+      continue
+    fi
+    _vpn_validate_iface_name "$profile" || continue
+    state=$(_vpn_profile_path_state "$candidate") || return $?
+    [[ "$state" == safe ]] || continue
+    records+=("$basename"$'\t'"$kind")
+    (( ${#records} <= _VPN_MAX_DIRECTORY_ROWS )) || {
+      _vpn_error "Retained-copy inventory exceeds the safety limit ($_VPN_MAX_DIRECTORY_ROWS)."
+      return 1
+    }
+  done
+  (( ${#records} == 0 )) || print -rl -- "${records[@]}"
+  return 0
+}
+
 # vpn-config-dir
 #   Arguments: --help only.
 #   stdout:    none. The listing is UI and goes to stderr.
@@ -748,9 +802,13 @@ vpn-config-dir() {
   }
   local -a profiles=()
   [[ -n "$raw" ]] && profiles=("${(@f)raw}")
+  local copies_raw=""
+  copies_raw=$(_vpn_config_copy_inventory) || {
+    _vpn_warn "Could not build a safe bounded retained-copy inventory."
+    return 1
+  }
   if (( ${#profiles[@]} == 0 )); then
     _vpn_info "No private, singly linked .conf profiles were found."
-    return 0
   fi
 
   # The undo column appears only when some profile has a pre-restore copy.
@@ -764,15 +822,35 @@ vpn-config-dir() {
     rows+=("${profile}.conf"$'\t'"$backup_state")
     undo_states+=("$undo_state")
   done
-  _vpn_blank
+  if (( ${#rows} > 0 )); then
+    _vpn_blank
+  fi
   if (( with_undo )); then
     local -i row_index=0
     for (( row_index = 1; row_index <= ${#rows[@]}; row_index++ )); do
       rows[row_index]+=$'\t'"${undo_states[row_index]}"
     done
     _vpn_table $'Profile\tBackup\tPre-restore copy' "${rows[@]}"
-  else
+  elif (( ${#rows} > 0 )); then
     _vpn_table $'Profile\tBackup' "${rows[@]}"
+  fi
+  local copy_record copy_file copy_kind copy_profile
+  local -a orphan_rows=()
+  for copy_record in "${(@f)copies_raw}"; do
+    [[ -n "$copy_record" ]] || continue
+    copy_file="${copy_record%%$'\t'*}"
+    copy_kind="${copy_record#*$'\t'}"
+    if [[ "$copy_kind" == pre-restore ]]; then
+      copy_profile="${copy_file%.conf.pre-restore}"
+    else
+      copy_profile="${copy_file%.conf${VPN_BACKUP_SUFFIX}}"
+    fi
+    (( ${profiles[(Ie)$copy_profile]} == 0 )) || continue
+    orphan_rows+=("$copy_file"$'\t'"$copy_kind")
+  done
+  if (( ${#orphan_rows} > 0 )); then
+    _vpn_section "Orphaned credential copies"
+    _vpn_table $'File\tKind' "${orphan_rows[@]}"
   fi
   return 0
 }

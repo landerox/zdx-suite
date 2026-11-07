@@ -219,7 +219,7 @@ _vpn_preview_render() {
       ;;
 
     vpn-profile-rename)
-      _vpn_preview_kv "Renames" "the .conf and its matching backup"
+      _vpn_preview_kv "Renames" "the .conf, backup, and pre-restore copy"
       _vpn_preview_kv "Safety" "disconnects an active profile first"
       ;;
 
@@ -240,7 +240,7 @@ _vpn_preview_render() {
       ;;
 
     vpn-profile-remove)
-      _vpn_preview_kv "Removes" "the profile, and its backup on request"
+      _vpn_preview_kv "Removes" "the profile; backup and pre-restore copy on request"
       _vpn_preview_kv "Safety" "plan, confirmation, and --dry-run"
       ;;
   esac

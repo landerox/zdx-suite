@@ -418,9 +418,9 @@ vpn-ip-info() {
   info=$(_vpn_get_ip_info)
   if [[ -z "$info" ]]; then
     _vpn_warn "Could not fetch public IP from any provider."
-    _vpn_dim "JSON tried:  $(_vpn_ipinfo_json_providers)"
-    _vpn_dim "Plain tried: $(_vpn_ipinfo_plain_providers)"
-    _vpn_dim "Trace tried: $(_vpn_ipinfo_trace_providers)"
+    _vpn_dim "JSON tried:  $(_vpn_provider_summary _vpn_ipinfo_json_providers)"
+    _vpn_dim "Plain tried: $(_vpn_provider_summary _vpn_ipinfo_plain_providers)"
+    _vpn_dim "Trace tried: $(_vpn_provider_summary _vpn_ipinfo_trace_providers)"
     _vpn_dim "Override via VPN_MENU_IPINFO_URLS / VPN_MENU_IPINFO_PLAIN_URLS / VPN_MENU_IPINFO_TRACE_URLS."
     return 0
   fi
@@ -849,9 +849,9 @@ vpn-report() {
   info=$(_vpn_get_ip_info)
   if [[ -z "$info" ]]; then
     _vpn_rpt_bullet "Could not fetch public IP from any provider."
-    _vpn_rpt_bullet "JSON tried: $(_vpn_ipinfo_json_providers)"
-    _vpn_rpt_bullet "Plain tried: $(_vpn_ipinfo_plain_providers)"
-    _vpn_rpt_bullet "Trace tried: $(_vpn_ipinfo_trace_providers)"
+    _vpn_rpt_bullet "JSON tried: $(_vpn_provider_summary _vpn_ipinfo_json_providers)"
+    _vpn_rpt_bullet "Plain tried: $(_vpn_provider_summary _vpn_ipinfo_plain_providers)"
+    _vpn_rpt_bullet "Trace tried: $(_vpn_provider_summary _vpn_ipinfo_trace_providers)"
   else
     local -a info_fields
     info_fields=("${(@s:	:)info}")
@@ -1026,18 +1026,36 @@ _vpn_load_provider_urls() {
 }
 
 _vpn_curl_bounded() {
+  emulate -L zsh
   local url="$1"
   local max_time="${2:-5}"
   local connect_timeout="${3:-3}"
   _vpn_validate_provider_url "$url" || return 1
 
-  command curl -fsS \
+  # Quoted curl config data stays on stdin, never in the process argument list
+  # or a retained file. Disable ambient curlrc diagnostics that could echo it.
+  local config_url="${url//\\/\\\\}"
+  config_url="${config_url//\"/\\\"}"
+  print -r -- "url = \"$config_url\"" | command curl -q -fsS \
     --proto '=https' \
     --proto-redir '=https' \
     --max-filesize "$_VPN_MAX_NETWORK_BYTES" \
     --max-time "$max_time" \
     --connect-timeout "$connect_timeout" \
-    -- "$url"
+    --config - 2>/dev/null
+}
+
+# stdout: validated provider authorities only, without path/query/fragment.
+_vpn_provider_summary() {
+  local -a reply=() authorities=()
+  local url authority
+  if _vpn_load_provider_urls "$1"; then
+    for url in "${reply[@]}"; do
+      authority=$(_vpn_provider_authority "$url") || continue
+      authorities+=("$authority")
+    done
+  fi
+  print -r -- "${${(j:, :)authorities}:-none}"
 }
 
 # stdout: the validated URL authority only, without a path, query, or fragment.

@@ -433,7 +433,7 @@ profile management that do not need the missing tool remain usable.
   report, `VPN_MENU_REPORT_RETENTION` (default 20; `0` keeps everything)
   prunes the oldest reports while always keeping the one just written.
 - `vpn-config-dir` — show a bounded inventory of safe private profiles,
-  backup availability, and any retained `.conf.pre-restore` undo copies; it
+  backup availability, and safe orphaned backup/undo names; it
   is not an unrestricted directory listing.
 
 ### 🗑️ Destructive Actions
@@ -457,10 +457,10 @@ vpn-profile-remove wg0 --yes       # skip the prompt, never the validation
 - Without a terminal and without `--yes`, the command **fails closed** with a
   non-zero status rather than silently doing nothing.
 - `--yes` skips the prompt but never widens the plan: `vpn-profile-remove --yes`
-  **keeps** the backup unless you also pass `--with-backup`.
+  **keeps** both backup and undo copies unless you also pass `--with-backup`.
 - A restore keeps the previous profile as `<name>.conf.pre-restore`, so it can
-  be undone.
-- A rename follows the matching backup, default pointer, and last-used pointer;
+  be undone, and discloses when it will replace an existing undo copy.
+- A rename follows matching backup and undo copies, default and last-used pointers;
   an active profile is included in the plan and disconnected first.
 
 Secrets are never displayed: `PrivateKey` and `PresharedKey` are stripped from
