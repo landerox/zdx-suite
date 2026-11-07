@@ -8,6 +8,14 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: refuse profile creation below an unsearchable existing ancestor before
+  confirmation, authentication or a privileged install attempt.
+
+- VPN: validate supplied profile names before runtime access, renew missing
+  directory and parent identities after authentication, inspect every tool
+  symlink hop, omit unsafe profile inventories and completion candidates,
+  and announce the exact mapped rename/removal and conditional rollback argv.
+
 - VPN: keep IP, DNS and provider validation ASCII under every caller locale,
   refuse all control bytes in profile-directory paths, and validate every
   canonical ancestor before temporary staging.

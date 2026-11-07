@@ -87,6 +87,9 @@ _vpn_menu_profiles() {
   if [[ "$dir" == /* && "${dir:a}" == "${dir:A}" \
     && -d "$dir" && ! -L "$dir" && -r "$dir" && -x "$dir" ]]; then
     local -A metadata=()
+    zstat -H metadata -- "$dir" 2>/dev/null || return 0
+    (( (metadata[uid] == 0 || metadata[uid] == EUID) \
+      && (metadata[mode] & 8#22) == 0 )) || return 0
     for candidate in "$dir"/*.conf(N.); do
       profile_name="${${candidate:t}%.conf}"
       (( ${#profile_name} <= 64 )) || continue
