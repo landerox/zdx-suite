@@ -41,6 +41,7 @@ EOF
 }
 
 teardown() {
+  _zdx_test_dev_preview_diagnostic_dump
   cleanup_sandbox
 }
 
@@ -113,8 +114,11 @@ preview_unsafe_program() {
 }
 
 run_actual_preview() {
+  local diagnostic
+  diagnostic=$(_zdx_test_dev_preview_diagnostic_program)
   run_zsh '
     source "$ZSH_CUSTOM/functions/dev-menu.zsh" || return
+    '"$diagnostic"'
     builtin cd -- "$DEV_PROJECT" || return
     _dev_pypi_check_connectivity() { return 0; }
     _dev_pypi_latest() { print -r -- 1.0.0; }

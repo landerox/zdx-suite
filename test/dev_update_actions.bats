@@ -21,6 +21,7 @@ setup() {
 }
 
 teardown() {
+  _zdx_test_dev_preview_diagnostic_dump
   cleanup_sandbox
 }
 
@@ -147,8 +148,11 @@ gh_release() {
 # Runs Zsh in the project with selected commands hidden from capability
 # probes (HIDE_COMMANDS), so host tools never leak into a test.
 run_actions() {
+  local diagnostic
+  diagnostic=$(_zdx_test_dev_preview_diagnostic_program)
   run run_zsh '
     cd "$DEV_PROJECT" || return 1
+    '"$diagnostic"'
     functions[_dev_have_command_real]="${functions[_dev_have_command]}"
     _dev_have_command() {
       [[ " ${HIDE_COMMANDS:-} " == *" ${1:-} "* ]] && return 1
