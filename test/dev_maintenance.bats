@@ -10,6 +10,63 @@ teardown() {
   cleanup_sandbox
 }
 
+dev_scope_distinct_backup_stems() {
+  export DEV_SCOPE_FIRST="$1" DEV_SCOPE_SECOND="$2"
+  mkdir -p "$DEV_PROJECT/$(dirname "$1")" "$DEV_PROJECT/$(dirname "$2")"
+  printf 'first original\n' > "$DEV_PROJECT/$1"
+  printf 'second original\n' > "$DEV_PROJECT/$2"
+  run run_zsh '
+    cd "$DEV_PROJECT" || return 81
+    DEV_BACKUP_RETENTION=1
+    _dev_backup_project_file "$DEV_SCOPE_FIRST" || return 82
+    first_backup="$_DEV_LAST_BACKUP_FILE"
+    _dev_backup_project_file "$DEV_SCOPE_SECOND" || return 83
+    [[ -f "$first_backup" ]] || return 84
+    [[ "$first_backup" != "$_DEV_LAST_BACKUP_FILE" ]] || return 85
+    [[ "$(<"$first_backup")" == "first original" ]] || return 86
+    [[ "$(<"$_DEV_LAST_BACKUP_FILE")" == "second original" ]] || return 87
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "dev cleanup scope: slash and percent backup names have separate retention" {
+  dev_scope_distinct_backup_stems a/b.yml a%b.yml
+}
+
+@test "dev cleanup scope: leading dot backup names have separate retention" {
+  dev_scope_distinct_backup_stems .action.yml action.yml
+}
+
+@test "dev cleanup scope: hidden and ordinary workflow names have separate retention" {
+  dev_scope_distinct_backup_stems .github/workflows/ci.yml github/workflows/ci.yml
+}
+
+dev_scope_legacy_backup() {
+  export DEV_SCOPE_SOURCE="$1" DEV_SCOPE_LEGACY="$2"
+  mkdir -p "$DEV_PROJECT/$(dirname "$1")" "$DEV_PROJECT/.dev-suite-backups"
+  chmod -- 700 "$DEV_PROJECT/.dev-suite-backups"
+  printf 'current source\n' > "$DEV_PROJECT/$1"
+  printf 'legacy original of uncertain owner\n' \
+    > "$DEV_PROJECT/.dev-suite-backups/$2.20260101_000000.bak"
+  chmod -- 600 "$DEV_PROJECT/.dev-suite-backups/$2.20260101_000000.bak"
+  run run_zsh '
+    cd "$DEV_PROJECT" || return 81
+    DEV_BACKUP_RETENTION=1
+    _dev_backup_project_file "$DEV_SCOPE_SOURCE"
+  '
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DEV_PROJECT/.dev-suite-backups/$2.20260101_000000.bak")" = \
+    'legacy original of uncertain owner' ]
+}
+
+@test "dev cleanup scope: new escaped paths cannot prune ambiguous legacy names" {
+  dev_scope_legacy_backup foo/bar.yml foo%2Fbar.yml
+}
+
+@test "dev cleanup scope: pyproject publication keeps ambiguous legacy copies" {
+  dev_scope_legacy_backup pyproject.toml pyproject.toml
+}
+
 # --- Cleanup planning and boundaries ----------------------------------------
 
 @test "dev cleanup: --dry-run prints the plan and removes nothing" {
@@ -471,8 +528,8 @@ EOF
     for index in 1 2 3 4; do
       # date resolution is one second, so stamp names deterministically.
       _dev_backup_pyproject >/dev/null 2>&1
-      command mv "$DEV_BACKUP_DIR"/pyproject.toml.*.bak \
-        "$DEV_BACKUP_DIR/pyproject.toml.2026010${index}_000000.bak" 2>/dev/null
+      command mv "$DEV_BACKUP_DIR"/.v2-pyproject.toml.*.bak \
+        "$DEV_BACKUP_DIR/.v2-pyproject.toml.2026010${index}_000000.bak" 2>/dev/null
     done
     _dev_backup_pyproject
     [[ -f "$_DEV_LAST_BACKUP_FILE" ]]
@@ -485,23 +542,23 @@ EOF
   [ "$(file_mode "$backup_dir")" = "700" ]
 
   local count
-  count=$(find "$backup_dir" -name 'pyproject.toml.*.bak' | wc -l)
+  count=$(find "$backup_dir" -name '.v2-pyproject.toml.*.bak' | wc -l)
   [ "$count" -eq 2 ]
 
   local backup_file
-  backup_file=$(find "$backup_dir" -name 'pyproject.toml.*.bak' | head -1)
+  backup_file=$(find "$backup_dir" -name '.v2-pyproject.toml.*.bak' | head -1)
   [ "$(file_mode "$backup_file")" = "600" ]
 }
 
-@test "dev state: legacy world-readable backups are pruned without failing the update" {
+@test "dev state: world-readable versioned backups are pruned without failing the update" {
   printf '[project]\nname = "demo"\n' > "$DEV_PROJECT/pyproject.toml"
   local backup_dir="$DEV_PROJECT/.dev-suite-backups"
   mkdir -m 700 -p "$backup_dir"
   local index
   for index in 1 2 3; do
-    printf 'legacy %s\n' "$index" \
-      > "$backup_dir/pyproject.toml.2026010${index}_000000.bak"
-    chmod 644 "$backup_dir/pyproject.toml.2026010${index}_000000.bak"
+    printf 'versioned %s\n' "$index" \
+      > "$backup_dir/.v2-pyproject.toml.2026010${index}_000000.bak"
+    chmod 644 "$backup_dir/.v2-pyproject.toml.2026010${index}_000000.bak"
   done
 
   run run_zsh '
@@ -515,23 +572,23 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Backup saved:"* ]]
-  [[ "$output" == *"LAST_BACKUP:pyproject.toml."* ]]
+  [[ "$output" == *"LAST_BACKUP:.v2-pyproject.toml."* ]]
   [[ "$output" != *"Left an unverified stale backup"* ]]
-  [ ! -e "$backup_dir/pyproject.toml.20260101_000000.bak" ]
-  [ ! -e "$backup_dir/pyproject.toml.20260102_000000.bak" ]
-  [ -f "$backup_dir/pyproject.toml.20260103_000000.bak" ]
-  [ "$(find "$backup_dir" -name 'pyproject.toml.*.bak' | wc -l)" -eq 2 ]
+  [ ! -e "$backup_dir/.v2-pyproject.toml.20260101_000000.bak" ]
+  [ ! -e "$backup_dir/.v2-pyproject.toml.20260102_000000.bak" ]
+  [ -f "$backup_dir/.v2-pyproject.toml.20260103_000000.bak" ]
+  [ "$(find "$backup_dir" -name '.v2-pyproject.toml.*.bak' | wc -l)" -eq 2 ]
 }
 
 @test "dev state: an unprunable stale backup is retained without failing the update" {
   printf '[project]\nname = "demo"\n' > "$DEV_PROJECT/pyproject.toml"
   local backup_dir="$DEV_PROJECT/.dev-suite-backups"
   mkdir -m 700 -p "$backup_dir"
-  printf 'linked\n' > "$backup_dir/pyproject.toml.20260101_000000.bak"
-  chmod 600 "$backup_dir/pyproject.toml.20260101_000000.bak"
-  ln "$backup_dir/pyproject.toml.20260101_000000.bak" "$DEV_PROJECT/second-name"
-  printf 'newer\n' > "$backup_dir/pyproject.toml.20260102_000000.bak"
-  chmod 600 "$backup_dir/pyproject.toml.20260102_000000.bak"
+  printf 'linked\n' > "$backup_dir/.v2-pyproject.toml.20260101_000000.bak"
+  chmod 600 "$backup_dir/.v2-pyproject.toml.20260101_000000.bak"
+  ln "$backup_dir/.v2-pyproject.toml.20260101_000000.bak" "$DEV_PROJECT/second-name"
+  printf 'newer\n' > "$backup_dir/.v2-pyproject.toml.20260102_000000.bak"
+  chmod 600 "$backup_dir/.v2-pyproject.toml.20260102_000000.bak"
 
   run run_zsh '
     cd "$DEV_PROJECT"
@@ -546,9 +603,9 @@ EOF
   [[ "$output" == *"Backup saved:"* ]]
   [[ "$output" == *"Left an unverified stale backup in place:"* ]]
   [[ "$output" == *"Review 1 retained backup manually under:"* ]]
-  [ -f "$backup_dir/pyproject.toml.20260101_000000.bak" ]
+  [ -f "$backup_dir/.v2-pyproject.toml.20260101_000000.bak" ]
   [ "$(cat "$DEV_PROJECT/second-name")" = "linked" ]
-  [ ! -e "$backup_dir/pyproject.toml.20260102_000000.bak" ]
+  [ ! -e "$backup_dir/.v2-pyproject.toml.20260102_000000.bak" ]
 }
 
 write_probe_curl_mock() {
@@ -790,7 +847,7 @@ EOF
   [[ "$output" == *"Could not write a .gitignore into the backup directory"* ]]
   [[ "$output" == *"Backup saved:"* ]]
   [ ! -e "$DEV_PROJECT/.dev-suite-backups/.gitignore" ]
-  [ -n "$(find "$DEV_PROJECT/.dev-suite-backups" -name 'pyproject.toml.*.bak' -print -quit)" ]
+  [ -n "$(find "$DEV_PROJECT/.dev-suite-backups" -name '.v2-pyproject.toml.*.bak' -print -quit)" ]
 }
 
 @test "dev state: reports render without echo -e and stay owner-only" {

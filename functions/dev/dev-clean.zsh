@@ -202,6 +202,10 @@ _dev_clean_limit_nul_stream() {
     fi
     print -rn -- "$candidate"$'\0'
   done
+  if [[ -n "$candidate" ]]; then
+    _dev_error "$label contains an incomplete record."
+    return 1
+  fi
   return 0
 }
 
@@ -251,6 +255,55 @@ _dev_clean_repository_roots() {
     seen[$repository_root]=1
     reply+=("$repository_root")
   done
+  return 0
+}
+
+# Recheck everything a directory removal would erase, without the discovery
+# prunes or depth limit. REPLY explains a refusal; no partial inventory can
+# authorize deletion. Generated clone exceptions affect only repositories.
+_dev_clean_directory_safe_to_remove() {
+  local scan_path="$1" allow_repositories="${2:-0}"
+  local observation="" marker="" repository=""
+  local -i probe_rc=0
+  REPLY="could not be completely checked for protected data"
+  _dev_validate_clean_limit || return 1
+  local -i limit=$(( 10#$DEV_CLEAN_MAX_TARGETS ))
+  [[ "$scan_path" == /* ]] || scan_path="./$scan_path"
+  observation=$(
+    _dev_run_with_timeout 15 find "$scan_path" \
+      \( -name '.git' -o -name HEAD \
+        -o -name '*.duckdb*' -o -name 'duckdb_temp*' \) -print0 \
+      2>/dev/null \
+      | _dev_clean_limit_nul_stream "Cleanup protected-data inventory" "$limit"
+    local -a scan_status=("${pipestatus[@]}")
+    (( scan_status[1] == 130 || scan_status[1] == 143 )) \
+      && return "${scan_status[1]}"
+    (( scan_status[1] == 0 && scan_status[2] == 0 ))
+  ) || probe_rc=$?
+  (( probe_rc == 0 )) || return "$probe_rc"
+  for marker in ${(0)observation}; do
+    case "${marker:t}" in
+      *.duckdb*|duckdb_temp*)
+        REPLY="contains DuckDB data"
+        return 1
+        ;;
+      .git)
+        (( allow_repositories )) && continue
+        REPLY="contains a nested repository"
+        return 1
+        ;;
+      HEAD)
+        (( allow_repositories )) && continue
+        repository="${marker:h}"
+        if [[ -f "$marker" && -d "$repository/objects" \
+          && -d "$repository/refs" ]]; then
+          REPLY="contains a nested repository"
+          return 1
+        fi
+        ;;
+    esac
+  done
+  REPLY=""
   return 0
 }
 
@@ -461,7 +514,7 @@ _dev_clean_collect() {
   (( ${+parameters[_dev_clean_pruned_repositories]} )) \
     && nested_repositories=("${_dev_clean_pruned_repositories[@]}")
   local candidate nested_repository
-  local -i contains_repository=0
+  local -i contains_repository=0 directory_rc=0 allow_repositories=0
   for candidate in "${collected[@]}"; do
     [[ -n "$candidate" ]] || continue
     # Scope is a literal prefix proof. Recanonicalizing here could resolve a
@@ -470,6 +523,21 @@ _dev_clean_collect() {
       _dev_warn "Skipping out-of-scope target: $candidate"
       continue
     }
+    if [[ -d "$candidate" && ! -L "$candidate" ]]; then
+      allow_repositories=0
+      if [[ "${candidate:t}" == .terraform \
+        || ( "$category" == dbt && "$candidate" == "$root/dbt_packages" ) ]]; then
+        allow_repositories=1
+      fi
+      directory_rc=0
+      _dev_clean_directory_safe_to_remove \
+        "$candidate" "$allow_repositories" || directory_rc=$?
+      (( directory_rc == 130 || directory_rc == 143 )) && return "$directory_rc"
+      if (( directory_rc != 0 )); then
+        _dev_warn "Skipping a target that $REPLY: $(_dev_display_escape "${candidate#$root/}")"
+        continue
+      fi
+    fi
     # Removing a directory would also remove a nested repository inside it.
     # Terraform's module cache and dbt's package directory legitimately
     # contain the Git clones that `terraform init` and `dbt deps` recreate.
@@ -614,7 +682,7 @@ _dev_clean_apply() {
   }
   local -a records=("$@")
 
-  local -i removed=0 skipped=0 failed=0
+  local -i removed=0 skipped=0 failed=0 directory_rc=0 allow_repositories=0
   local relative expected_device expected_inode expected_type
   local -a current_identity=()
   local result_summary=""
@@ -653,6 +721,36 @@ _dev_clean_apply() {
         "Refusing target changed after planning: $(_dev_display_escape "$relative")"
       failed=$(( failed + 1 ))
       continue
+    fi
+
+    if [[ "$expected_type" == directory ]]; then
+      allow_repositories=0
+      if [[ "${relative:t}" == .terraform \
+        || ( "$relative" == dbt_packages \
+          && -f ./dbt_project.yml && ! -L ./dbt_project.yml ) ]]; then
+        allow_repositories=1
+      fi
+      directory_rc=0
+      _dev_clean_directory_safe_to_remove \
+        "$relative" "$allow_repositories" || directory_rc=$?
+      (( directory_rc == 130 || directory_rc == 143 )) && return "$directory_rc"
+      if (( directory_rc != 0 )); then
+        _dev_warn "Refusing a target that $REPLY: $(_dev_display_escape "$relative")"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      # The bounded contents observation must not renew a replaced target.
+      _dev_clean_lstat "$relative" || {
+        failed=$(( failed + 1 ))
+        continue
+      }
+      if [[ "${reply[1]}" != "$expected_device" \
+        || "${reply[2]}" != "$expected_inode" \
+        || "${reply[3]}" != "$expected_type" ]]; then
+        _dev_warn "Refusing target changed after planning: $(_dev_display_escape "$relative")"
+        failed=$(( failed + 1 ))
+        continue
+      fi
     fi
 
     # This is deliberately the final operation before rm. The deletion uses

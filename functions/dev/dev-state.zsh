@@ -512,10 +512,10 @@ _dev_state_existing() {
 #   stdout:    none. Progress and results go to stderr.
 #   Effects:   creates DEV_BACKUP_DIR (mode 700, kept out of Git by its own
 #              `.gitignore`; see _dev_state_prepare) and one unique,
-#              atomically published copy named <stem>.<timestamp>[.<n>].bak,
-#              where the stem is the relative path with `/` written as `%`
-#              and leading dots removed (pyproject.toml keeps its own name).
-#              It then prunes old private copies of the same file, keeping it
+#              atomically published .v2-<escaped-path>.<timestamp>[.<n>].bak.
+#              '%' and '/' encode as %25/%2F, and leading dots as %2E.
+#              Ambiguous legacy stems remain outside this reserved namespace.
+#              It then prunes matching copies of the same file, keeping it
 #              plus the newest DEV_BACKUP_RETENTION - 1 prior ones (default
 #              total 5).
 #              Records the published path and source mode in
@@ -548,10 +548,16 @@ _dev_backup_project_file() {
   _dev_owned_file_identity \
     "$source_path" "$relative_path" >/dev/null || return 1
 
-  local backup_stem="${relative_path//\//%}"
+  # Legacy stems discarded leading dots and conflated '/' with '%'. Keep
+  # their ambiguous copies outside the namespace of all newly pruned files.
+  local backup_stem="${relative_path//\%/%25}"
+  backup_stem="${backup_stem//\//%2F}"
+  local leading_dots=""
   while [[ "$backup_stem" == .* ]]; do
+    leading_dots+="%2E"
     backup_stem="${backup_stem#.}"
   done
+  backup_stem=".v2-${leading_dots}${backup_stem}"
   [[ -n "$backup_stem" ]] || {
     _dev_error "Refusing to back up an invalid project path."
     return 1
@@ -679,8 +685,8 @@ _dev_backup_project_file() {
     # Pruning is best effort. The invocation backup is already published and
     # validated above, so a stale copy that cannot be proven prunable is left
     # in place with a warning instead of failing the update that depends on
-    # the new backup. World-readable copies written before state files were
-    # hardened remain prunable: they are owned, singly linked, and regular.
+    # the new backup. Matching versioned copies remain prunable regardless of
+    # mode when they are owned, singly linked, and regular.
     local -a backups=(
       "${backup_dir}/${backup_stem}".[0-9](#c8)_[0-9](#c6)(|.<->).bak(N.om.)
     )

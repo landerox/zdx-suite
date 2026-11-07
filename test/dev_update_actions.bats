@@ -478,7 +478,7 @@ EOF
   [ "$(file_mode "$DEV_PROJECT/.github/workflows/ci.yml")" = 640 ]
   local backup
   backup=$(find "$DEV_PROJECT/.dev-suite-backups" -type f \
-    -name 'github%workflows%ci.yml.*.bak')
+    -name '.v2-%2Egithub%2Fworkflows%2Fci.yml.*.bak')
   [ -n "$backup" ]
   [ "$(file_mode "$backup")" = 600 ]
   cmp -s "$backup" "$TEST_TEMP_DIR/ci.original"

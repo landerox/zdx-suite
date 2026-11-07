@@ -67,7 +67,7 @@ EOF
   [ "$(find "$DEV_PROJECT/.dev-suite-backups" -type f -name '*.bak' \
     | wc -l)" -eq 1 ]
   grep -q 'name = "current"' \
-    "$DEV_PROJECT"/.dev-suite-backups/pyproject.toml.*.bak
+    "$DEV_PROJECT"/.dev-suite-backups/.v2-pyproject.toml.*.bak
 }
 
 @test "dev state: rollback requires an exact backup and never falls back to git" {

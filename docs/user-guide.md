@@ -1894,12 +1894,21 @@ protection is refused.
 Dependency and pre-commit updates take their own owner-only `pyproject.toml`
 backup after authorization and before publication, and `dev-update-actions`
 backs up each workflow file it changes, such as
-`.dev-suite-backups/github%workflows%ci.yml.<timestamp>.bak`; there is no
+`.dev-suite-backups/.v2-%2Egithub%2Fworkflows%2Fci.yml.<timestamp>.bak`; there is no
 separate backup command. Retention always preserves the backup made by the
 current invocation despite clock skew or manipulated mtimes, plus the newest
 `DEV_BACKUP_RETENTION - 1` prior copies of the same file (default total: 5).
+New names use a reserved `.v2-` namespace with distinct escaping for slashes,
+percent signs and leading dots. Older ambiguous names remain untouched for
+manual review and do not count toward new-copy retention.
 
 ### 🧹 Cleanup
+
+Every directory selected for cleanup receives a separate complete check for
+nested/bare repositories and DuckDB data, including under generated/vendor
+trees and beyond the target discovery depth. Unknown, timed-out or incomplete
+observations keep the whole directory. The check repeats after confirmation;
+Cargo or generated-clone classification never overrides database protection.
 
 All cleanup commands compute the exact target set first, show the plan, and only
 then ask for confirmation:
@@ -1913,7 +1922,7 @@ Every one of them supports `--dry-run` (plan only) and `--yes` (skip the prompt,
 never the validation). Cleanup freezes the root's path, device, inode, and type,
 then records each target as a relative path with its own device, inode, and
 type. Root and target identities are checked after authorization and around
-each removal. The filesystem root, your home directory, and a symlinked or
+each removal. The filesystem root, your home directory and its ancestors, and a symlinked or
 replaced project root are refused.
 
 Discovery is NUL-delimited and never traverses `.git`, `*.git`, `.venv`,
