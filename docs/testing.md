@@ -494,6 +494,13 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+VPN privilege/hardening cases cover locale-sensitive IP, DNS and provider
+responses; every ASCII control byte in `VPN_CONFIG_DIR`; public refusal before
+filesystem access; unsafe temporary ancestors; and safe canonical alias or
+sticky-root controls. Network and privilege actors are confined recorders.
+Filesystem-root ownership branches are modeled, and a conditional `/var/lock`
+alias case remains skipped when its required host layout is absent.
+
 `vpn_profile_safety.bats` adds 25 public workflow cases for rename, remove,
 restore and default-clear. Allowlisted sudo and WireGuard fixtures check exact
 plans, decline and nonterminal refusal, explicit consent, post-authentication

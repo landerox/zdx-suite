@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: keep IP, DNS and provider validation ASCII under every caller locale,
+  refuse all control bytes in profile-directory paths, and validate every
+  canonical ancestor before temporary staging.
+
 - System: redact URL credentials, queries and fragments in Git-owned update
   plans. Withhold Authorization, signature and private-key values in WSL
   reports, including derived networking-mode facts and JSON arguments.

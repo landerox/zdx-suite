@@ -145,6 +145,234 @@ EOF
   [ ! -s "$MOCK_SUDO_LOG" ]
 }
 
+@test "vpn trust paths: every ASCII control in VPN_CONFIG_DIR is refused" {
+  run run_zsh '
+    local code octal character observed observation_rc
+    for code in {0..31} 127; do
+      printf -v octal "%03o" "$code"
+      printf -v character "%b" "\\0$octal"
+      VPN_CONFIG_DIR="$HOME/wg${character}dir"
+      observation_rc=0
+      observed=$(_vpn_config_dir_resolve 2>"$HOME/path.stderr") || observation_rc=$?
+      [[ "$observation_rc" == 1 && -z "$observed" ]] || {
+        print -u2 -r -- "control $code returned $observation_rc"
+        return 41
+      }
+      command grep -qF "unsupported control characters" "$HOME/path.stderr" || {
+        print -u2 -r -- "control $code gave an unexpected refusal"
+        command cat -- "$HOME/path.stderr" >&2
+        return 42
+      }
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: public create rejects tab escape and DEL paths before access or sudo" {
+  run run_zsh '
+    local character observation_rc
+    for character in $'"'"'\t'"'"' $'"'"'\033'"'"' $'"'"'\177'"'"'; do
+      VPN_CONFIG_DIR="$HOME/wg${character}dir"
+      observation_rc=0
+      vpn-profile-create wg0 >"$HOME/create.stdout" 2>"$HOME/create.stderr" || observation_rc=$?
+      [[ "$observation_rc" == 1 && ! -s "$HOME/create.stdout" ]] || return 41
+      command grep -qF "unsupported control characters" "$HOME/create.stderr" || return 42
+      [[ ! -e "$VPN_CONFIG_DIR" ]] || return 43
+    done
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: ASCII names and four-field records retain their exact boundary" {
+  run run_zsh '
+    local name record observation_rc
+    for name in wg0 vpn-1 iface_2 iface.3; do
+      _vpn_validate_iface_name "$name" || return 41
+      _vpn_validate_new_iface_name "$name" || return 42
+    done
+    for name in Évpn ٣vpn １vpn vpné; do
+      if _vpn_validate_iface_name "$name"; then return 43; fi
+      if _vpn_validate_new_iface_name "$name"; then return 44; fi
+      observation_rc=0
+      record=$(_vpn_menu_entry Connect vpn-on "Safe profile" "$name" 2>/dev/null) || observation_rc=$?
+      [[ "$observation_rc" == 2 && -z "$record" ]] || return 45
+    done
+    record=$(_vpn_menu_entry "Connect café" vpn-on "Safe profile" wg0) || return 46
+    [[ "$record" == "  Connect café|vpn-on|Safe profile|wg0" ]] || return 47
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+# Both loading modes run exactly the same observation program. The sole
+# optional zstat override models ownership unavailable without real chown.
+vpn_temp_trust_program() {
+  export VPN_TRUST_PROGRAM="$HOME/temp-trust.zsh"
+  cat > "$VPN_TRUST_PROGRAM" <<'ZSH'
+emulate -R zsh
+if [[ "$VPN_TRUST_LOADING" == core ]]; then
+  source "$TEST_SUITE_ROOT/functions.zsh" || exit 90
+else
+  source "$TEST_SUITE_ROOT/functions/vpn-common.zsh" || exit 90
+  (( ! ${+functions[_zdx_resolve_trusted_dir]} )) || exit 91
+fi
+if [[ -n "${VPN_TRUST_OWNER_PATH:-}" ]]; then
+  zmodload -F zsh/stat b:zstat || exit 92
+  local -A root_state=()
+  builtin zstat -LH root_state -- / || exit 93
+  local modeled_uid="$(( EUID + 4242 ))"
+  [[ "$VPN_TRUST_OWNER" != root ]] || modeled_uid="${root_state[uid]}"
+  zstat() {
+    builtin zstat "$@" || return
+    local array_name="" argument="" previous=""
+    for argument in "$@"; do
+      [[ "$previous" == -*H ]] && array_name="$argument"
+      previous="$argument"
+    done
+    [[ -n "$array_name" && "${@[-1]}" == "$VPN_TRUST_OWNER_PATH" ]] || return 0
+    local -A observed=("${(@kvP)array_name}")
+    observed[uid]="$modeled_uid"
+    set -A "$array_name" "${(@kv)observed}"
+  }
+fi
+local observation_rc=0 observed=""
+case "$VPN_TRUST_ACTION" in
+  candidate) observed=$(_vpn_temp_root_candidate "$VPN_TRUST_ROOT") || observation_rc=$? ;;
+  staging)
+    TMPDIR="$VPN_TRUST_ROOT"
+    observed=$(_vpn_make_private_temp_dir zdx-vpn-trust 2>"$HOME/temp.stderr") || observation_rc=$?
+    ;;
+  fallback)
+    unset TMPDIR
+    XDG_RUNTIME_DIR="$VPN_TRUST_ROOT"
+    XDG_CACHE_HOME="$VPN_TRUST_SAFE"
+    observed=$(_vpn_temp_root) || observation_rc=$?
+    ;;
+  *) exit 94 ;;
+esac
+printf '%s\n%s\n' "$observation_rc" "$observed"
+ZSH
+}
+
+@test "vpn trust paths: writable ancestors are refused with and without the core" {
+  mkdir -p "$HOME/shared/private"
+  chmod -- 700 "$HOME/shared/private"
+  export VPN_TRUST_ROOT="$HOME/shared/private" VPN_TRUST_ACTION=candidate
+  vpn_temp_trust_program
+  local loading mode
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    for mode in 770 777 1777; do
+      chmod -- "$mode" "$HOME/shared"
+      run zsh -f "$VPN_TRUST_PROGRAM"
+      [ "$status" -eq 0 ]
+      [ "$output" = 1 ]
+    done
+  done
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: unsafe ancestors block staging before any temporary is created" {
+  mkdir -p "$HOME/shared/private"
+  chmod -- 777 "$HOME/shared"
+  chmod -- 700 "$HOME/shared/private"
+  export VPN_TRUST_ROOT="$HOME/shared/private" VPN_TRUST_ACTION=staging
+  vpn_temp_trust_program
+  local loading
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    run zsh -f "$VPN_TRUST_PROGRAM"
+    [ "$status" -eq 0 ]
+    [ "$output" = 1 ]
+    [ -z "$(ls -A "$VPN_TRUST_ROOT")" ]
+    grep -qF 'TMPDIR is not a safe temporary root' "$HOME/temp.stderr"
+  done
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: foreign ancestors are refused even when sticky" {
+  mkdir -p "$HOME/shared/private"
+  chmod -- 700 "$HOME/shared/private"
+  export VPN_TRUST_ROOT="$HOME/shared/private" VPN_TRUST_ACTION=candidate
+  export VPN_TRUST_OWNER_PATH="$HOME/shared" VPN_TRUST_OWNER=foreign
+  vpn_temp_trust_program
+  local loading mode
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    for mode in 700 1777; do
+      chmod -- "$mode" "$HOME/shared"
+      run zsh -f "$VPN_TRUST_PROGRAM"
+      [ "$status" -eq 0 ]
+      [ "$output" = 1 ]
+    done
+  done
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: a root-owned sticky ancestor remains usable" {
+  mkdir -p "$HOME/sticky/private"
+  chmod -- 1777 "$HOME/sticky"
+  chmod -- 700 "$HOME/sticky/private"
+  export VPN_TRUST_ROOT="$HOME/sticky/private" VPN_TRUST_ACTION=candidate
+  export VPN_TRUST_OWNER_PATH="$HOME/sticky" VPN_TRUST_OWNER=root
+  vpn_temp_trust_program
+  local loading
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    run zsh -f "$VPN_TRUST_PROGRAM"
+    [ "$status" -eq 0 ]
+    [ "$output" = $'0\n'"$VPN_TRUST_ROOT" ]
+  done
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: trusted aliases create private staging under their canonical directory" {
+  mkdir -p "$HOME/physical/private"
+  chmod -- 700 "$HOME/physical" "$HOME/physical/private"
+  ln -s "$HOME/physical" "$HOME/alias"
+  export VPN_TRUST_ROOT="$HOME/alias/private" VPN_TRUST_ACTION=staging
+  vpn_temp_trust_program
+  local loading created
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    run zsh -f "$VPN_TRUST_PROGRAM"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = 0 ]
+    created="${lines[1]}"
+    [[ "$created" == "$HOME/physical/private/zdx-vpn-trust."* ]]
+    [ -d "$created" ]
+    [ "$(file_mode "$created")" = 700 ]
+    rmdir -- "$created"
+  done
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
+@test "vpn trust paths: unsafe implicit runtime roots are skipped for a safe cache root" {
+  mkdir -p "$HOME/shared/private" "$HOME/safe-cache"
+  chmod -- 777 "$HOME/shared"
+  chmod -- 700 "$HOME/shared/private" "$HOME/safe-cache"
+  export VPN_TRUST_ROOT="$HOME/shared/private" VPN_TRUST_ACTION=fallback
+  export VPN_TRUST_SAFE="$HOME/safe-cache"
+  vpn_temp_trust_program
+  local loading
+  for loading in core standalone; do
+    export VPN_TRUST_LOADING="$loading"
+    run zsh -f "$VPN_TRUST_PROGRAM"
+    [ "$status" -eq 0 ]
+    [ "$output" = $'0\n'"$VPN_TRUST_SAFE" ]
+  done
+  [ -z "$(ls -A "$VPN_TRUST_ROOT")" ]
+  [ ! -s "$MOCK_SUDO_LOG" ]
+}
+
 @test "vpn hardening: any symlinked profile-directory component is rejected before sudo" {
   mkdir -p "$HOME/real-config/wireguard"
   ln -s "$HOME/real-config" "$HOME/config-link"
