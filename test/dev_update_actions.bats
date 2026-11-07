@@ -765,7 +765,7 @@ EOF2
 }
 
 write_malformed_newer_tags() {
-  printf '%040s\trefs/tags/v4.99.0\n' '' | tr ' ' g
+  printf '%s\trefs/tags/v4.99.0\n' 'gggggggggggggggggggggggggggggggggggggggg'
   printf '%039d\trefs/tags/v4.98.0\n' 1
   printf '%041d\trefs/tags/v4.97.0\n' 1
   printf '%s refs/tags/v4.96.0\n' "$(sha 4960)"
