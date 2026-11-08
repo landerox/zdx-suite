@@ -58,6 +58,21 @@ if [[ "$backend" == uv && "${1:-}" == --directory ]]; then
     shift 2
   fi
 fi
+if [[ "$backend" == poetry ]]; then
+  [[ $# -ge 5 && "$1" == --no-plugins && "$2" == --no-interaction \
+    && "$3" == --directory && "$4" == "$PY_LAYER_PROJECT" ]] || exit 96
+  root="$4"; shift 4
+  [[ "$PWD" == "$root" && "${VIRTUAL_ENV-unset}" == "$root/.venv" \
+    && "${POETRY_VIRTUALENVS_CREATE-unset}" == false \
+    && "${POETRY_VIRTUALENVS_IN_PROJECT-unset}" == true ]] || exit 96
+  [[ "${POETRY_ACTIVE+x}" != x && "${POETRY_VIRTUALENVS_PATH+x}" != x \
+    && "${POETRY_CONFIG_DIR+x}" != x && "${POETRY_CACHE_DIR+x}" != x \
+    && "${POETRY_DATA_DIR+x}" != x && "${POETRY_HOME+x}" != x \
+    && "${POETRY_PYTHON_INSTALLATION_DIR+x}" != x && "${CONDA_PREFIX+x}" != x \
+    && "${CONDA_DEFAULT_ENV+x}" != x && "${PYTHONHOME+x}" != x \
+    && "${PYTHONPATH+x}" != x && "${PYTHONUSERBASE+x}" != x \
+    && "${__PYVENV_LAUNCHER__+x}" != x ]] || exit 96
+fi
 [[ "$root" == "$PY_LAYER_PROJECT" && "$HOME" == "$TEST_TEMP_DIR/home" ]] \
   || exit 96
 [[ -d "$HOME" && ! -L "$HOME" && -O "$HOME" \
@@ -75,6 +90,8 @@ safe_marker() {
   ' _ "$1"
 }
 case "$backend:$*" in
+  'poetry:--version') printf 'Poetry (version 1.8.5)\n'; exit 0 ;;
+  'poetry:env info --path') printf '%s\n' "$root/.venv"; exit 0 ;;
   'uv:tool list'|'pipx:list --short')
     if [[ "$PY_LAYER_INVENTORY_PARTIAL" == 1 ]]; then
       printf 'ruff v1.0.0\n- ruff\n'
@@ -194,7 +211,11 @@ make_package_layer() {
       printf 'version = 1\n' >"$PY_LAYER_PROJECT/uv.lock" ;;
     poetry-project)
       printf '[tool.poetry]\nname = "demo"\nversion = "1.0.0"\n' >"$PY_LAYER_PROJECT/pyproject.toml"
-      printf 'lock-version = "2.0"\n' >"$PY_LAYER_PROJECT/poetry.lock" ;;
+      printf 'lock-version = "2.0"\n' >"$PY_LAYER_PROJECT/poetry.lock"
+      mkdir -p "$PY_LAYER_PROJECT/.venv/bin"
+      printf 'version = 3.12.1\n' >"$PY_LAYER_PROJECT/.venv/pyvenv.cfg"
+      cp "$PY_LAYER_MODEL" "$PY_LAYER_PROJECT/.venv/bin/python"
+      chmod -- 755 "$PY_LAYER_PROJECT/.venv/bin/python" ;;
     uv-environment|python-environment)
       mkdir -p "$PY_LAYER_PROJECT/.venv/bin"
       printf 'version = 3.12.1\n' >"$PY_LAYER_PROJECT/.venv/pyvenv.cfg"
@@ -278,7 +299,7 @@ assert_unrelated_preserved() {
   make_package_layer poetry-project
   run run_py_layer_zsh 'package-install ruff --dev --yes && package-uninstall ruff --yes'
   [ "$status" -eq 0 ]
-  [ "$(cat "$PY_LAYER_LOG")" = $'poetry\tadd\t--group\tdev\truff\npoetry\tremove\truff' ]
+  [ "$(cat "$PY_LAYER_LOG")" = "$(printf 'poetry\t--no-plugins\t--no-interaction\t--directory\t%s\tadd\t--group\tdev\truff\npoetry\t--no-plugins\t--no-interaction\t--directory\t%s\tremove\truff' "$PY_LAYER_PROJECT" "$PY_LAYER_PROJECT")" ]
   [ "$(cat "$PY_LAYER_ENV")" = "$(printf '%s|unset|unset|unset\n%s|unset|unset|unset' "$PY_LAYER_PROJECT" "$PY_LAYER_PROJECT")" ]
   assert_unrelated_preserved
 }

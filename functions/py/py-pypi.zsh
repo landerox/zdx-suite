@@ -64,9 +64,176 @@ try:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(2)
-raise SystemExit(0 if isinstance(data.get("tool", {}).get("poetry"), dict) else 1)
+tool = data.get("tool", {})
+if not isinstance(tool, dict):
+    raise SystemExit(2)
+if "poetry" not in tool:
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(tool["poetry"], dict) else 2)
 ' "$pyproject" </dev/null >/dev/null 2>&1
 }
+
+# Read-only identity of the selected installed Poetry program. Package
+# transactions keep this exact external executable instead of resolving PATH
+# again inside the mutation. System-owned and user-owned installations work.
+_py_poetry_program_fingerprint() {
+  emulate -L zsh
+  local program="$1" expected="${2:-}" checksum fingerprint
+  local -A before=() after=()
+  _py_system_root_uid || return 1
+  local -i root_uid="$REPLY"
+  [[ "$program" == /* && "$program" == "${program:A}" \
+    && "$program" != *[[:cntrl:]]* && -f "$program" && ! -L "$program" \
+    && -x "$program" ]] && zstat -LH before -- "$program" || return 1
+  (( (before[uid] == EUID || before[uid] == root_uid) \
+    && (before[mode] & 8#22) == 0 && before[nlink] == 1 \
+    && before[size] > 0 && before[size] <= 16 * 1024 * 1024 )) || return 1
+  _py_validate_ancestor_chain "${program:h}" || return 1
+  checksum=$(_py_capture_bounded_output 16384 "Poetry executable fingerprint" \
+    10 cksum "$program") || return $?
+  zstat -LH after -- "$program" || return 1
+  local field
+  fingerprint="$program"
+  for field in device inode uid mode nlink size mtime ctime; do
+    [[ "${before[$field]}" == "${after[$field]}" ]] || return 1
+    fingerprint+="|${after[$field]}"
+  done
+  fingerprint+="|$checksum"
+  [[ -z "$expected" || "$fingerprint" == "$expected" ]] || {
+    _py_error "The reviewed Poetry executable changed."
+    return 1
+  }
+  REPLY="$fingerprint"
+}
+
+# A child-only environment binds Poetry to an existing reviewed environment.
+# Keep authentication variables private and inherited, while location and
+# environment selectors cannot redirect this transaction. Mutations are not
+# placed under a watchdog; only read-only observations are bounded.
+_py_poetry_context() (
+  emulate -L zsh
+  local mode="$1" root="$2" environment="$3" program="$4"
+  shift 4
+  local parameter_name
+  for parameter_name in ${(k)parameters}; do
+    case "$parameter_name" in
+      POETRY_ACTIVE|POETRY_VIRTUALENVS_*|POETRY_CONFIG_DIR|POETRY_CACHE_DIR|POETRY_DATA_DIR|POETRY_HOME|POETRY_PYTHON_INSTALLATION_DIR)
+        unset "$parameter_name" || return 1 ;;
+    esac
+  done
+  unset VIRTUAL_ENV CONDA_PREFIX CONDA_DEFAULT_ENV PYTHONHOME PYTHONPATH PYTHONUSERBASE \
+    __PYVENV_LAUNCHER__ \
+    || return 1
+  local -x VIRTUAL_ENV="$environment"
+  local -x POETRY_VIRTUALENVS_CREATE=false POETRY_VIRTUALENVS_IN_PROJECT=true
+  builtin cd -q -- "$root" || return 1
+  if [[ "$mode" == probe ]]; then
+    _py_capture_bounded_output 65536 "Poetry scope observation" 10 \
+      "$program" --no-plugins --no-interaction --directory "$root" "$@"
+  elif [[ "$mode" == mutate ]]; then
+    "$program" --no-plugins --no-interaction --directory "$root" "$@" </dev/null
+  else
+    return 2
+  fi
+)
+
+# Scope fields: local environment, environment identity, cfg contents,
+# interpreter identity, local config state, uv lock state, program, program
+# identity, version. The existing package-plan record remains unchanged.
+_py_poetry_scope_snapshot() {
+  emulate -L zsh
+  local plan="$1" REPLY
+  local -a fields=("${(@ps:\t:)plan}") scope=()
+  local root="${fields[2]}" environment="${fields[2]}/.venv" program output
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
+  _py_validate_venv_path "$environment" || {
+    _py_error "Poetry package changes require an existing validated project .venv."
+    _py_info "Create and review that environment explicitly before retrying; no cached or system environment is adopted."
+    return 1
+  }
+  scope=("$environment" "$REPLY")
+  _py_fingerprint_owned_file "$environment/pyvenv.cfg" 65536 || return $?
+  scope+=("$REPLY")
+  _py_fingerprint_venv_python "$environment" || return $?
+  scope+=("$REPLY")
+  _py_snapshot_optional_project_file "$root/poetry.toml" || return $?
+  scope+=("$REPLY")
+  _py_snapshot_optional_project_file "$root/uv.lock" || return $?
+  scope+=("$REPLY")
+  program=$(whence -p poetry 2>/dev/null) || return 1
+  program="${program:A}"
+  _py_poetry_program_fingerprint "$program" || return $?
+  scope+=("$program" "$REPLY")
+  output=$(_py_poetry_context probe "$root" "$environment" "$program" --version) \
+    || return $?
+  [[ "$output" =~ '^Poetry [(]version ([0-9]+)[.]([0-9]+)([.][0-9]+)?([-+][0-9A-Za-z.-]+)?[)]$' \
+    && ${#match[1]} -le 5 && ${#match[2]} -le 5 ]] || {
+    _py_error "Poetry 1.8 or newer with --directory support is required."
+    return 1
+  }
+  (( 10#${match[1]} > 1 \
+    || (10#${match[1]} == 1 && 10#${match[2]} >= 8) )) || {
+    _py_error "Poetry 1.8 or newer with --directory support is required."
+    return 1
+  }
+  scope+=("$output")
+  _py_poetry_scope_revalidate "$plan" facts-only "${scope[@]}" || return $?
+  reply=("${scope[@]}")
+}
+
+_py_poetry_scope_revalidate() {
+  emulate -L zsh
+  local plan="$1" mode="$2" REPLY selected_program selected_environment
+  shift 2
+  local -a fields=("${(@ps:\t:)plan}") scope=("$@")
+  local root="${fields[2]}"
+  [[ "$mode" == facts-only || "$mode" == selected ]] \
+    && (( ${#fields} == 10 && ${#scope} == 9 )) \
+    && [[ "${fields[1]}" == poetry-project && "${scope[1]}" == "$root/.venv" ]] \
+    || return 2
+  local -i pass=0
+  for pass in 1 2; do
+    _py_validate_project_root || return $?
+    [[ "$REPLY" == "$root" ]] || return 1
+    _py_fingerprint_owned_directory "$root" "${fields[4]}" || return $?
+    _py_fingerprint_owned_file "$root/pyproject.toml" 2097152 "${fields[3]}" || return $?
+    _py_snapshot_optional_project_file "$root/poetry.lock" "${fields[6]}" || return $?
+    _py_project_uses_poetry "$root/pyproject.toml" || return $?
+    _py_validate_venv_path "${scope[1]}" "${scope[2]}" || return $?
+    _py_fingerprint_owned_file "${scope[1]}/pyvenv.cfg" 65536 "${scope[3]}" || return $?
+    _py_fingerprint_venv_python "${scope[1]}" "${scope[4]}" || return $?
+    _py_snapshot_optional_project_file "$root/poetry.toml" "${scope[5]}" || return $?
+    _py_snapshot_optional_project_file "$root/uv.lock" "${scope[6]}" || return $?
+    selected_program=$(whence -p poetry 2>/dev/null) || return 1
+    [[ "${selected_program:A}" == "${scope[7]}" ]] || return 1
+    _py_poetry_program_fingerprint "${scope[7]}" "${scope[8]}" || return $?
+    [[ "$mode" == facts-only || "$pass" == 2 ]] && break
+    # Poetry 1.8 constructs VirtualEnv by running its Python even for --path.
+    # This observation therefore belongs strictly after explicit consent.
+    selected_environment=$(_py_poetry_context probe "$root" "${scope[1]}" \
+      "${scope[7]}" env info --path) || return $?
+    [[ "$selected_environment" == "${scope[1]}" ]] || {
+      _py_error "Poetry did not select the reviewed project .venv; refusing mutation."
+      return 1
+    }
+  done
+}
+
+# Revalidation occurs inside the captured execution child, after its cwd or
+# callbacks could have changed, immediately before the exact Poetry mutation.
+_py_run_poetry_scoped() (
+  emulate -L zsh
+  local plan="$1"
+  shift
+  local -a fields=("${(@ps:\t:)plan}") scope=("${@[1,9]}")
+  shift 9 2>/dev/null || return 2
+  [[ "${1:-}" == -- ]] || return 2
+  shift
+  builtin cd -q -- "${fields[2]}" || return 1
+  _py_poetry_scope_revalidate "$plan" selected "${scope[@]}" || return $?
+  _py_poetry_context mutate "${fields[2]}" "${scope[1]}" "${scope[7]}" "$@"
+)
 
 _py_snapshot_optional_project_file() {
   local file_path="$1" expected="${2:-}"
@@ -454,6 +621,8 @@ _py_run_package_change() {
   local package_name="$4"
   local -i development=${5:-0}
   local -i operation_rc=0
+  local poetry_plan="${6:-}"
+  local -a poetry_scope=("${@[7,-1]}")
 
   # Backend output is captured privately and replayed only on failure.
   local REPLY
@@ -473,17 +642,23 @@ _py_run_package_change() {
         remove "$package_name" || operation_rc=$?
       ;;
     poetry-project:install)
+      (( ${#poetry_scope} == 9 )) || return 2
       local -a poetry_args=(add)
       (( development )) && poetry_args+=(--group dev)
-      _py_command_display poetry "${poetry_args[@]}" "$package_name"
+      _py_command_display "${poetry_scope[7]}" --no-plugins --no-interaction \
+        --directory "$target" "${poetry_args[@]}" "$package_name"
       _py_run_captured "$REPLY" \
-        command poetry "${poetry_args[@]}" "$package_name" \
+        _py_run_poetry_scoped "$poetry_plan" "${poetry_scope[@]}" \
+        -- "${poetry_args[@]}" "$package_name" \
         || operation_rc=$?
       ;;
     poetry-project:uninstall)
-      _py_command_display poetry remove "$package_name"
+      (( ${#poetry_scope} == 9 )) || return 2
+      _py_command_display "${poetry_scope[7]}" --no-plugins --no-interaction \
+        --directory "$target" remove "$package_name"
       _py_run_captured "$REPLY" \
-        command poetry remove "$package_name" || operation_rc=$?
+        _py_run_poetry_scoped "$poetry_plan" "${poetry_scope[@]}" \
+        -- remove "$package_name" || operation_rc=$?
       ;;
     uv-environment:install)
       _py_command_display uv pip install --python "$target/bin/python" \
@@ -522,6 +697,7 @@ _py_run_package_change() {
 
 _py_package_change() {
   emulate -L zsh
+  local -a reply=() poetry_scope=()
   local operation="$1"
   shift
   local package_name=""
@@ -600,6 +776,15 @@ _py_package_change() {
   backend_record="${backend_record#*$'\t'}"
   local poetry_lock_state="${backend_record%%$'\t'*}"
   local uv_lock_state="${backend_record#*$'\t'}"
+  if [[ "$backend" == poetry-project ]]; then
+    local -i poetry_scope_rc=0
+    _py_poetry_scope_snapshot "$backend_plan" || poetry_scope_rc=$?
+    if (( poetry_scope_rc != 0 )); then
+      _py_error "Could not establish a bound Poetry project and environment."
+      return "$poetry_scope_rc"
+    fi
+    poetry_scope=("${reply[@]}")
+  fi
 
   local backend_label="" verb=installed REPLY
   case "$backend" in
@@ -629,6 +814,13 @@ _py_package_change() {
   fi
   [[ "$lock_file" == - ]] \
     || _py_label "Lockfile" "${lock_file:t} (${lock_state%%:*})"
+  if [[ "$backend" == poetry-project ]]; then
+    _py_command_display "${poetry_scope[1]}"
+    _py_label "Environment" "$REPLY"
+    _py_command_display "${poetry_scope[1]}/bin/python"
+    _py_label "Interpreter" "$REPLY"
+    _py_label "Poetry" "${poetry_scope[9]}"
+  fi
   # Frozen identities are revalidated after authorization, not displayed.
   _py_debug "Frozen project root identity: $root_fingerprint"
   [[ "$operation" == install ]] \
@@ -676,6 +868,7 @@ _py_package_change() {
           _py_error "The Poetry project marker changed after review."
           return 1
         }
+        _py_poetry_scope_revalidate "$backend_plan" selected "${poetry_scope[@]}" || return $?
       else
         _py_check_command uv || return 1
       fi
@@ -704,7 +897,8 @@ _py_package_change() {
   esac
 
   _py_run_package_change \
-    "$operation" "$backend" "$target" "$package_name" "$development"
+    "$operation" "$backend" "$target" "$package_name" "$development" \
+    "$backend_plan" "${poetry_scope[@]}"
   local operation_rc=$?
   (( operation_rc == 0 )) || {
     _py_error "Package $operation failed (status $operation_rc)."

@@ -581,6 +581,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   with escape canaries. This is additional T3/T5/T8 test evidence and does
   not certify native package transactions or add a new runtime control.
 
+- Poetry package mutations bind an existing validated project-local `.venv`,
+  its interpreter/configuration, project metadata and the installed manager.
+  Fixed project arguments, a child-only environment and scrubbed location
+  selectors prevent cached/system environment redirection. The environment
+  path query runs after consent because it can execute project Python.
+  Malformed Poetry tables cannot fall through to uv, and distribution names
+  are ASCII before probes. Confined backend recorders exercise these controls;
+  installed managers/libraries and concurrent pathname replacement remain
+  trusted or residual boundaries, without native package acceptance.
+
 - Git publication and cleanup proofs ignore replacement refs and disable
   legacy grafts for each proof invocation. Explicit force
   leases require integration of the leased tip into the current local branch

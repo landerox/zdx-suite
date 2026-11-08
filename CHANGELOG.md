@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Python: bind Poetry mutations to an existing reviewed project-local `.venv`
+  and manager, refuse malformed Poetry metadata without fallback, and enforce
+  ASCII distribution names before backend probes.
+
 - Developer: restore exact pre-commit metadata after interrupted locks, show
   credential-safe private dependency diffs before authorization, isolate Git
   tag queries from caller configuration, and validate temporary ancestors.
