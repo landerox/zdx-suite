@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Environment: avoid quadratic dotenv text scans, quarantine malformed PEM
+  blocks and encoded-looking names, and reject NUL throughout quoted spans
+  without disclosing payloads in text or JSON.
+
 - File: bind trash moves to their published reservation and private container,
   preserve interruption status through compensation and record cleanup, and
   validate complete purge trees before review or deletion. Reviewed `--all`
