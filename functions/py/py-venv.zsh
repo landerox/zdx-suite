@@ -1355,52 +1355,84 @@ _py_quarantine_and_remove_venv() {
     return 1
   }
 
-  command mv -- "$target" "$quarantine_target" || {
-    local move_rc=$?
-    command rmdir -- "$quarantine_dir" 2>/dev/null
-    _py_error "Could not quarantine the environment (status $move_rc)."
-    return "$move_rc"
-  }
-  [[ ! -e "$target" && ! -L "$target" ]] \
-    && _py_fingerprint_owned_directory \
-      "$quarantine_dir" "$quarantine_fingerprint" \
-    && _py_validate_quarantined_venv \
-      "$quarantine_target" "$fingerprint" || {
-    _py_error "Quarantine validation failed; no recursive deletion was attempted."
-    _py_warn "Recovery path retained: $quarantine_target"
-    _py_info "Recovery: inspect that path and move it back to $target only while the target remains absent."
-    return 1
-  }
+  {
+    command mv -- "$target" "$quarantine_target" || {
+      local -i move_rc=$?
+      command rmdir -- "$quarantine_dir" 2>/dev/null
+      _py_error "The environment quarantine command failed (status $move_rc)."
+      return "$move_rc"
+    }
+    validation_rc=0
+    [[ ! -e "$target" && ! -L "$target" ]] \
+      && _py_fingerprint_owned_directory \
+        "$quarantine_dir" "$quarantine_fingerprint" \
+      && _py_validate_quarantined_venv \
+        "$quarantine_target" "$fingerprint" || validation_rc=$?
+    (( validation_rc == 0 )) || {
+      _py_error "Quarantine validation failed; no recursive deletion was attempted."
+      return "$validation_rc"
+    }
 
-  _py_assert_no_mounts_under "$quarantine_target" || {
-    _py_error "The quarantined environment was not deleted."
-    _py_warn "Recovery path retained: $quarantine_target"
-    _py_info "Recovery: inspect that path and move it back to $target only while the target remains absent."
-    return 1
-  }
-  _py_fingerprint_owned_directory \
-    "$quarantine_dir" "$quarantine_fingerprint" \
-    && _py_validate_quarantined_venv \
-      "$quarantine_target" "$fingerprint" || {
-    _py_error "The quarantine changed immediately before deletion."
-    _py_warn "Recovery path retained: $quarantine_target"
-    _py_info "Recovery: inspect that path and move it back to $target only while the target remains absent."
-    return 1
-  }
-  command rm -rf -- "$quarantine_target" || {
-    local remove_rc=$?
-    _py_error "Quarantined environment deletion failed (status $remove_rc)."
-    _py_warn "Inspect the recovery path before restoring or deleting it: $quarantine_target"
-    return "$remove_rc"
-  }
-  [[ ! -e "$quarantine_target" && ! -L "$quarantine_target" ]] || {
-    _py_error "The quarantine still contains environment data."
-    _py_warn "Recovery path retained: $quarantine_target"
-    return 1
-  }
-  command rmdir -- "$quarantine_dir" || {
-    _py_warn "The empty quarantine directory remains: $quarantine_dir"
-    return 1
+    _py_assert_no_mounts_under "$quarantine_target" || {
+      local -i mount_rc=$?
+      _py_error "The quarantined environment was not deleted."
+      return "$mount_rc"
+    }
+    validation_rc=0
+    _py_fingerprint_owned_directory \
+      "$quarantine_dir" "$quarantine_fingerprint" \
+      && _py_validate_quarantined_venv \
+        "$quarantine_target" "$fingerprint" || validation_rc=$?
+    (( validation_rc == 0 )) || {
+      _py_error "The quarantine changed immediately before deletion."
+      return "$validation_rc"
+    }
+    command rm -rf -- "$quarantine_target" || {
+      local -i remove_rc=$?
+      _py_error "Quarantined environment deletion failed (status $remove_rc)."
+      return "$remove_rc"
+    }
+    [[ ! -e "$quarantine_target" && ! -L "$quarantine_target" ]] || {
+      _py_error "The quarantine still contains environment data."
+      return 1
+    }
+    command rmdir -- "$quarantine_dir" || return $?
+  } always {
+    # mv may have completed before an interrupt prevents its caller from
+    # updating a flag. Inspect the exact paths, never restore or delete data
+    # from this reporting block, and do not assume pyvenv.cfg survived rm.
+    if ! { [[ -x "$parent" ]] \
+      && _py_fingerprint_owned_directory \
+        "$parent" "$parent_fingerprint" >/dev/null 2>&1; }; then
+      _py_warn "Quarantine path retained with unverified identity: $quarantine_dir"
+      _py_info "The parent could not be verified; inspect the quarantine and its contents manually."
+    elif [[ -e "$quarantine_target" || -L "$quarantine_target" ]]; then
+      local -A recovery_state=()
+      if _py_fingerprint_owned_directory \
+          "$quarantine_dir" "$quarantine_fingerprint" >/dev/null 2>&1 \
+        && [[ -d "$quarantine_target" && ! -L "$quarantine_target" ]] \
+        && zstat -LH recovery_state -- "$quarantine_target" 2>/dev/null \
+        && [[ "${recovery_state[device]}:${recovery_state[inode]}" == "$fingerprint" ]] \
+        && (( recovery_state[uid] == EUID \
+          && (recovery_state[mode] & 8#170000) == 8#040000 \
+          && (recovery_state[mode] & 8#22) == 0 )); then
+        _py_warn "Recovery path retained: $quarantine_target"
+        _py_info "Remaining data may be incomplete. Inspect that path and move it back to $target only while the target remains absent."
+      else
+        _py_warn "Quarantine path retained with unverified identity: $quarantine_target"
+        _py_info "Inspect that path manually before restoring or deleting anything."
+      fi
+    elif [[ -e "$quarantine_dir" || -L "$quarantine_dir" ]]; then
+      if [[ -x "$quarantine_dir" ]] \
+        && _py_fingerprint_owned_directory \
+          "$quarantine_dir" "$quarantine_fingerprint" >/dev/null 2>&1; then
+        _py_warn "Quarantine path retained: $quarantine_dir"
+        _py_info "The environment path is absent; inspect the quarantine before cleaning it up."
+      else
+        _py_warn "Quarantine path retained with unverified identity: $quarantine_dir"
+        _py_info "Its contents could not be observed; inspect that path manually before restoring or deleting anything."
+      fi
+    fi
   }
   local REPLY
   _py_command_display "$target"

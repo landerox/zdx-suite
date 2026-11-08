@@ -170,6 +170,19 @@ exact object into a private same-parent quarantine before recursive
 deletion. An incomplete removal retains and reports its
 recovery path.
 
+An `always` block observes surviving state after failure or interruption,
+including Ctrl-C after the rename but before bookkeeping. A verified retained
+environment is reported only after its private parent and original
+device/inode, owner and directory mode are checked. Its files may be partially
+deleted; the guidance permits manual restoration only while the original
+target is absent. An unverified or changed identity receives manual
+inspection guidance instead. If only the quarantine directory remains, the
+report names that directory without claiming recoverable environment data.
+This reporting performs no automatic restoration or further deletion and
+preserves interruption status. Success requires both paths to be absent.
+An inaccessible or changed parent makes the contents unverified; a failed
+existence probe alone cannot establish that environment data is absent.
+
 ## Environment rebuild
 
 `venv-rebuild` replaces exactly one environment: the project `.venv` of a uv
