@@ -674,6 +674,14 @@ remain manual boundaries.
 
 ### Environment coverage
 
+`env_dotenv_git_safety.bats` exercises real private filesystem-monitor canaries,
+inherited monitor configuration, ownership refusals, damaged and dangling Git
+metadata, known non-repositories and discovery ceilings, physical `link/..`
+inputs/examples, and a later alias replacement that must not redirect
+counterpart observations. It asserts separate streams and exact JSON facts;
+Git repositories, hook scripts and filesystem changes stay in disposable HOME.
+No network, host Git configuration or clipboard is used.
+
 `env_dotenv_privacy.bats` covers bounded large escaped/unquoted input and
 repeated unterminated quotes, preserved grammar and duplicate ordering,
 multiline NUL, conservative PEM quarantine and encoded-name withholding in

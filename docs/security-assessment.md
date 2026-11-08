@@ -473,6 +473,15 @@ snippet and executes unintended code.
   records never become shell preview text or computed commands. Foreground
   picker results are captured in private bounded files and revalidated before
   dispatch.
+- Dotenv Git probes explicitly disable `core.fsmonitor`, so reading a copied
+  project's index cannot invoke its configured monitor. Fatal refusal or
+  damaged repository metadata yields unknown facts with a warning. A known
+  outside-work-tree result requires absence inside Git's actual discovery
+  scope, respecting ceilings and filesystem boundaries. Each input's physical
+  parent is resolved once without following its final leaf; reads, Git/sops
+  facts, encrypted-copy observations and JSON paths share that binding.
+  Installed Git and its configuration parser remain trusted; userspace path
+  checks do not eliminate a final same-EUID replacement race.
 - Environment uses an exact-root module loader, explicit dispatch, fixed
   menu previews, foreground private picker capture, and snapshot membership
   checks. It reads no profile files. `env-dotenv` reads a dotenv file and its

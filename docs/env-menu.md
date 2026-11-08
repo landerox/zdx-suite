@@ -121,7 +121,10 @@ is refused rather than silently skipped. Without any example, key comparison
 is reported as not checked and every other check still runs.
 
 Both files are read through a no-follow, non-blocking descriptor whose device
-and inode must match the inspected path. A symbolic link, a directory, a FIFO,
+and inode must match the inspected path. The parent directory is resolved
+physically before `..` is removed, once for each input; that same physical
+parent anchors the read, Git and sops facts, example path and encrypted-copy
+observations. The final file component is not followed: a symbolic link, a directory, a FIFO,
 or another non-regular file is refused, as is a file larger than 1 MiB or
 longer than 10,000 lines. A file owned by another user is read and reported,
 not refused: the check reads data only, so ownership is a hygiene fact rather
@@ -198,7 +201,12 @@ duplicate lists, in text or JSON.
   the ignore rules (`git check-ignore --no-index`). The probes run in the
   file's directory with `--no-optional-locks`, closed stdin, and a 10-second
   deadline; the tracking probe uses literal pathspecs, and repository
-  variables such as `GIT_DIR` are cleared for them. A tracked file prints the
+  variables such as `GIT_DIR` are cleared for them. Command-line
+  `core.fsmonitor=false` prevents an index read from executing a configured
+  monitor. A fatal repository refusal or damaged `.git` entry leaves facts
+  unknown with a warning. Status `128` means outside a work tree only when
+  searchable physical ancestors contain no Git entry within Git's discovery
+  ceilings and filesystem boundary. Git still reads its configuration as data; A tracked file prints the
   exact `git rm --cached -- .env` hint (`git -C DIR rm --cached -- NAME` for a
   file in another directory); a file in a work tree that is neither tracked
   nor ignored is reported as one that could be committed. Without a usable
@@ -300,7 +308,10 @@ The same document, formatted for reading:
 }
 ```
 
-Paths are absolute. `example`, `missing`, `extra`, and `in_sync` are `null`
+Paths are absolute, with their physical parent directories, including inputs
+written through `link/..`; encrypted-counterpart links remain named as the link
+itself. Human display can retain the supplied path spelling.
+`example`, `missing`, `extra`, and `in_sync` are `null`
 when no example exists. A Git fact is `null` when it was not checked, and
 `tracked` and `ignored` are also `null` outside a work tree. `in_sync` is true
 when no key is missing or extra. `sops.config_path` is the canonical path of
