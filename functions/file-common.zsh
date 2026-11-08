@@ -285,6 +285,7 @@ _file_run_archive_tool() {
     shift 2
   fi
   (( $# > 0 )) || return 2
+  _file_revalidate_operation_context || return 1
   # Unexported locals hide each inherited value from the tool, a read-only
   # one too, and the caller's values return with the function.
   local TAR_OPTIONS TAR_READER_OPTIONS TAR_WRITER_OPTIONS TAPE \
@@ -1215,8 +1216,15 @@ _file_collect_paths() {
   }
   _file_require_cmd head "bounded path scanning" || return 1
   local mode="$1"
-  local scan_root="${2:-.}"
+  local requested_root="${2:-.}" scan_root="${2:-.}"
   reply=()
+  _file_current_base "$PWD" || return 1
+  local cwd_base="$REPLY" cwd_identity="" scan_identity=""
+  _file_directory_identity "$cwd_base" || return 1
+  cwd_identity="$REPLY"
+  scan_root="${scan_root:A}"
+  _file_directory_identity "$scan_root" || return 1
+  scan_identity="$REPLY"
 
   local -a find_command=(command find "$scan_root")
   # The junk scan's GNU predicates have a portable Zsh walker for BSD find.
@@ -1297,26 +1305,23 @@ _file_collect_paths() {
     _file_error "Could not create a private path inventory."
     return 1
   }
-  command chmod -- 600 "$inventory_file" 2>/dev/null || {
-    command rm -f -- "$inventory_file" 2>/dev/null
-    return 1
-  }
-  local -A initial_state=() current_state=()
-  if [[ ! -f "$inventory_file" || -L "$inventory_file" \
-    || "$inventory_file" != "${inventory_file:a}" \
-    || "$inventory_file" != "${inventory_file:A}" ]] \
-    || ! zstat -LH initial_state -- "$inventory_file" 2>/dev/null \
-    || (( initial_state[uid] != EUID \
-      || initial_state[nlink] != 1 \
-      || (initial_state[mode] & 8#77) != 0 )); then
-    command rm -f -- "$inventory_file" 2>/dev/null
+  _file_validate_private_temp "$inventory_file" "$temp_root" "zdx-file-scan." file || {
     _file_error "Refusing an unsafe path inventory."
     return 1
-  fi
+  }
+  local -A initial_state=() current_state=() descriptor_state=()
+  zstat -LH initial_state -- "$inventory_file" 2>/dev/null \
+    && (( initial_state[uid] == EUID && initial_state[nlink] == 1 \
+      && initial_state[size] == 0 && (initial_state[mode] & 8#77) == 0 \
+      && (initial_state[mode] & 8#170000) == 8#100000 )) || {
+    _file_error "The private path inventory changed before it was opened."
+    return 1
+  }
   local inventory_identity="${initial_state[device]}:${initial_state[inode]}:${initial_state[mode]}:${initial_state[uid]}:${initial_state[nlink]}"
 
-  local candidate=""
-  local -a scanned_paths=()
+  local candidate="" node="" relative="" content="" chunk=""
+  local -a scanned_paths=() records=()
+  local -i read_rc=0 chunk_bytes=0 total_bytes=0 written_size=0
   local -i count=0 scan_rc=1 cleanup_rc=0
   local -i write_fd=-1 read_fd=-1
   {
@@ -1325,6 +1330,12 @@ _file_collect_paths() {
       _file_error "Could not open the path inventory safely."
       return 1
     fi
+    zstat -H descriptor_state -f "$write_fd" 2>/dev/null \
+      && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
+        == "$inventory_identity" ]] && (( descriptor_state[size] == 0 )) || {
+      _file_error "The opened path inventory does not match the reviewed empty file."
+      return 1
+    }
     setopt local_options pipefail
     "${producer_command[@]}" 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
@@ -1353,15 +1364,55 @@ _file_collect_paths() {
       -- "$inventory_file" 2>/dev/null; then
       return 1
     fi
-    while IFS= read -r -d '' candidate <&$(( read_fd )); do
-      [[ "$candidate" == */.git || "$candidate" == */.git/* \
-        || "$candidate" == */node_modules || "$candidate" == */node_modules/* \
-        || "$candidate" == */.venv || "$candidate" == */.venv/* \
-        || "$candidate" == */.tmp || "$candidate" == */.tmp/* ]] && continue
+    descriptor_state=()
+    zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
+      && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
+        == "$inventory_identity" ]] \
+      && (( descriptor_state[size] == current_state[size] )) || return 1
+    written_size=${descriptor_state[size]}
+    while true; do
+      chunk=""
+      chunk_bytes=0
+      sysread -c chunk_bytes -s 65536 -i "$read_fd" chunk
+      read_rc=$?
+      (( read_rc == 0 )) || break
+      (( total_bytes += chunk_bytes ))
+      (( total_bytes <= _FILE_MAX_PICKER_BYTES )) || return 1
+      content+="$chunk"
+    done
+    (( read_rc == 5 && total_bytes == written_size )) || {
+      _file_error "Could not read the complete path inventory."
+      return 1
+    }
+    descriptor_state=()
+    zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
+      && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
+        == "$inventory_identity" ]] \
+      && (( descriptor_state[size] == written_size )) || return 1
+    if [[ -n "$content" ]]; then
+      [[ "${content[-1]}" == $'\0' && "$content" != $'\0'* \
+        && "$content" != *$'\0\0'* ]] || {
+        _file_error "The path inventory contains an incomplete or empty record."
+        return 1
+      }
+      content="${content%$'\0'}"
+      records=("${(@ps:\0:)content}")
+    fi
+    for candidate in "${records[@]}"; do
+      node="${candidate%/}"
+      [[ "$node" == "${scan_root%/}/"* && "$node" == "${node:a}" ]] || {
+        _file_error "The path inventory contains an out-of-scope record."
+        return 1
+      }
+      relative="${candidate#"${scan_root%/}/"}"
+      [[ "/$relative" == */.git || "/$relative" == */.git/* \
+        || "/$relative" == */node_modules || "/$relative" == */node_modules/* \
+        || "/$relative" == */.venv || "/$relative" == */.venv/* \
+        || "/$relative" == */.tmp || "/$relative" == */.tmp/* ]] && continue
       [[ "$node_filter" == "junk" \
-        && "$candidate" == */(vendor|vendored|site-packages|dist-packages|.tox|.nox|*.git)/* ]] \
+        && "/$relative" == */(vendor|vendored|site-packages|dist-packages|.tox|.nox|*.git)/* ]] \
         && continue
-      candidate="${candidate#./}"
+      [[ "$requested_root" == /* ]] || candidate="${candidate#"${cwd_base%/}/"}"
       _file_path_is_displayable "$candidate" || {
         if [[ "$node_filter" == "junk" ]]; then
           _file_warn "Skipped a path whose name contains control characters."
@@ -1379,6 +1430,12 @@ _file_collect_paths() {
     done
     exec {read_fd}>&-
     read_fd=-1
+    _file_current_base "$PWD" || return 1
+    [[ "$REPLY" == "$cwd_base" ]] || return 1
+    _file_directory_identity "$cwd_base" \
+      && [[ "$REPLY" == "$cwd_identity" ]] || return 1
+    _file_directory_identity "$scan_root" \
+      && [[ "$REPLY" == "$scan_identity" ]] || return 1
     reply=("${scanned_paths[@]}")
     scan_rc=0
   } always {
@@ -1394,7 +1451,10 @@ _file_collect_paths() {
       _file_warn "The path inventory changed; refusing cleanup."
       cleanup_rc=1
     fi
-    (( cleanup_rc == 0 )) || scan_rc=1
+    if (( cleanup_rc != 0 )); then
+      reply=()
+      scan_rc=1
+    fi
   }
   return $scan_rc
 }
@@ -1486,6 +1546,33 @@ _file_select_paths() {
 
 # --- Mutation boundaries ---------------------------------------------------
 
+# REPLY is the physical cwd, after the literal shell name and the kernel's
+# directory are shown to identify the same object. Read-only inventories do
+# not require the mutation layer's owner or mode policy.
+_file_current_base() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local candidate="${1:-$PWD}" base=""
+  local -A named_state=() cwd_state=()
+  [[ "$candidate" == /* && -d "$candidate" ]] \
+    && zstat -H named_state -- "$candidate" 2>/dev/null \
+    && zstat -H cwd_state -- . 2>/dev/null \
+    && [[ "${named_state[device]}:${named_state[inode]}" \
+      == "${cwd_state[device]}:${cwd_state[inode]}" ]] || {
+    if [[ -n "${_file_operation_base_identity:-}" ]]; then
+      _file_error "The reviewed operation base changed before execution; cd into it again."
+    else
+      _file_error "The current directory changed since you entered it; cd into it again."
+    fi
+    return 1
+  }
+  base=$(builtin pwd -P) || return 1
+  zstat -H named_state -- "$base" 2>/dev/null \
+    && [[ "${named_state[device]}:${named_state[inode]}" \
+      == "${cwd_state[device]}:${cwd_state[inode]}" ]] || return 1
+  REPLY="$base"
+}
+
 # REPLY is the canonical operation base. The working directory may be reached
 # through trusted aliases (_file_resolve_trusted_dir), such as macOS /tmp or
 # a root-owned /home link, but the base itself is a real directory, and the
@@ -1494,6 +1581,8 @@ _file_validate_base() {
   emulate -L zsh
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
   local candidate="${1:-$PWD}"
+  _file_current_base "$candidate" || return 1
+  local current_base="$REPLY"
   REPLY=""
   local lexical="${candidate:a}"
   _file_resolve_trusted_dir "$lexical" || {
@@ -1503,7 +1592,8 @@ _file_validate_base() {
   }
   local base="$REPLY"
   REPLY=""
-  [[ -d "$base" && ! -L "$base" && "$base" == "${base:A}" ]] || {
+  [[ -d "$base" && ! -L "$base" && "$base" == "${base:A}" \
+    && "$base" == "$current_base" ]] || {
     _file_error "The operation base must be a real directory."
     return 1
   }
@@ -1520,6 +1610,14 @@ _file_validate_base() {
     return 1
   }
   _file_validate_ancestor_chain "$base" || return 1
+  if [[ -n "${_file_operation_base_identity:-}" ]]; then
+    [[ "$base" == "$_file_operation_base" \
+      && "${base_state[device]}:${base_state[inode]}:${base_state[mode]}:${base_state[uid]}" \
+        == "$_file_operation_base_identity" ]] || {
+      _file_error "The reviewed operation base changed before execution."
+      return 1
+    }
+  fi
   REPLY="$base"
 }
 
@@ -1532,6 +1630,11 @@ _file_validate_base() {
 _file_path_in_base() {
   emulate -L zsh
   local requested="${1-}" base="${2-}" absolute=""
+  REPLY=""
+  [[ "/$requested/" != */../* ]] || {
+    _file_error "Path operands may not contain a '..' component."
+    return 1
+  }
   if [[ "$requested" == /* ]]; then
     absolute="${requested:a}"
   else
@@ -1570,6 +1673,37 @@ _file_directory_identity() {
   [[ -d "$directory" && ! -L "$directory" ]] || return 1
   zstat -LH state -- "$directory" 2>/dev/null || return 1
   REPLY="${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}"
+}
+
+# A coordinator declares this local associative map before reviewing its
+# targets. Captured execution children inherit it with the rest of that plan;
+# no persistent state or target-fingerprint format changes are needed.
+_file_snapshot_parent_identities() {
+  emulate -L zsh
+  local targets_name="$1" target=""
+  local -a targets=("${(@P)targets_name}")
+  (( ${+_file_reviewed_parent_ids} )) || return 2
+  for target in "${targets[@]}"; do
+    _file_directory_identity "${target:h}" || return 1
+    _file_reviewed_parent_ids[$target]="$REPLY"
+  done
+  return 0
+}
+
+# Transaction-local context is inherited by execution subshells and callbacks.
+# Recheck it at the external archive boundary as well as individual targets.
+_file_revalidate_operation_context() {
+  emulate -L zsh
+  if [[ -n "${_file_operation_base_identity:-}" ]]; then
+    _file_validate_base "$_file_operation_base" || return 1
+  fi
+  if (( ${+_file_reviewed_parent_ids} )); then
+    local target=""
+    for target in "${(@k)_file_reviewed_parent_ids}"; do
+      _file_revalidate_parent "$target" "${_file_reviewed_parent_ids[$target]}" || return 1
+    done
+  fi
+  return 0
 }
 
 _file_node_identity() {
@@ -1765,7 +1899,7 @@ _file_validate_mutation_target() {
     _file_error "Refusing an empty or unrepresentable path."
     return 1
   }
-  _file_path_in_base "$target" "$base"
+  _file_path_in_base "$target" "$base" || return 1
   local lexical="$REPLY"
   REPLY=""
   [[ "$lexical" == "$base"/* ]] || {
@@ -1816,6 +1950,9 @@ _file_validate_mutation_target() {
 _file_revalidate_mutation_target() {
   local target="$1"
   local expected_identity="$2"
+  if [[ -n "${_file_operation_base_identity:-}" ]]; then
+    _file_validate_base "$_file_operation_base" || return 1
+  fi
   local -a expected_fields=("${(@s/:/)expected_identity}")
   if (( ${#expected_fields[@]} == 8 \
     && (${expected_fields[3]:-0} & 8#170000) == 8#120000 )); then
@@ -1828,6 +1965,17 @@ _file_revalidate_mutation_target() {
       _file_error "A planned target changed before execution: $target"
       return 1
     }
+  fi
+  if [[ -L "$target" ]]; then
+    _file_resolve_trusted_dir "${target:h}" \
+      && [[ "$REPLY" == "${target:h}" ]] || return 1
+    _file_validate_ancestor_chain "${target:h}" || return 1
+  else
+    _file_validate_ancestor_chain "$target" || return 1
+  fi
+  if (( ${+_file_reviewed_parent_ids} )) \
+    && [[ -n "${_file_reviewed_parent_ids[$target]-}" ]]; then
+    _file_revalidate_parent "$target" "${_file_reviewed_parent_ids[$target]}" || return 1
   fi
   _file_path_fingerprint "$target" || return 1
   [[ "$REPLY" == "$expected_identity" ]] || {
@@ -1843,7 +1991,7 @@ _file_validate_destination_parent() {
   reply=()
   [[ -n "$destination" && "$destination" != *[[:cntrl:]]* \
     && "$destination" != *'|'* ]] || return 1
-  _file_path_in_base "$destination" "$base_dir"
+  _file_path_in_base "$destination" "$base_dir" || return 1
   local absolute="$REPLY"
   REPLY=""
   local parent="${absolute:h}"
@@ -1881,8 +2029,14 @@ _file_revalidate_parent() {
   local destination="$1"
   local expected_identity="$2"
   local parent="${destination:h}"
+  if [[ -n "${_file_operation_base_identity:-}" ]]; then
+    _file_validate_base "$_file_operation_base" || return 1
+  fi
   [[ -d "$parent" && ! -L "$parent" && "$parent" == "${parent:A}" ]] \
     || return 1
+  _file_resolve_trusted_dir "$parent" \
+    && [[ "$REPLY" == "$parent" ]] || return 1
+  _file_validate_ancestor_chain "$parent" || return 1
   _file_directory_identity "$parent" || return 1
   [[ "$REPLY" == "$expected_identity" ]] || {
     _file_error "The destination parent changed after planning."

@@ -258,7 +258,7 @@ _file_delete_revalidate() {
 
 # Deletes an exact reviewed target set from the current operation base.
 # Usage: _file_delete_execute [--warn TEXT | --note TEXT]...
-#          DRY_RUN AUTO_YES TARGET...
+#          [--minimum-bytes N] DRY_RUN AUTO_YES TARGET...
 # DRY_RUN and AUTO_YES are yes or no. Warnings and notes are disclosures
 # printed under the plan in the given order. Every target is revalidated after
 # authorization and before the first mutation; each deletion goes through a
@@ -267,9 +267,16 @@ _file_delete_revalidate() {
 # 130/143 interrupted.
 _file_delete_execute() {
   local -a disclosures=()
-  while [[ "${1-}" == "--warn" || "${1-}" == "--note" ]]; do
+  local -i minimum_bytes=0
+  while [[ "${1-}" == --warn || "${1-}" == --note || "${1-}" == --minimum-bytes ]]; do
     (( $# >= 2 )) || return 2
-    disclosures+=("$1" "$2")
+    if [[ "$1" == --minimum-bytes ]]; then
+      [[ "$2" == <-> && ${#2} -le 16 ]] \
+        && (( 10#$2 >= 1 && 10#$2 <= 1125899906842624 )) || return 2
+      minimum_bytes=$(( 10#$2 ))
+    else
+      disclosures+=("$1" "$2")
+    fi
     shift 2
   done
   local dry_run="$1"
@@ -277,12 +284,30 @@ _file_delete_execute() {
   shift 2
   local -a requested_targets=("$@")
 
+  local _file_operation_base="${_file_operation_base-}"
+  local _file_operation_base_identity="${_file_operation_base_identity-}"
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
+  _file_directory_identity "$base_dir" || return 1
+  _file_operation_base="$base_dir"
+  _file_operation_base_identity="$REPLY"
   _file_delete_plan_targets "$base_dir" "${requested_targets[@]}" \
     || return $?
   local -a targets=("${reply[@]}")
   local identities_text="$REPLY"
+  local -A _file_reviewed_parent_ids=()
+  _file_snapshot_parent_identities targets || return 1
+  if (( minimum_bytes > 0 )); then
+    local identity=""
+    local -a fields=()
+    for identity in "${(@f)identities_text}"; do
+      fields=("${(@s/:/)identity}")
+      (( (fields[3] & 8#170000) == 8#100000 && fields[6] >= minimum_bytes )) || {
+        _file_error "A selected file no longer meets the reviewed minimum size."
+        return 1
+      }
+    done
+  fi
   local target=""
   local noun="file" plural="files"
   # One mount snapshot serves the plan; execution takes a fresh one.

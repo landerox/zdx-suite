@@ -600,6 +600,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   installed managers/libraries and concurrent pathname replacement remain
   trusted or residual boundaries, without native package acceptance.
 
+- File operations bind literal `PWD`, physical path and kernel cwd identity
+  before discovery and review. Raw traversal is refused before normalization;
+  canonical ancestor trust and reviewed immediate-parent identities are
+  renewed before later mutation, including captured archive execution.
+  Private inventory staging is validated before opening, writing or cleanup;
+  descriptors match the reviewed object and only complete bounded NUL records
+  can publish targets. Size and exact junk-name criteria are checked before
+  planning. Confined fixtures cover these controls, while final pathname
+  races and the separate general producer-status mapping gap remain.
+
 - Git publication and cleanup proofs ignore replacement refs and disable
   legacy grafts for each proof invocation. Explicit force
   leases require integration of the leased tip into the current local branch

@@ -65,6 +65,22 @@ malformed or repeated ID, a negative or non-numeric day count, or more than
 
 ## Filesystem and mutation boundary
 
+Operation roots compare the literal shell directory with the kernel working
+directory by device/inode, then bind the physical path to that same object.
+A stale `PWD` cannot redirect discovery or a reviewed mutation. Read-only
+inspection retains its access semantics; mutation applies the additional
+ownership, write-mode and protected-root rules below. Public scan rows remain
+relative even though discovery uses the canonical root and rechecks its
+identity before publication.
+
+Raw `..` components are refused before lexical normalization; ordinary `.`
+components remain supported. Invocation-local identities bind the operation
+base and each reviewed immediate parent across consent and captured child
+execution. Every later target/destination check renews canonical ancestor
+trust and compares the parent's device, inode, owner and mode. Parent mtime
+and link count are not frozen because legitimate child publication changes
+them. These observations retain a final pathname replacement race.
+
 Mutating commands are limited to canonical, owned, symlink-free targets below
 an owned, non-group/world-writable invocation directory. The working directory
 may be reached through trusted aliases, such as macOS `/tmp` or a root-owned
@@ -120,6 +136,15 @@ after every move detects that case, nothing is deleted, and the error names
 the recovery path. A failed removal retains and reports the recovery path.
 Path inventories are bounded and exclude control-bearing names from
 interactive records; archive input trees are bounded and refuse such names.
+
+Scan staging must match its private temporary template and expected root,
+be owned, regular, singly linked and initially empty before it is opened or
+written. A refused result is neither chmodded nor removed. Read/write
+descriptors must identify the reviewed object; bounded reads match its size
+and contain complete nonempty NUL records before publication. Identity-scoped
+cleanup preserves replacements. Large-file deletion renews its captured
+minimum-size criterion before planning, and junk producer rows must still
+name an exact documented basename.
 
 The deletion plan follows the exact-target form of
 [`output-spec.md`](output-spec.md): a `Directory:` fact with `HOME` shown as
