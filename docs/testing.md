@@ -764,12 +764,31 @@ focused regression cases.
 
 ### Workspace coverage
 
+`ws_fetch_interrupt.bats` uses finite models for the private owner/group
+protocol, correlated native termination, first-interrupt precedence, retained
+unknown state, metadata-only read-only carrier checks, and initial directory
+identity failures. Its helper always refuses physical launch in those new
+preflight models. Seeded caller options, traps, umask and repository variables
+remain unchanged. Controlled native Linux/WSL cases use an earlier coordinator
+with the same worker; later preflight and directory-identity guards have finite
+model coverage. Those cases do not certify the complete final coordinator.
+Model passes do not prove PTY, macOS, real SSH, detached descendants, or progress
+when an external actor stops a protocol owner.
+
+Three fetch functional groups in `ws_status.bats` require a qualified GNU
+`timeout` or `gtimeout`. They skip only explicit capability absence; failed,
+interrupted or invalid qualification fails the test. A separate public
+forced-absence case runs on every host and checks refusal before a fetch owner
+or process group is created or a fetch begins. Capability selection uses a
+bounded version observation through the existing core watchdog. No blanket
+Darwin skip, automatic installation or product fallback is added.
+
 | File | Covered boundary |
 | --- | --- |
 | `ws.bats` | Standalone, double, and side-effect-free sourcing, loader failure, help streams, grammar statuses before probes, literal dispatch, the menu context block, cancellation, current-shell dispatch, forged and failed selections, missing-Git marks, the `zdx ws` route and reserved name, the catalog row, the doctor `fd` row, lazy stubs that change the calling shell, and the repository-variable list checked against the installed Git's `--local-env-vars` |
 | `ws_contract.bats` | Frozen three-command fixture with module, function, menu, dispatcher, help, completion, compinit registration, lazy-stub, and documentation parity, and no evaluator |
 | `ws_jump.bats` | `fd` and `find` discovery parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, no match, cancellation, forged and stale selections, hostile names, the index-only preview rendered by a mocked fzf, a preview unchanged by an inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_PARAMETERS`, and routing through `ws-menu` and `zdx` |
-| `ws_status.bats` | Real clean, dirty, diverged, detached, stashed, and unborn fixture repositories with a local bare remote, in text and JSON; attention order; stdout reserved for one compact JSON document on a single line; a mocked `git fetch` that records its bound, arguments, and prompt setting; failed and timed-out fetches; probes, remote listings, and fetches unchanged by inherited repository variables, and a read-only `GIT_DIR` that stops each fetch job before it fetches; unreadable repositories; an empty root; and a missing `jq` |
+| `ws_status.bats` | Real clean, dirty, diverged, detached, stashed, and unborn fixture repositories with a local bare remote, in text and JSON; attention order; stdout reserved for one compact JSON document on a single line; a mocked `git fetch` that records its bound, arguments, and prompt setting; failed and timed-out fetches; probes, remote listings, and fetches unchanged by inherited repository variables, and a read-only `GIT_DIR` that refuses the batch before private fetch state or workers are created; unreadable repositories; an empty root; and a missing `jq` |
 | `ws_clone.bats` | URL refusals before any clone, the exact dry-run plan, new workspace directories, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, identity delegation with exact arguments and a real profile, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, an inherited `GIT_DIR` that never redirects the identity profile, an inherited `GIT_CONFIG` that never hides `core.sshCommand`, a terminal Ctrl-C that ends with 130 and publishes nothing, and unsafe roots and directories |
 
 `git clone` is mocked by a `git` wrapper that delegates every other command

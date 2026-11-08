@@ -241,13 +241,42 @@ computed, it:
    and `GCM_INTERACTIVE=Never`, without the
    [repository variables](#repository-variables), with closed stdin and
    discarded output, at most `WS_FETCH_JOBS` at a time and each bounded to
-   60 seconds;
+   a 60-second work deadline, followed by cleanup;
 4. reports each failure or timeout and one summary, such as
    `⚠ Fetched 5 of 6 repositories; 1 failed.`
 
-Every started job is stopped and waited for on every exit path. Fetch output,
-which can contain remote URLs, is never shown. A fetch updates only
-remote-tracking refs; local branches and working trees are never changed.
+A batch with fetchable repositories requires a qualified native GNU `timeout`
+or `gtimeout`, native FIFO support and Zsh job-state support. Missing proof
+fails closed with a manual remedy; Workspace does not install a dependency.
+Ordinary status and a successfully observed batch without remotes need no
+GNU fetch backend. A read-only repository-variable carrier is refused before
+allocating private fetch state, without changing the caller's parameter.
+
+Each fetch has a separate owner and process group. A private control channel
+binds that owner before Git starts. Cleanup completes the TERM grace period
+and KILL pass for that group even if Git has already returned successfully,
+then requires correlated native termination and channel closure before it
+reports the group stopped. The coordinator never rescues a saved numeric PID
+or group after its ownership proof has expired. The first observed interrupt
+status, `130` or `143`, stops later scheduling and survives cleanup.
+
+Missing termination proof is an operational failure, not a completed fetch
+or a timeout inferred from a numeric status. Unverified private state is
+retained and its escaped path is reported. A failed first directory-identity
+probe also retains and reports the path instead of deleting an unknown object.
+Status collection and JSON publication do not continue after that failure.
+
+The deadline bounds fetch work; teardown is a separate phase. The group model
+covers descendants that remain in that group. A trusted transport that creates
+a separate session can escape it. Stopping an owner externally can prevent a
+completion acknowledgement indefinitely; no universal return deadline is
+promised under such interference. User Git/SSH configuration, inherited
+caller descriptors, shell startup files and reviewed source remain trusted.
+Git/GCM prompt flags do not establish universal SSH terminal suppression.
+Reload the shell after updating the suite so all private helpers agree.
+
+Fetch output, which can contain remote URLs, is never shown. A fetch updates
+only remote-tracking refs; local branches and working trees are never changed.
 
 ### `--json`
 
@@ -461,7 +490,7 @@ On success `ws-clone` prints the destination's absolute path on stdout, so
 | `0` | Success, an empty workspace, a dry run, or a cancellation |
 | `1` | A missing or unsafe root, a failed probe, fetch, clone, or identity step, a refused selection, or no matching repository |
 | `2` | Invalid arguments, a refused URL, or a choice that needs a terminal |
-| `130`, `143` | An interrupted clone; nothing was published |
+| `130`, `143` | An interrupted clone or fetch batch; no clone was published and later fetches are not scheduled |
 
 UI, plans, warnings, prompts, picker chrome, and child-tool output use stderr.
 Documented stdout data is limited to the `ws-status --json` document and the
@@ -473,6 +502,7 @@ path printed by a successful `ws-clone`.
 | --- | --- | --- | --- |
 | Discovery | `fd`, `fdfind`, or GNU `find` | the same; Windows programs below `/mnt/<drive>` never count as tools | Homebrew `fd` or BSD `find` |
 | Bounded probes | `timeout` | `timeout` | `gtimeout` or the core watchdog |
+| Fetch group lifetime | native GNU `timeout` | native GNU `timeout` | native GNU `gtimeout`; fail closed when unavailable |
 | Git | 2.31 or newer | 2.31 or newer | 2.31 or newer; Apple's `/usr/bin/git` placeholder is refused, not run |
 | Alias resolution | `ssh -G` | the configured `ssh.exe` reads the Windows SSH configuration | `ssh -G` |
 | Publishing a clone | `mv -T -n` | `mv -T -n` | `mv -n` plus an identity check |
@@ -492,7 +522,8 @@ configuration, and BSD `mv` on a Mac remain manual acceptance.
 - **Write locations:** below `WS_BASE_DIR` (new workspace directories, the
   transient staging directory, and the clone), and owner-only private
   directories below the validated `TMPDIR` for picker results, the
-  `ws-jump` snapshot, and fetch statuses, removed on every exit path.
+  `ws-jump` snapshot, and fetch state. Verified state is removed on exit;
+  unverified fetch state is retained with its escaped path reported.
 - **Code execution:** no selected path, name, URL, or query is evaluated or
   placed in program text. Dispatch uses fixed `case` arms. The SSH command
   from `GIT_SSH_COMMAND` or `core.sshCommand` is the user's own Git
@@ -517,6 +548,18 @@ See [`security-assessment.md`](security-assessment.md) for the threat entries.
 | `test/ws_jump.bats` | `fd` and `find` parity, depth, exclusions and their validation, hidden, nested, linked, and worktree entries, direct and picker jumps, exact-name precedence, cancellation, forged and stale selections, hostile names, the index-only preview, a preview unchanged by an inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_PARAMETERS`, and routing through `ws-menu` and `zdx` |
 | `test/ws_status.bats` | Clean, dirty, diverged, detached, stashed, and unborn repositories in text and JSON, attention order, stdout reserved for one JSON document, bounded and disclosed `--fetch` with a mocked fetch, failures and timeouts, probes, remote listings, and fetches unchanged by inherited repository variables, a read-only `GIT_DIR` that fails closed, unreadable repositories, an empty root, and a missing `jq` |
 | `test/ws_clone.bats` | URL refusals, the exact dry-run plan, new workspaces, existing destinations, staging cleanup after a failed clone, SSH alias rewriting with a mocked `ssh`, alias hosts, delegated identity application with exact arguments and real configuration, an inherited `GIT_DIR` that never redirects the profile, an inherited `GIT_CONFIG` that never hides the global `core.sshCommand` from alias resolution, non-interactive refusal, declines, the identity picker, `.ws-hostname` inference, and unsafe roots and directories |
+
+`ws_fetch_interrupt.bats` and `ws_fetch_test_helper.bash` exercise finite
+ownership, handshake, native-wait, interruption, retention and read-only carrier
+models. Initial identity failures cover ordinary failure and observed `130` and
+`143`, retained private paths with control characters, and unchanged caller
+state. These models do not deliver native signals. Separate controlled native
+Linux/WSL fixtures exercised normal return, INT, TERM and deadline with an owned
+same-group child and no rescue, using an earlier coordinator with the same
+worker. Subsequent preflight and directory-identity guards have finite-model
+coverage; those native cases do not certify the complete final coordinator.
+They do not establish macOS, PTY Ctrl-C, core-loaded operation, real transport,
+or voluntarily detached-descendant acceptance. Original unsafe process-cleanup reproductions remain unrun.
 
 `git clone` is mocked: the URL rules refuse the local transports a test could
 otherwise use.
