@@ -254,10 +254,16 @@ _py_run_uv_scoped() {
 
 _py_require_tomllib() {
   _py_check_command python3 || return $?
-  command python3 -I -c 'import tomllib' </dev/null >/dev/null 2>&1 || {
-    _py_error "Python 3.11 or newer is required for project metadata."
-    return 1
-  }
+  local -i probe_rc=0
+  command python3 -B -I -S -c 'import tomllib' </dev/null >/dev/null 2>&1 \
+    || probe_rc=$?
+  case "$probe_rc" in
+    0) return 0 ;;
+    130|143) return "$probe_rc" ;;
+    *)
+      _py_error "Python 3.11 or newer is required for project metadata."
+      return 1 ;;
+  esac
 }
 
 _py_timed() {

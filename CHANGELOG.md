@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Python: run metadata readers without bytecode or site startup, ignore
+  default curl configuration for PyPI queries, and preserve interrupted
+  readers while keeping genuine picker cancellation distinct.
+
 - Python: bind Poetry mutations to an existing reviewed project-local `.venv`
   and manager, refuse malformed Poetry metadata without fallback, and enforce
   ASCII distribution names before backend probes.

@@ -298,6 +298,19 @@ uv instead. Package and tool operands use ASCII alphanumeric first/last
 characters with internal letters, digits, `.`, `_` or `-`; archive suffixes
 are refused. Consecutive internal separators remain valid.
 
+The TOML qualification, Poetry marker, ancestor uv-workspace and PyPI JSON
+readers start Python with `-B -I -S`: no bytecode writes, isolated import
+configuration and no site startup. This changes those four metadata readers,
+not lifecycle interpreter probes. PyPI curl puts `-q` first to ignore default
+curlrc files while retaining HTTPS, redirect, time and size limits. Other
+intentional transport environment settings remain in effect.
+
+Reader or qualification status `130` or `143` propagates through backend and
+query callers; private cleanup cannot turn an interruption into success.
+Only genuine environment-picker cancellation returns successful cancellation.
+An earlier cancelled picker cannot mask a later interrupted metadata read.
+Installed interpreters and their standard libraries remain trusted.
+
 Global tools are isolated through `uv tool` or `pipx`. Inventories propagate
 producer failures and enforce byte and record bounds under a deadline (see
 [Bounded commands](#bounded-commands)). `tool-install` chooses `uv` first and
