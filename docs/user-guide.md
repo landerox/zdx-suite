@@ -1658,6 +1658,10 @@ summary, and a verdict.
 - **Remove (`venv-remove`)**: Review, fingerprint, confirm, and remove one
   exact project-local environment after a timeout-bounded structured mount
   check. External Poetry and Conda environments are never adopted.
+  If interrupted after quarantine, inspect the reported retained path; data
+  may be incomplete. Restore a verified retained environment manually only
+  while its original target is absent. Unverified or directory-only leftovers
+  receive inspection guidance, without an automatic restore or deletion.
 - **Rebuild (`venv-rebuild`)**: Rebuild the project `.venv` of a uv project
   from its `pyproject.toml` and `uv.lock`, keeping the current Python minor
   (or the `.python-version` request of that minor). ZDX shows the plan,

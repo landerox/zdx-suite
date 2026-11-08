@@ -2023,6 +2023,15 @@ unintended targets.
   and probes and covers standalone loading and trusted aliases. These
   pathname checks retain a final concurrent-replacement risk.
 
+- Python environment removal observes actual surviving quarantine state in
+  `always`, including interruption between a completed rename and its caller
+  flag. Recovery guidance distinguishes original-identity retained data,
+  unverified replacements and directory-only leftovers, warns of partial
+  deletion and requires an absent original target before manual restoration.
+  The reporter performs no rollback or extra deletion. A private terminal
+  Ctrl-C proof and strict filesystem recorders cover this boundary; returned
+  TERM statuses do not establish native SIGTERM acceptance.
+
 - State is generally kept under the user's home.
 - Telemetry is opt-in.
 - The opt-in Git identity guard persists nothing: it remembers checked

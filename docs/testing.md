@@ -662,6 +662,13 @@ cross-platform terminal behavior remain manual boundaries.
 
 ### Python coverage
 
+`py_remove_recovery.bats` covers interrupted rename/deletion, verified and
+unverified retained identities, partially removed metadata, directory-only
+leftovers and absence without a phantom recovery path. One private PTY owns
+and reaps its child for a real Ctrl-C observation; TERM cases model returned
+`143`. Exact fixture-only filesystem wrappers retain unrelated canaries.
+This does not establish native macOS or general SIGTERM acceptance.
+
 `py_metadata_isolation.bats` covers all four `-B -I -S` reader starts,
 original argv and runtime flags, leading curl `-q`, interruption propagation,
 private cleanup, and genuine or stale picker cancellation. Its no-site

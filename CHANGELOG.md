@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Python: report retained environment data after interrupted removal, including
+  interruption between rename and bookkeeping, and distinguish verified
+  recovery paths, unverified leftovers and an empty quarantine.
+
 - Python: run metadata readers without bytecode or site startup, ignore
   default curl configuration for PyPI queries, and preserve interrupted
   readers while keeping genuine picker cancellation distinct.
