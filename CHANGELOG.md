@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- File: bind extraction codecs to validated extensions, preserve private
+  staging metadata for root members, and report retained or replaced staging
+  truthfully after failed cleanup.
+
 - File: bind operations to the actual working directory, reject raw traversal,
   renew ancestor and reviewed parent identities, and publish only complete
   inventories read through validated private staging descriptors.

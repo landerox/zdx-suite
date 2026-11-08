@@ -989,8 +989,14 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   preflight and extraction; it limits names, exact file sizes, total bytes,
   entries, types, traversal, links, and realized members before a new
   destination is published. zstd TAR archives (`.tar.zst`, `.tzst`) take the
-  same path: GNU tar selects the decompressor from the archive content, so
-  they meet the same snapshot, preflight, bounds, and realized-member checks.
+  same path with explicit `--zstd`; every compressed extension similarly binds
+  its one codec to both listings and extraction. Plain `.tar` reads the frozen
+  snapshot on stdin and refuses compressed magic without an autodetected
+  decoder. They meet the same snapshot, preflight, bounds and realized-member
+  checks. Root directory members cannot overwrite staging metadata, and
+  cleanup reports retained original-identity data or an unverified replacement
+  or inaccessible path without deleting that replacement or repairing
+  permissions recursively. Absence requires a searchable canonical parent.
   Creating or extracting one requires a GNU tar that accepts `--zstd`,
   confirmed by a bounded `--zstd --version` probe that starts no compressor,
   and an executable `zstd` on `PATH` that is not below a WSL Windows drive; a

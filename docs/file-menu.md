@@ -436,9 +436,9 @@ tar's `TAR_OPTIONS`; bsdtar's `TAR_READER_OPTIONS` and `TAR_WRITER_OPTIONS`;
 `ZIP`, and the `UNZIP` and `UNZIPOPT`, or in its zipinfo mode the `ZIPINFO`
 and `ZIPINFOOPT`, of the unzip that zip can run to test an archive; and the
 `GZIP`, `XZ_DEFAULTS`, `XZ_OPT`, `BZIP2`, `BZIP`, `LBZIP2`, `LZOP`,
-`ZSTD_CLEVEL`, and `ZSTD_NBTHREADS` of the compressors that tar runs,
-including lzop and lbzip2, the bzip2 fallback, which its content detection
-can select. lzip, compress, and 7-Zip document none. This applies to
+`ZSTD_CLEVEL`, and `ZSTD_NBTHREADS`. Masking remains defensive even for
+compressors outside the supported extraction grammar; it does not authorize
+their execution. lzip, compress, and 7-Zip document none. This applies to
 creation, to every tar capability and version probe, and to the extraction
 listing and extraction. A read-only value is hidden too, and the shell keeps
 its own values.
@@ -467,13 +467,14 @@ either requirement gets an error that names every missing one, such as
 zstd).`, followed by the installation step; the same check refuses a
 `.tar.zst` or `.tzst` extraction before its snapshot is taken.
 
-Extraction takes no separate zstd path. GNU tar recognizes compress, gzip,
-bzip2, lzip, lzma, lzop, xz, and zstd compression from the archive content
-rather than its name and runs the matching program from `PATH`, falling back
-to gzip when compress is missing, to lbzip2 when bzip2 is, and to xz when
-lzma is. A zstd archive is therefore listed, preflighted, extracted, and
-validated by exactly the steps below, with the same refusals and bounds as
-every other TAR archive.
+Extraction derives one codec from the validated original extension and uses
+it for both listings and extraction of the frozen snapshot: gzip `-z`, xz
+`-J`, bzip2 `-j`, or zstd `--zstd`. The random snapshot name never selects a
+codec. Plain `.tar` uses `--file=-` with that snapshot on stdin, refusing
+compressed content without invoking an autodetected decompressor. A gzip
+archive named `.tar`, or a plain TAR named `.tar.gz`, is refused. Installed
+GNU tar and the selected decoder, including its same-codec fallback, remain
+trusted through `PATH`.
 
 ### Extraction
 
@@ -512,6 +513,18 @@ existing data, through the same `mv` adapter as deletion; the published
 directory must keep the staging identity, and a destination directory that
 appeared meanwhile is reported with the path that received the validated
 tree. ZIP, RAR, and 7z extraction fail closed.
+
+A root directory member such as `./` or `././` normalizes to `.`, remains
+subject to duplicate/type/size validation and cannot replace staging-root
+metadata: extraction uses `--no-overwrite-dir` and verifies its original
+identity, owner and mode `700`. Ordinary `tar -C tree .` archives remain
+supported. Failed or refused cleanup names retained staging only when its
+device/inode/owner still identify the original object, warning that its data
+may be incomplete or unvalidated. A replaced path is reported as unverified
+and is neither read nor removed. An inaccessible or otherwise unsearchable
+parent also leaves the staging path unverified. Only absence observed through
+a searchable canonical parent produces no recovery claim; no recursive
+permission repair is attempted.
 
 ## Streams, dependencies, and residual limits
 

@@ -182,6 +182,36 @@ _file_tar_archive_stem() {
   return 1
 }
 
+# REPLY is the one decoder flag selected by the validated original name.
+# A plain .tar has no decoder; its reader uses stdin to prevent autodetection.
+_file_tar_archive_codec() {
+  emulate -L zsh
+  REPLY=""
+  case "${1:l}" in
+    *.tar.gz|*.tgz) REPLY=-z ;;
+    *.tar.xz) REPLY=-J ;;
+    *.tar.bz2) REPLY=-j ;;
+    *.tar.zst|*.tzst) REPLY=--zstd ;;
+    *.tar) ;;
+    *) return 1 ;;
+  esac
+}
+
+# Usage: _file_tar_read_snapshot SNAPSHOT GNU_TAR CODEC_FLAG ARGUMENT...
+# GNU tar requires an explicit decoder when reading a compressed stdin. For
+# plain TAR this prevents it from selecting another program from magic bytes.
+_file_tar_read_snapshot() {
+  emulate -L zsh
+  local snapshot="$1" tar_command="$2" codec_flag="$3"
+  shift 3
+  case "$codec_flag" in
+    "") _file_run_archive_tool "$tar_command" "$@" --file=- < "$snapshot" ;;
+    -z|-J|-j|--zstd)
+      _file_run_archive_tool "$tar_command" "$@" "$codec_flag" --file="$snapshot" ;;
+    *) return 2 ;;
+  esac
+}
+
 _file_archive_stage_dir() {
   emulate -L zsh
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
@@ -221,6 +251,40 @@ _file_archive_stage_dir() {
   )
 }
 
+# Report only an object that still matches the original device/inode/owner as
+# recovery data. A replacement pathname remains unverified and is never read.
+_file_archive_stage_retained() {
+  emulate -L zsh
+  local stage_dir="$1" expected_identity="$2" label="Unverified path"
+  local -a expected=("${(@s/:/)expected_identity}")
+  local -A state=()
+  if [[ ! -e "$stage_dir" && ! -L "$stage_dir" ]] \
+    && _file_archive_stage_parent_accessible "$stage_dir"; then
+    return 0
+  fi
+  if (( ${#expected} == 4 )) && [[ -d "$stage_dir" && ! -L "$stage_dir" ]] \
+    && zstat -LH state -- "$stage_dir" 2>/dev/null \
+    && [[ "${state[device]}:${state[inode]}:${state[uid]}" \
+      == "${expected[1]}:${expected[2]}:${expected[4]}" ]]; then
+    label="Recovery path"
+    _file_warn "Archive staging remains; its contents may be incomplete or unvalidated."
+  else
+    _file_warn "The staging path no longer identifies the reviewed object; inspect it separately."
+  fi
+  _file_path_display "$stage_dir"
+  _file_label "$label" "$REPLY"
+}
+
+# Negative path predicates establish absence only through a searchable,
+# canonical parent. An inaccessible parent leaves the observation unknown.
+_file_archive_stage_parent_accessible() {
+  emulate -L zsh
+  local parent_dir="${1:h}" REPLY=""
+  [[ -d "$parent_dir" && ! -L "$parent_dir" && -x "$parent_dir" \
+    && "$parent_dir" == "${parent_dir:A}" ]] \
+    && _file_validate_ancestor_chain "$1" 2>/dev/null
+}
+
 _file_archive_cleanup_stage() {
   emulate -L zsh
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
@@ -232,16 +296,30 @@ _file_archive_cleanup_stage() {
     && "$stage_dir" == "${stage_dir:A}" \
     && "${stage_dir:t}" == .zdx-file-archive.* ]] || {
     _file_warn "The archive staging path changed; refusing cleanup."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
     return 1
   }
   local -A state=()
-  zstat -LH state -- "$stage_dir" 2>/dev/null || return 1
+  zstat -LH state -- "$stage_dir" 2>/dev/null || {
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    return 1
+  }
   [[ "${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}" \
     == "$expected_identity" ]] || {
     _file_warn "The archive staging identity changed; refusing cleanup."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
     return 1
   }
-  command rm -rf -- "$stage_dir" 2>/dev/null
+  local -i removal_rc=0
+  command rm -rf -- "$stage_dir" 2>/dev/null || removal_rc=$?
+  if (( removal_rc != 0 )) || [[ -e "$stage_dir" || -L "$stage_dir" ]] \
+    || ! _file_archive_stage_parent_accessible "$stage_dir"; then
+    _file_warn "Could not remove archive staging completely."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    (( removal_rc == 0 )) || return "$removal_rc"
+    return 1
+  fi
+  return 0
 }
 
 _file_archive_inputs_plan() {
@@ -476,7 +554,7 @@ _file_compress_execute() {
       fi
     fi
   } always {
-    if [[ "$keep_stage" != yes && -d "$stage_dir" ]]; then
+    if [[ "$keep_stage" != yes && -n "$stage_dir" ]]; then
       _file_archive_cleanup_stage "$stage_dir" "$stage_identity" \
         || cleanup_rc=$?
     fi
@@ -597,15 +675,15 @@ _file_extract_max_bytes() {
 }
 
 # Lists a TAR archive with GNU tar and validates every member before any
-# extraction. GNU tar recognizes the compression (gzip, xz, bzip2, or zstd)
-# from the archive content, so every format takes this same path.
-# Usage: _file_tar_preflight <gnu-tar-command> <archive> <max-bytes>
+# extraction. The codec is fixed from the original validated archive name.
+# Usage: _file_tar_preflight <gnu-tar-command> <archive> <max-bytes> <codec-flag>
 # reply holds "type|size|name" member records and REPLY "bytes|digest".
 _file_tar_preflight() {
   emulate -L zsh
   local tar_command="$1"
   local archive_file="$2"
   local max_bytes="${3-}"
+  local codec_flag="${4-}"
   reply=()
   [[ "$tar_command" == /* && -x "$tar_command" ]] || {
     _file_error "Extraction requires GNU tar, installed as tar or gtar."
@@ -638,7 +716,7 @@ _file_tar_preflight() {
     _file_require_cmd head "bounded TAR preflight" || return 1
     setopt local_options pipefail
     local -i producer_rc=1
-    LC_ALL=C _file_run_archive_tool "$tar_command" --list --file="$archive_file" \
+    LC_ALL=C _file_tar_read_snapshot "$archive_file" "$tar_command" "$codec_flag" --list \
       --quoting-style=escape 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
         > "$names_file"
@@ -655,8 +733,8 @@ _file_tar_preflight() {
       _file_error "Could not produce a bounded TAR name inventory."
       return 1
     }
-    LC_ALL=C _file_run_archive_tool "$tar_command" --list --verbose --numeric-owner \
-      --file="$archive_file" --quoting-style=escape 2>/dev/null \
+    LC_ALL=C _file_tar_read_snapshot "$archive_file" "$tar_command" "$codec_flag" \
+      --list --verbose --numeric-owner --quoting-style=escape 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
         > "$verbose_file"
     producer_rc=$?
@@ -698,8 +776,12 @@ _file_tar_preflight() {
           return 1
         }
       done
-      normalized_name="${member_name#./}"
+      normalized_name="$member_name"
+      while [[ "$normalized_name" == ./* ]]; do
+        normalized_name="${normalized_name#./}"
+      done
       normalized_name="${normalized_name%/}"
+      [[ -n "$normalized_name" ]] || normalized_name=.
       [[ -n "$normalized_name" && -z "${normalized_seen[$normalized_name]:-}" ]] \
         || {
           _file_error "Archive contains duplicate or colliding member names."
@@ -751,6 +833,10 @@ _file_tar_preflight() {
         return 1
       }
       local -i member_size=$(( 10#$size_text ))
+      if [[ "${member_names[verbose_count + 1]}" == . && "${fields[1][1]}" != d ]]; then
+        _file_error "An archive root member must be a directory."
+        return 1
+      fi
       if [[ "${fields[1][1]}" == "d" ]] && (( member_size != 0 )); then
         _file_error "Archive directory entries must declare zero content bytes."
         return 1
@@ -827,6 +913,10 @@ _file_extract_tree_validate() {
     (( expected_bytes += numeric_expected_size ))
     expected_set[$expected_member]="$expected_type"
     expected_sizes[$expected_member]="$numeric_expected_size"
+    if [[ "$expected_member" == . && "$expected_type" == d ]] \
+      && (( numeric_expected_size == 0 )); then
+      expected_seen[$expected_member]=1
+    fi
   done
   local entry=""
   local -A state=()
@@ -930,6 +1020,7 @@ _file_extract_snapshot_run() {
   local dry_run="$7"
   local auto_yes="$8"
   local max_bytes="$9"
+  local codec_flag="${10-}"
 
   # The same GNU tar lists, preflights, and extracts the frozen snapshot.
   _file_gnu_tar_command || {
@@ -937,7 +1028,7 @@ _file_extract_snapshot_run() {
     return 1
   }
   local tar_command="$REPLY"
-  _file_tar_preflight "$tar_command" "$archive_snapshot" "$max_bytes" \
+  _file_tar_preflight "$tar_command" "$archive_snapshot" "$max_bytes" "$codec_flag" \
     || return 1
   local -a members=("${reply[@]}")
   local expanded_bytes="${REPLY%%|*}"
@@ -987,12 +1078,17 @@ _file_extract_snapshot_run() {
   local stage_identity="${reply[2]}"
   local -i operation_rc=1 cleanup_rc=0
   {
-    LC_ALL=C _file_run_archive_tool "$tar_command" --extract --file="$archive_snapshot" \
+    LC_ALL=C _file_tar_read_snapshot "$archive_snapshot" "$tar_command" "$codec_flag" --extract \
       --directory="$stage_dir" \
-      --no-same-owner --no-same-permissions >&2 || {
+      --no-same-owner --no-same-permissions --no-overwrite-dir >&2 || {
       operation_rc=$?
       _file_error "Archive extraction failed in staging."
       return $operation_rc
+    }
+    _file_directory_identity "$stage_dir" || return 1
+    [[ "$REPLY" == "$stage_identity" ]] || {
+      _file_error "The private extraction root changed during extraction."
+      return 1
     }
     _file_extract_tree_validate "$stage_dir" members "$max_bytes" || {
       _file_error "Extracted tree failed post-extraction validation."
@@ -1036,7 +1132,7 @@ _file_extract_snapshot_run() {
     _file_success "Extracted archive to: $destination"
     operation_rc=0
   } always {
-    if [[ -n "$stage_dir" && -d "$stage_dir" ]]; then
+    if [[ -n "$stage_dir" ]]; then
       _file_archive_cleanup_stage "$stage_dir" "$stage_identity" \
         || cleanup_rc=$?
     fi
@@ -1076,6 +1172,8 @@ _file_extract_execute() {
       "This backend is not safely validated; only TAR archives are accepted."
     return 1
   }
+  _file_tar_archive_codec "${archive_absolute:t}" || return 1
+  local codec_flag="$REPLY"
   case "${archive_absolute:t:l}" in
     *.tar.zst|*.tzst)
       _file_require_tar_zstd "Extracting zstd TAR archives" || return 1
@@ -1134,7 +1232,7 @@ _file_extract_execute() {
       "$archive_absolute" "$archive_identity" \
       "$archive_snapshot" "$snapshot_identity" \
       "$destination" "$destination_parent_identity" \
-      "$dry_run" "$auto_yes" "$max_bytes"
+      "$dry_run" "$auto_yes" "$max_bytes" "$codec_flag"
     snapshot_rc=$?
   } always {
     if [[ -f "$archive_snapshot" && ! -L "$archive_snapshot" ]]; then
