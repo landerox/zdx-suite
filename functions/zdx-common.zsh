@@ -630,56 +630,64 @@ _zdx_require_suite_function() {
 }
 
 _zdx_dispatch_suite() {
-  local suite_name="${1:-}"
-  shift 2>/dev/null || true
-
-  case "$suite_name" in
+  case "${1:-}" in
     dev)
+      shift
       _zdx_require_suite_function dev-menu || return
       dev-menu "$@"
       ;;
     env)
+      shift
       _zdx_require_suite_function env-menu || return
       env-menu "$@"
       ;;
     file)
+      shift
       _zdx_require_suite_function file-menu || return
       file-menu "$@"
       ;;
     git)
+      shift
       _zdx_require_suite_function git-menu || return
       git-menu "$@"
       ;;
     plugins)
+      shift
       _zdx_require_suite_function zdx-plugins || return
       zdx-plugins "$@"
       ;;
     py)
+      shift
       _zdx_require_suite_function py-menu || return
       py-menu "$@"
       ;;
     sys)
+      shift
       _zdx_require_suite_function sys-menu || return
       sys-menu "$@"
       ;;
     vpn)
+      shift
       _zdx_require_suite_function vpn-menu || return
       vpn-menu "$@"
       ;;
     ws)
+      shift
       _zdx_require_suite_function ws-menu || return
       ws-menu "$@"
       ;;
     doctor)
+      shift
       _zdx_require_suite_function zdx-doctor || return
       zdx-doctor "$@"
       ;;
     status)
+      shift
       _zdx_require_suite_function zdx-status || return
       zdx-status "$@"
       ;;
     :)       return 0 ;;
-    *)       _zdx_dispatch_plugin "$suite_name" "$@" ;;
+    *)       _zdx_dispatch_plugin "$@" ;;
   esac
 }
 
@@ -802,6 +810,13 @@ _zdx_selected_row_in_snapshot() {
 
 _zdx_interactive_select() {
   emulate -L zsh
+  # The caller owns one fresh non-exported local; the name is never code.
+  (( $# == 1 )) && [[ "$1" == _zdx_selected_suite* \
+    && "${1#_zdx_selected_suite}" != *[^_]* \
+    && "${parameters[$1]-}" == scalar-local ]] || {
+    _zdx_error "Unable to validate the master selection context."
+    return 1
+  }
   local REPLY=""
   command -v fzf &>/dev/null || {
     _zdx_error \
@@ -844,16 +859,36 @@ _zdx_interactive_select() {
   local selected_fields="${selected#*|}"
   local suite_name="${selected_fields%%|*}"
   [[ "$suite_name" == ":" ]] && return 0
-  _zdx_selected_suite="$suite_name"
+  [[ "${parameters[$1]-}" == scalar-local ]] || {
+    _zdx_error "The master selection context changed while the picker was open."
+    return 1
+  }
+  builtin typeset -g "$1=$suite_name"
   return 0
 }
 
 # The selection scope has returned before an override or plugin is invoked.
 _zdx_interactive() {
-  local _zdx_selected_suite=""
-  _zdx_interactive_select || return
-  [[ -n "$_zdx_selected_suite" ]] || return 0
-  _zdx_dispatch_suite "$_zdx_selected_suite"
+  # Positional state avoids hiding any export before the selected suite runs.
+  set -- _zdx_selected_suite 1
+  while (( ${+parameters[$1]} )); do
+    (( $2 < 128 )) || {
+      _zdx_error "Unable to allocate the master selection context; use 'zdx <suite>' directly."
+      return 1
+    }
+    set -- "${1}_" "$(( $2 + 1 ))"
+  done
+  () {
+    local "$1="
+    builtin typeset +x "$1"
+    _zdx_interactive_select "$1" || return
+    [[ "${parameters[$1]-}" == scalar-local ]] || {
+      _zdx_error "The master selection context changed while the picker was open."
+      return 1
+    }
+    [[ -n "${(P)1}" ]] || return 0
+    _zdx_dispatch_suite "${(P)1}"
+  } "$1"
 }
 
 typeset -g _ZDX_COMMON_SOURCED=1

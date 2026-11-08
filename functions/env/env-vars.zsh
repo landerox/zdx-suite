@@ -15,9 +15,11 @@ _env_exported_keys() {
   emulate -L zsh
   local -a exported_keys=()
   local key="" parameter_type=""
-  for key in ${(k)parameters}; do
+  for key in ${(k)_env_export_snapshot}; do
+    [[ "$key" == type:* ]] || continue
+    key="${key#type:}"
     [[ "$key" =~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$' ]] || continue
-    parameter_type="${parameters[$key]}"
+    parameter_type="${_env_export_snapshot[type:$key]-}"
     [[ "$parameter_type" == scalar* \
       && "$parameter_type" == *export* ]] || continue
     exported_keys+=("$key")
@@ -44,17 +46,17 @@ _env_list_usage() {
 _env_copy_exported_variable() {
   local key="$1"
   [[ "$key" =~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$' \
-    && ${+parameters[$key]} -eq 1 ]] || {
+    && -n "${_env_export_snapshot[type:$key]-}" ]] || {
     _env_error "No exported scalar variable named '$key' exists."
     return 1
   }
-  local parameter_type="${parameters[$key]}"
+  local parameter_type="${_env_export_snapshot[type:$key]-}"
   [[ "$parameter_type" == scalar* \
     && "$parameter_type" == *export* ]] || {
     _env_error "No exported scalar variable named '$key' exists."
     return 1
   }
-  local value="${(P)key}"
+  local value="${_env_export_snapshot[value:$key]}"
   local -i copy_rc=0
   _env_copy_to_clipboard "$value" || copy_rc=$?
   if (( copy_rc == 0 )); then
@@ -69,8 +71,35 @@ _env_copy_exported_variable() {
   fi
 }
 
+# Decide only whether the existing grammar needs an export snapshot. The
+# implementation remains responsible for help and usage diagnostics.
+_env_list_requires_snapshot() {
+  case "${1:-}" in
+    "") (( $# == 0 )) ;;
+    --list) (( $# == 1 )) ;;
+    --copy) (( $# == 2 )) ;;
+    *) return 1 ;;
+  esac
+}
+
+# Capture before implementation locals; help and invalid grammar stay probe-free.
 env-list() {
   emulate -L zsh
+  if _env_list_requires_snapshot "$@"; then
+    _env_with_export_snapshot _env_list_execute "$@"
+  else
+    _env_list_execute "$@"
+  fi
+}
+
+_env_list_execute() {
+  emulate -L zsh
+  _env_record_export_shadows _env_list_execute list_mode copy_key \
+    exported_keys key display_value snapshot_values snapshot_types rows index \
+    selected fzf_rc selected_row_position selected_index copy_rc REPLY reply \
+    MATCH MBEGIN MEND match mbegin mend
+  local REPLY="" MATCH="" MBEGIN=0 MEND=0
+  local -a reply=() match=() mbegin=() mend=()
   local list_mode="no"
   local copy_key=""
   case "${1:-}" in
@@ -118,8 +147,8 @@ env-list() {
 
   local -A snapshot_values=() snapshot_types=()
   for key in "${exported_keys[@]}"; do
-    snapshot_types[$key]="${parameters[$key]}"
-    snapshot_values[$key]="${(P)key}"
+    snapshot_types[$key]="${_env_export_snapshot[type:$key]}"
+    snapshot_values[$key]="${_env_export_snapshot[value:$key]}"
   done
 
   _env_require_cmd fzf "interactive environment-variable selection" \
@@ -167,12 +196,18 @@ env-list() {
     && selected_index -le ${#exported_keys[@]} ]] || return 1
   key="${exported_keys[selected_index]}"
 
-  [[ ${+parameters[$key]} -eq 1 \
-    && "${parameters[$key]}" == "${snapshot_types[$key]}" \
-    && "${(P)key}" == "${snapshot_values[$key]}" ]] || {
-    _env_error "The selected variable changed while the picker was open."
+  if _env_export_snapshot_matches "$key" "${snapshot_types[$key]}" \
+    "${snapshot_values[$key]}"; then
+    :
+  else
+    case $? in
+      2) _env_error "The selected export could not be revalidated after the picker closed." ;;
+      3) _env_error "The exported-variable snapshot was lost; no value was copied." ;;
+      *) _env_error "The selected variable changed while the picker was open." ;;
+    esac
+    _env_dim "Use env-list --copy $key for a direct copy of the current export."
     return 1
-  }
+  fi
   local -i copy_rc=0
   _env_copy_to_clipboard "${snapshot_values[$key]}" || copy_rc=$?
   if (( copy_rc == 0 )); then

@@ -63,6 +63,20 @@ copying fails, the value is not printed: no backend reports
 and a backend that fails reports
 `The clipboard backend failed; the value was not printed.`
 
+Export types and values are captured in invocation-local memory before Env
+implementation locals can hide them. Direct, nested, cold lazy and master
+routes inspect the caller's exported scalars; loader and selection preparation
+returns before that inspection. The master uses an unoccupied, non-exported
+selection local and refuses when its bounded allocation cannot succeed.
+
+Before a picker copy, a visible export must retain its captured type and value.
+An ordinary `scalar-export` hidden by a registered non-exported local in a
+still-active owned scope can use its original snapshot. A hidden tied, special
+or otherwise attributed value, an unknown shadow, or lost/corrupted snapshot
+state is refused because its current identity cannot be proved. The retry is
+`env-list --copy NAME`, which takes a fresh snapshot outside that picker scope.
+No raw value enters external argv, a persisted cache, UI records or picker files.
+
 Every picker uses three-field fixed records or indexed typed records, validates
 the returned row against the frozen snapshot, and maps an index back to the
 original object. A single-select picker rejects multiline output rather than

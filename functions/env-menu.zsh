@@ -110,6 +110,7 @@ _env_menu_rows() {
 }
 
 _env_dispatch() {
+  _env_record_export_shadows _env_dispatch command_name
   local command_name="${1:-}"
   (( $# > 0 )) && shift
   case "$command_name" in
@@ -125,6 +126,8 @@ _env_dispatch() {
 }
 
 _env_menu_interactive() {
+  _env_record_export_shadows _env_menu_interactive rows_output rows selected \
+    fzf_rc selected_row_position command_name
   _env_require_cmd fzf "the interactive Environment menu" || return 1
   local rows_output=""
   rows_output=$(_env_menu_rows) || return $?
@@ -173,6 +176,28 @@ _env_menu_interactive() {
 
 env-menu() {
   emulate -L zsh
+  case "${1:-}" in
+    "")
+      (( $# == 0 )) || return 2
+      _env_with_export_snapshot _env_menu_execute "$@"
+      ;;
+    env-list)
+      if _env_list_requires_snapshot "${@:2}"; then
+        _env_with_export_snapshot _env_menu_execute "$@"
+      else
+        _env_menu_execute "$@"
+      fi
+      ;;
+    *) _env_menu_execute "$@" ;;
+  esac
+}
+
+_env_menu_execute() {
+  emulate -L zsh
+  _env_record_export_shadows _env_menu_execute command_name REPLY reply \
+    MATCH MBEGIN MEND match mbegin mend
+  local REPLY="" MATCH="" MBEGIN=0 MEND=0
+  local -a reply=() match=() mbegin=() mend=()
   case "${1:-}" in
     "")
       (( $# == 0 )) || return 2

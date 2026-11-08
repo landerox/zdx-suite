@@ -1600,6 +1600,13 @@ automatic `chpwd` hook.
 
 ### 🔍 Variable Diagnostics & Search
 
+Variable browsing freezes the caller's exported values before internal menu
+locals can hide them, including through cold lazy and `zdx env` routes.
+A picker refuses a changed value/type or one it cannot safely revalidate;
+retry an unusual attributed export with `env-list --copy NAME`. Only the
+clipboard receives the selected exact value, including an empty value or
+trailing newlines; names and classifications stay on screen.
+
 - **Active variables (`env-list`)**: List names with `********` or `<hidden>`;
   raw values never enter rows, previews, logs, plans, or fallback output. An
   explicit copy action sends one frozen value only to a supported clipboard

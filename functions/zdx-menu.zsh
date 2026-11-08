@@ -179,9 +179,7 @@ zdx() {
       return 2
       ;;
     *)
-      local suite_name="$1"
-      shift
-      _zdx_dispatch_suite "$suite_name" "$@"
+      _zdx_dispatch_suite "$@"
       ;;
   esac
 }

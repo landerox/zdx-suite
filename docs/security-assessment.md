@@ -192,6 +192,15 @@ included in a backup, or exposed through an error log.
   with mixed letter case and a digit but no underscore, including comparison,
   count and duplicate records. Valid names can match that heuristic, and other
   secret shapes remain outside its recognition; values are never disclosed.
+- Env captures exported scalar types/values before its implementation locals,
+  keeps snapshots only in invocation-local memory, and revalidates visible
+  selections before copying. Only ordinary scalar exports hidden by known,
+  active, non-exported owned locals use the frozen snapshot; hidden tied or
+  special values and missing/corrupt state fail closed with direct-copy advice.
+  The core lazy-load scope returns before the public call; direct master routers
+  add no local collision, and interactive selection uses a bounded unoccupied
+  non-exported local. Caller overrides retain current-shell option changes.
+  Backend selection and encoded stdin remain covered without a real clipboard.
 - `env-dotenv` reports a dotenv file and its example by key name and line
   number only. A value's single exposed fact is whether it is set or empty;
   no value, example value, value length, or digest reaches its text report,

@@ -116,10 +116,96 @@ _env_count_noun() {
   if (( count == 1 )); then REPLY="1 $singular"; else REPLY="$count $plural"; fi
 }
 
+# Capture exported scalars before helper locals can hide them. The two private
+# names preserve their own original type/value in the initializer before either
+# local exists. Invocation data stays in memory and never becomes global state.
+_env_with_export_snapshot() {
+  emulate -L zsh
+  if [[ "${parameters[_env_export_snapshot]-}" == association*local* ]]; then
+    [[ "${_env_export_snapshot[context]-}" == exact-copy-v1 ]] || return 1
+    "$@"
+    return $?
+  fi
+  if (( ${funcstack[(Ie)_env_menu_execute]} > 0 \
+    || ${funcstack[(Ie)_env_menu_interactive]} > 0 \
+    || ${funcstack[(Ie)_env_list_execute]} > 0 )); then
+    _env_error "The exported-variable snapshot is no longer available."
+    return 1
+  fi
+  () {
+    local -A _env_export_snapshot=(
+      type:_env_export_snapshot "${parameters[_env_export_snapshot]-}"
+      value:_env_export_snapshot "${_env_export_snapshot-}"
+      type:_env_export_key "${parameters[_env_export_key]-}"
+      value:_env_export_key "${_env_export_key-}"
+    )
+    local _env_export_key=""
+    for _env_export_key in ${(k)parameters}; do
+      [[ "$_env_export_key" == _env_export_snapshot \
+        || "$_env_export_key" == _env_export_key ]] && continue
+      # Validate the existing identifier grammar without changing MATCH before
+      # capture; indirect lookup must only receive an ordinary variable name.
+      [[ "$_env_export_key" == [A-Za-z_]* \
+        && "$_env_export_key" != *[^A-Za-z0-9_]* \
+        && ${#_env_export_key} -le 128 ]] || continue
+      [[ "${parameters[$_env_export_key]}" == scalar*export* ]] || continue
+      _env_export_snapshot[type:$_env_export_key]="${parameters[$_env_export_key]}"
+      _env_export_snapshot[value:$_env_export_key]="${(P)_env_export_key}"
+      (( ${#_env_export_snapshot} <= _ENV_MAX_RECORDS * 16 + 4 )) || {
+        _env_error "The exported-variable inventory exceeds its safe limit."
+        return 1
+      }
+    done
+    _env_export_snapshot[context]=exact-copy-v1
+    _env_export_snapshot[shadow:_env_export_snapshot]=_env_with_export_snapshot
+    _env_export_snapshot[shadow:_env_export_key]=_env_with_export_snapshot
+    "$@"
+  } "$@"
+}
+
+# Register only known owned scopes before they declare their locals. This
+# helper uses positional parameters so it cannot introduce another collision.
+_env_record_export_shadows() {
+  [[ "${parameters[_env_export_snapshot]-}" == association*local* ]] \
+    || return 0
+  [[ "${_env_export_snapshot[context]-}" == exact-copy-v1 ]] || return 1
+  while (( $# > 1 )); do
+    _env_export_snapshot[shadow:$2]="$1"
+    set -- "$1" "${@:3}"
+  done
+}
+
+# Visible exports still require the exact original type and value. Only an
+# ordinary scalar-export hidden by a registered, active, nonexported internal
+# local can use its frozen value. Tied and special globals can change through
+# other names while hidden, so those cases fail closed instead.
+_env_export_snapshot_matches() {
+  (( $# == 3 )) || return 3
+  [[ "${parameters[_env_export_snapshot]-}" == association*local* ]] \
+    || return 3
+  [[ "${_env_export_snapshot[context]-}" == exact-copy-v1 ]] || return 3
+  # Revalidation and copy must refer to the same cached type/value pair.
+  (( ${+_env_export_snapshot[type:$1]} && ${+_env_export_snapshot[value:$1]} )) \
+    && [[ "${_env_export_snapshot[type:$1]}" == "$2" \
+      && "${_env_export_snapshot[value:$1]}" == "$3" ]] || return 3
+  if [[ "${parameters[$1]-}" == "$2" ]]; then
+    [[ "${(P)1}" == "$3" ]]
+    return $?
+  fi
+  [[ "${parameters[$1]-}" == *local* ]] || return 1
+  [[ "$2" == scalar-export \
+    && "${parameters[$1]-}" != *export* \
+    && -n "${_env_export_snapshot[shadow:$1]-}" ]] || return 2
+  (( ${funcstack[(Ie)${_env_export_snapshot[shadow:$1]}]} > 0 )) && return 0
+  return 2
+}
+
 _env_timed() {
+  _env_record_export_shadows _env_timed label
   local label="$1"
   shift
   if typeset -f _timed &>/dev/null; then
+    _env_record_export_shadows _timed label _ZDX_TIMED_OUTCOME _ZDX_TIMED_DEPTH start_time
     _timed "$label" "$@"
   else
     "$@"
