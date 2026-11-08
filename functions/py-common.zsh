@@ -1071,10 +1071,18 @@ _py_picker_capture() {
 # <<< zdx-primitive picker-capture
 
 _py_validate_package_name() {
+  emulate -L zsh
+  local LC_ALL=C
   local package_name="${1:-}"
   [[ -n "$package_name" && ${#package_name} -le 128 \
-    && "$package_name" != -* ]] \
-    && [[ "$package_name" =~ ^[[:alnum:]][[:alnum:]._-]*$ ]]
+    && "$package_name" != *[^A-Za-z0-9._-]* \
+    && "${package_name[1]}" == [A-Za-z0-9] \
+    && "${package_name[-1]}" == [A-Za-z0-9] ]] || return 1
+  case "${package_name:l}" in
+    *.whl|*.zip|*.tar|*.tar.gz|*.tgz|*.tar.bz2|*.tbz|*.tar.xz|*.txz|*.tlz|*.tar.lz|*.tar.lzma)
+      return 1 ;;
+  esac
+  return 0
 }
 
 _py_validate_python_version() {

@@ -1699,6 +1699,10 @@ authorized project code whose other effects cannot be undone generically.
   detected uv/Poetry project or a validated local environment. Ambient `pip`
   is never a fallback. The root and metadata are frozen across authorization;
   a uv member whose workspace root is above the reviewed project is refused.
+  Poetry requires an existing validated `.venv` inside that project and
+  Poetry 1.8 or later. Create it explicitly first when missing; external or
+  cached environments are not adopted. Package/tool names use ASCII letters,
+  digits and internal `.`, `_` or `-`, with alphanumeric ends.
 
 ### 🧰 Isolated Python Tools
 

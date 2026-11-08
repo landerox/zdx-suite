@@ -275,6 +275,29 @@ Python 3 works; project-metadata parsing elsewhere needs Python 3.11's
 created in a subshell, so the caller's `umask` is unchanged, and both the
 file and its directory are removed on every exit path.
 
+Poetry package mutations require an existing validated `.venv` immediately
+inside the reviewed project. Missing, external, linked, unsafe or replaced
+environments are refused with manual setup guidance; no cached environment
+is adopted and no environment is created implicitly. The plan freezes the
+project, environment, `pyvenv.cfg`, interpreter, metadata/lock/configuration
+files and resolved manager contents. Those facts are rechecked after consent
+and inside captured execution immediately before mutation.
+
+Poetry 1.8 or later runs through its reviewed absolute executable with
+`--no-plugins --no-interaction --directory ROOT`, creation disabled and the
+reviewed `VIRTUAL_ENV` in that child only. Ambient location and interpreter
+selectors are removed from the child; authentication settings remain private.
+The caller's activation, directory and environment remain unchanged. Passive
+version/filesystem checks may precede consent. `env info --path` runs only
+after consent because it can execute the environment interpreter; it must
+identify exactly the reviewed `.venv` between repeated fact checks.
+
+The Poetry marker reader distinguishes presence, absence and malformed or
+unreadable metadata. A malformed `tool` or `tool.poetry` table cannot select
+uv instead. Package and tool operands use ASCII alphanumeric first/last
+characters with internal letters, digits, `.`, `_` or `-`; archive suffixes
+are refused. Consecutive internal separators remain valid.
+
 Global tools are isolated through `uv tool` or `pipx`. Inventories propagate
 producer failures and enforce byte and record bounds under a deadline (see
 [Bounded commands](#bounded-commands)). `tool-install` chooses `uv` first and

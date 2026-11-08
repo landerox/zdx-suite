@@ -662,6 +662,13 @@ cross-platform terminal behavior remain manual boundaries.
 
 ### Python coverage
 
+`py_poetry_scope.bats` covers existing project-local environment ownership,
+fixed manager/project/child environment arguments, dry-run and decline
+passivity, post-consent environment observation, reviewed-fact drift before
+captured mutation, malformed Poetry tables and ASCII distribution operands.
+uv and local pip controls remain covered. Manager/interpreter mutation is
+recorded inside disposable fixtures; installed Poetry execution is unproved.
+
 `py_mutation_layers.bats` adds public pin, four package-backend and uv/pipx
 tool workflows, changed reviewed facts, genuine environment children,
 malformed/oversized/failed PyPI responses, closed streams and cleanup.
