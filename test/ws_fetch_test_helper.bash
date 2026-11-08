@@ -77,7 +77,16 @@ run_fetch_protocol_model() {
     fi
     WS_FETCH_JOBS=1
     _ws_git_command() {
-      print -r -- "${4:t}" >> "$WFI_DISCOVERY"
+      local _wfi_discovery_repository=""
+      if (( $# == 5 )) && [[ "$3" == -C && "$5" == remote ]]; then
+        _wfi_discovery_repository="$4"
+      elif (( $# == 7 )) && [[ "$3" == -c && "$4" == core.fsmonitor=false \
+        && "$5" == -C && "$7" == remote ]]; then
+        _wfi_discovery_repository="$6"
+      else
+        return 98
+      fi
+      print -r -- "${_wfi_discovery_repository:t}" >> "$WFI_DISCOVERY"
       case "$WFI_CASE" in
         discovery130) return 130 ;;
         discovery143) return 143 ;;

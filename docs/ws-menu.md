@@ -38,6 +38,13 @@ The ignored, user-local `functions/zdir.zsh` prototype and its `wsj` alias keep
 their conditional registration in `functions.zsh`. `ws-jump` supersedes that
 prototype and shares no code with it.
 
+Owned read-only Git status, metadata, remote-listing and SSH-configuration
+probes explicitly set `core.fsmonitor=false`; the fixed index-only jump preview
+uses the same override. These index reads cannot execute a configured
+filesystem-monitor hook. Git still reads configuration as data; this is not a
+Git sandbox. Mutable fetch/clone and delegated identity operations retain their
+separate paths and authorization.
+
 ## Public surface
 
 | Command | Purpose | Highest effect |
@@ -90,7 +97,7 @@ ws-clone [URL] [--platform NAME] [--identity NAME] [--name DIR] [--dry-run] [--y
 ```
 
 Every command also accepts `-h` or `--help` alone. `--platform`, `--identity`,
-and `--name` take one directory name: letters, digits, `.`, `_`, or `-`,
+and `--name` take one directory name: ASCII letters, digits, `.`, `_`, or `-`,
 starting with a letter or digit.
 
 ## Layout and discovery
@@ -338,6 +345,13 @@ mode.
 ## `ws-clone`
 
 ### URL validation
+
+Host, user and repository-path component checks use their existing ASCII
+patterns in an isolated C locale. Non-ASCII letters/digits are refused even
+when the caller's UTF-8 collation would widen a libc range. Length limits and
+ordinary ASCII URL forms remain unchanged; there is no implicit IDNA mapping.
+The same rule covers `.ws-hostname`, configured SSH HostName and constructed
+workspace aliases without changing the SSH child's locale or caller match data.
 
 `ws-clone` accepts exactly three address forms:
 

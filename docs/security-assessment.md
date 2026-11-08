@@ -150,6 +150,14 @@ included in a backup, or exposed through an error log.
 
 **Current controls.**
 
+- Workspace validates names, URL host/user/path components, `.ws-hostname` and
+  SSH host/alias data with existing ASCII patterns in a local C locale, keeping
+  caller regex results and the SSH child's locale unchanged. Owned read-only
+  status/metadata/remote/configuration probes and the fixed jump preview pass
+  `core.fsmonitor=false`, preventing a repository's configured monitor from
+  running during an index read. Mutable fetch/clone remain separate operations;
+  the installed Git/configuration parser and user SSH settings remain trusted.
+
 - VPN provider queries send escaped URL configuration through curl stdin,
   retaining fixed HTTPS/time/size bounds and suppressing URL-bearing child
   diagnostics. Display and persisted failures name only validated authorities.
@@ -3181,4 +3189,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-05.
+Last reviewed: 2026-11-08.

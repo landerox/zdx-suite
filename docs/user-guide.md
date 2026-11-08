@@ -570,6 +570,11 @@ cd "$(ws-clone https://gitlab.com/acme/tool.git --identity work --yes)"
 
 ### 📊 Workspace Status
 
+Workspace names, URL hosts/users/path components and SSH hostname/alias checks
+use ASCII rules regardless of the session locale; existing length limits are
+unchanged. Read-only status and jump-preview Git probes disable configured
+filesystem-monitor hooks. Fetch and clone remain separate network mutations.
+
 - **Status (`ws-status`)**: One row per repository with its workspace,
   branch, uncommitted changes, ahead/behind counts from your local refs,
   stashes, and last commit. Repositories with changes, unpushed or unmerged

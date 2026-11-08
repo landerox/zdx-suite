@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Workspace: enforce the documented ASCII name/URL/SSH grammar independently
+  of locale and suppress configured Git filesystem-monitor hooks in read-only
+  status, metadata and fixed-preview probes.
+
 - Workspace: retain ownership of each fetch process group through interruption
   and deadline cleanup, preserve the first interrupt status, and retain private
   diagnostics when termination cannot be proved. Fetchable batches require

@@ -90,10 +90,10 @@ case "$n" in ""|*[!0-9]*) exit 0 ;; esac
 d=$(sed -n "$((n + 1))p" "$s" 2>/dev/null)
 if [ -z "$d" ] || [ ! -d "$d" ]; then printf "%s\n" "Repository unavailable."; exit 0; fi
 if ! command -v git >/dev/null 2>&1; then printf "%s\n" "Git is not installed."; exit 0; fi
-b=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || b="detached at $(git -C "$d" rev-parse --short HEAD 2>/dev/null)"
-c=$(git --no-optional-locks -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d " ")
+b=$(git -c core.fsmonitor=false -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || b="detached at $(git -c core.fsmonitor=false -C "$d" rev-parse --short HEAD 2>/dev/null)"
+c=$(git --no-optional-locks -c core.fsmonitor=false -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d " ")
 [ "$c" = 0 ] && c=clean
-l=$(git -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
+l=$(git -c core.fsmonitor=false -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
 printf "Branch:      %s\nChanges:     %s\nLast commit: %s\n" "$b" "${c:-unknown}" "${l:-none}"'
 
   {
