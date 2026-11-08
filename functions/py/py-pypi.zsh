@@ -53,8 +53,14 @@ _py_validate_project_file() {
 
 _py_project_uses_poetry() {
   local pyproject="$1"
-  _py_require_tomllib || return 2
-  command python3 -I -c '
+  local -i qualification_rc=0
+  _py_require_tomllib || qualification_rc=$?
+  case "$qualification_rc" in
+    0) ;;
+    130|143) return "$qualification_rc" ;;
+    *) return 2 ;;
+  esac
+  command python3 -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -270,6 +276,7 @@ _py_snapshot_optional_project_file() {
 # interpreter fingerprint, and all optional project-file states as one
 # tab-delimited record.
 _py_detect_package_backend() {
+  REPLY=""
   _py_validate_project_root || return $?
   local root="$REPLY"
   _py_fingerprint_owned_directory "$root" || return $?
@@ -293,7 +300,11 @@ _py_detect_package_backend() {
       || return $?
     local project_fingerprint="$REPLY"
     local -i poetry_marker_rc=0
+    REPLY=""
     _py_project_uses_poetry "$pyproject" || poetry_marker_rc=$?
+    case "$poetry_marker_rc" in
+      130|143) return "$poetry_marker_rc" ;;
+    esac
     if (( poetry_marker_rc > 1 )); then
       _py_error "Could not safely parse pyproject.toml; package backend selection failed closed."
       return 1
@@ -353,9 +364,13 @@ _py_detect_package_backend() {
   local -a record_snapshot=("${(@f)records}")
   local record="${record_snapshot[1]}" environment_path=""
   if (( ${#record_snapshot[@]} > 1 )); then
+    REPLY=""
     _py_select_venv_record "$records" "Package env > "
     local select_rc=$?
-    (( select_rc == 130 )) && return 130
+    if (( select_rc == 130 )); then
+      REPLY=cancelled
+      return 130
+    fi
     (( select_rc == 0 )) || return "$select_rc"
     record="$REPLY"
   fi
@@ -445,7 +460,7 @@ _py_fetch_package_metadata() {
   }
   local query_dir_identity="${query_dir_state[device]}:${query_dir_state[inode]}:${query_dir_state[uid]}"
   local response_file="$query_dir/response.json"
-  local -i query_rc=0 parse_rc=0
+  local -i query_rc=0 parse_rc=0 cleanup_rc=0
   local response_identity="" metadata=""
 
   {
@@ -471,7 +486,7 @@ _py_fetch_package_metadata() {
       response_identity="${response_state[device]}:${response_state[inode]}:${response_state[uid]}:${response_state[nlink]}"
     fi
     if (( query_rc == 0 )); then
-      command curl \
+      command curl -q \
         --proto '=https' \
         --proto-redir '=https' \
         --fail \
@@ -499,7 +514,7 @@ _py_fetch_package_metadata() {
       }
     fi
     if (( query_rc == 0 )); then
-      metadata=$(command python3 -I -c '
+      metadata=$(command python3 -B -I -S -c '
 import json
 import pathlib
 import sys
@@ -534,10 +549,10 @@ for label, key, limit in (
         && zstat -LH current_state -- "$response_file" 2>/dev/null \
         && [[ "${current_state[device]}:${current_state[inode]}:${current_state[uid]}:${current_state[nlink]}" \
           == "$response_identity" ]]; then
-        command rm -f -- "$response_file" 2>/dev/null || parse_rc=1
+        command rm -f -- "$response_file" 2>/dev/null || cleanup_rc=1
       else
         _py_warn "The PyPI response changed; refusing cleanup."
-        parse_rc=1
+        cleanup_rc=1
       fi
     fi
     if [[ -d "$query_dir" && ! -L "$query_dir" \
@@ -548,10 +563,10 @@ for label, key, limit in (
       if zstat -LH current_state -- "$query_dir" 2>/dev/null \
         && [[ "${current_state[device]}:${current_state[inode]}:${current_state[uid]}" \
           == "$query_dir_identity" ]]; then
-        command rmdir -- "$query_dir" 2>/dev/null || parse_rc=1
+        command rmdir -- "$query_dir" 2>/dev/null || cleanup_rc=1
       else
         _py_warn "The PyPI query directory changed; refusing cleanup."
-        parse_rc=1
+        cleanup_rc=1
       fi
     fi
   }
@@ -560,7 +575,10 @@ for label, key, limit in (
     _py_error "PyPI metadata request failed (status $query_rc)."
     return "$query_rc"
   }
-  (( parse_rc == 0 )) || {
+  case "$parse_rc" in
+    130|143) return "$parse_rc" ;;
+  esac
+  (( parse_rc == 0 && cleanup_rc == 0 )) || {
     _py_error "PyPI returned invalid or unreadable metadata."
     return 1
   }
@@ -752,10 +770,10 @@ _py_package_change() {
 
   _py_detect_package_backend
   local backend_rc=$?
-  (( backend_rc == 130 )) && {
+  if (( backend_rc == 130 )) && [[ "$REPLY" == cancelled ]]; then
     _py_info "Cancelled."
     return 0
-  }
+  fi
   (( backend_rc == 0 )) || return "$backend_rc"
   local backend_plan="$REPLY"
   local backend="${REPLY%%$'\t'*}"
@@ -864,7 +882,12 @@ _py_package_change() {
         "$lock_file" "$lock_state" || return $?
       if [[ "$backend" == poetry-project ]]; then
         _py_check_command poetry || return 1
-        _py_project_uses_poetry "$target/pyproject.toml" || {
+        local -i poetry_marker_rc=0
+        _py_project_uses_poetry "$target/pyproject.toml" || poetry_marker_rc=$?
+        case "$poetry_marker_rc" in
+          130|143) return "$poetry_marker_rc" ;;
+        esac
+        (( poetry_marker_rc == 0 )) || {
           _py_error "The Poetry project marker changed after review."
           return 1
         }

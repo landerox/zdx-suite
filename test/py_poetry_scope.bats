@@ -16,8 +16,9 @@ setup() {
   printf 'foreign environment\n' >"$HOME/foreign/.venv/marker"
   cat >"$TEST_MOCK_BIN/python3" <<'EOF'
 #!/usr/bin/env bash
-[[ "$HOME" == "$TEST_TEMP_DIR/home" && "${1:-}" == -I && "${2:-}" == -c ]] || exit 97
-exec "$PY_POETRY_REAL_PYTHON" -B -I "$@"
+[[ "$HOME" == "$TEST_TEMP_DIR/home" && "${1:-}" == -B && "${2:-}" == -I \
+  && "${3:-}" == -S && "${4:-}" == -c ]] || exit 97
+exec "$PY_POETRY_REAL_PYTHON" "$@"
 EOF
   cat >"$TEST_MOCK_BIN/poetry" <<'EOF'
 #!/usr/bin/env bash

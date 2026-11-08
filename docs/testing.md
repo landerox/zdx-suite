@@ -662,6 +662,14 @@ cross-platform terminal behavior remain manual boundaries.
 
 ### Python coverage
 
+`py_metadata_isolation.bats` covers all four `-B -I -S` reader starts,
+original argv and runtime flags, leading curl `-q`, interruption propagation,
+private cleanup, and genuine or stale picker cancellation. Its no-site
+startup evidence is a private external-semantics model using real
+`site.addsitedir`; no installed site-packages or runtime prefix is changed.
+Existing cwd/PYTHONPATH controls prove isolated imports separately. Returned
+`130`/`143` is distinct from native signal acceptance.
+
 `py_poetry_scope.bats` covers existing project-local environment ownership,
 fixed manager/project/child environment arguments, dry-run and decline
 passivity, post-consent environment observation, reviewed-fact drift before

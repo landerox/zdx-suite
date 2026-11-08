@@ -32,11 +32,11 @@ setup() {
   cat >"$TEST_MOCK_BIN/python3" <<'EOF'
 #!/usr/bin/env bash
 [[ "$HOME" == "$TEST_TEMP_DIR/home" ]] || exit 96
-[[ "${1:-}" == -I && "${2:-}" == -c ]] || {
+[[ "${1:-}" == -B && "${2:-}" == -I && "${3:-}" == -S && "${4:-}" == -c ]] || {
   printf 'refused ambient Python invocation\n' >>"$HOME/ambient-python"
   exit 97
 }
-exec "$PY_LAYER_REAL_PYTHON" -B -I "$@"
+exec "$PY_LAYER_REAL_PYTHON" "$@"
 EOF
   chmod -- 755 "$TEST_MOCK_BIN/python3"
   export PY_LAYER_MODEL="$TEST_TEMP_DIR/backend-model"

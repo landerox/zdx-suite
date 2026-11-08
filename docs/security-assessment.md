@@ -307,6 +307,15 @@ snippet and executes unintended code.
   and DEL. Disposable validator and public-path fixtures exercise refusal
   before staging, network or privilege; human Unicode labels remain data.
 
+- The four Python metadata starts use `-B -I -S`, excluding bytecode writes,
+  ambient Python import configuration and site startup. PyPI curl starts with
+  `-q` so default curlrc options cannot alter the private query. Metadata
+  interruptions remain failures through immediate callers; genuine picker
+  cancellation has a separate invocation-local marker. Private startup-hook
+  fixtures model real Python flags and standard-library site behavior without
+  writing installed runtimes; they do not sandbox a compromised interpreter
+  or certify native installed-hook acceptance.
+
 - Top-level Git and System dispatchers use explicit `case` arms.
 - Owned core probe adapters resolve executable files with `whence -p`, freeze
   their absolute paths, and exclude WSL Windows programs using Linux/WSL

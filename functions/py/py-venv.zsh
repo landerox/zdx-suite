@@ -544,7 +544,7 @@ _py_assert_no_external_uv_workspace() {
       }
       metadata_fingerprint="$REPLY"
       workspace_rc=0
-      command python3 -I -c '
+      command python3 -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -568,6 +568,7 @@ raise SystemExit(0 if isinstance(workspace, dict) else 2)
         "$metadata_file" $(( 2 * 1024 * 1024 )) \
         "$metadata_fingerprint" || return $?
       case "$workspace_rc" in
+        130|143) return "$workspace_rc" ;;
         0)
           _py_error "Refusing a uv project inside an external workspace: $ancestor"
           return 1
