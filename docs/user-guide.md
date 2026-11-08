@@ -1488,6 +1488,10 @@ large-file inspection, a recoverable trash, and junk-file cleanup. Run
   allows (1 GiB by default); on macOS it also rejects names that differ only
   by letter case. It extracts privately and publishes only to a new
   destination. ZIP, RAR, and 7z extraction fail closed.
+  The extension fixes the codec: compressed data disguised as `.tar` is
+  refused. Ordinary root-directory members keep private staging mode `700`.
+  Failed cleanup reports retained staging for inspection; it may contain
+  incomplete or unvalidated data, and replacements are identified as unverified.
 - **zstd archives**: `tar.zst` creation and extraction need GNU tar 1.31 or
   newer, which accepts `--zstd`, and the `zstd` program. On macOS, run
   `brew install gnu-tar zstd`; Linux distributions usually ship both. They

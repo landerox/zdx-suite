@@ -620,6 +620,15 @@ not a substitute for a real macOS host run.
 
 ### File coverage
 
+`file_extraction_scope.bats` covers exact codec arguments across both
+inventories and extraction, disguised compressed/plain archives, ordinary root
+directory members, staged privacy, failed or ineffective cleanup, changed
+original modes, regular-file replacements in extraction and compression, and
+unsearchable parents before and after removal. Real GNU tar/codec work uses private
+fixtures. Direct fixture tools clear inherited archive options and retain
+their source canaries; non-root permission failure is separate from remover
+models and does not establish native macOS/WSL acceptance.
+
 `file_operation_boundary.bats` covers stale cwd/PWD, raw traversal, ancestor
 and reviewed-parent changes, complete scan records, unsafe or replaced staging
 objects/descriptors, renewed large-file size criteria and exact junk names.
