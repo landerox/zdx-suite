@@ -140,6 +140,10 @@ verification, and remaining limitations.
 
 ### Changed
 
+- Add isolated Python pin, package, tool and PyPI failure-path coverage,
+  including exact backend arguments, consent and revalidation boundaries,
+  preserved unrelated data, and strict fixture containment.
+
 - Add isolated malformed PyPI metadata, Git tag-listing and GitHub age-response
   coverage through public Developer updaters, including unchanged-file refusal,
   bounded oversized responses and successful recording-backend controls.
