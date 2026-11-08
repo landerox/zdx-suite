@@ -32,6 +32,8 @@ _ws_status_usage() {
   print -u2 -r -- \
     "            at most WS_FETCH_JOBS (default 4) at a time, 60s each."
   print -u2 -r -- \
+    "            Requires native GNU timeout/gtimeout and mkfifo; no tool is installed."
+  print -u2 -r -- \
     "  --json    Print one JSON document (schema zdx.ws-status.v1) on stdout."
   print -u2 -r -- ""
   print -u2 -r -- \
@@ -160,133 +162,520 @@ _ws_status_age() {
   REPLY+=" ago"
 }
 
-# Fetches every repository that has a remote, at most WS_FETCH_JOBS at a
-# time, each bounded by _WS_FETCH_TIMEOUT. Fetches run without prompts, with
-# closed stdin, and, like the remote listing, without the repository-local
-# Git variables. The caller's fetch_outcomes association receives ok,
-# failed, timed-out, or skipped (no remote) per relative path, and REPLY the
-# number of fetches that failed or timed out. A started fetch is stopped and
-# waited for on every exit path.
-# Usage: _ws_status_fetch <git> <root> <relative-path...>
-_ws_status_fetch() {
+_ws_fetch_load_helpers() {
   emulate -L zsh
-  setopt local_options no_monitor no_notify
-  local git_path="$1" root="$2"
-  shift 2
-  local -a repositories=("$@") fetchable=() reply=()
-  local relative="" remotes=""
-  REPLY=0
-  _ws_fetch_jobs || return 1
-  local -i jobs=$REPLY
-  REPLY=0
+  local worker="${${(%):-%x}:A:h}/ws-fetch-worker.zsh"
+  [[ -f "$worker" && -r "$worker" && ! -L "$worker" \
+    && "$worker" == "${worker:A}" ]] || return 1
+  builtin source "$worker" || return
+  _ws_fetch_modules || return 1
+  REPLY="$worker"
+}
 
-  for relative in "${repositories[@]}"; do
-    remotes=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
-      -C "$root/$relative" remote </dev/null 2>/dev/null) || remotes=""
-    if [[ -n "$remotes" ]]; then
-      fetchable+=("$relative")
-    else
-      fetch_outcomes[$relative]=skipped
-    fi
+# Refuse readonly repository carriers without expanding values or trying unset.
+_ws_fetch_env_clearable() {
+  emulate -L zsh
+  local carrier=""
+  for carrier in "${_WS_GIT_LOCAL_ENV_VARS[@]}"; do
+    [[ "-${(tP)carrier}-" != *-readonly-* ]] || return 1
   done
-  if (( ${#fetchable[@]} == 0 )); then
-    _ws_info "No repository has a remote to fetch."
-    return 0
+  return 0
+}
+
+# These executable paths are trusted installed tools, not arbitrary callbacks.
+_ws_fetch_native_path() {
+  emulate -L zsh
+  local found="" canonical=""
+  local -A state=()
+  REPLY=""
+  _ws_system_root_uid || return 1
+  local -i system_root_uid=$REPLY
+  REPLY=""
+  found=$(whence -p -- "$1" 2>/dev/null) || return 1
+  [[ "$found" == /* ]] || return 1
+  canonical="${found:A}"
+  [[ -f "$canonical" && -x "$canonical" && ! -L "$canonical" \
+    && "${canonical:l}" != *.exe && "$canonical" != *[[:cntrl:]]* ]] || return 1
+  if [[ "$canonical" == /mnt/[a-zA-Z]/* ]] && _ws_host_is_wsl; then return 1; fi
+  _ws_validate_ancestor_chain "$canonical" 2>/dev/null || return 1
+  zstat -LH state -- "$canonical" 2>/dev/null \
+    && (( (state[mode] & 8#170000) == 8#100000 \
+      && (state[uid] == system_root_uid || state[uid] == EUID) \
+      && (state[mode] & 8#22) == 0 )) || return 1
+  REPLY="$canonical"
+}
+
+_ws_fetch_pair() {
+  emulate -L zsh
+  local key="$1" object="" kind="" fd=""
+  local REPLY=""
+  _ws_fetch_object_id "$_wsf_dir" directory && [[ "$REPLY" == "$_wsf_dir_id" ]] || return 1
+  local -a kinds=(control status)
+  [[ "${_wsf_mode[$key]-}" == guard ]] && kinds+=(go)
+  for kind in "${kinds[@]}"; do
+    object="$_wsf_dir/$key.$kind"
+    [[ ! -e "$object" && ! -L "$object" ]] || return 1
+    (umask 077; command "${_wsf_tools[mkfifo]}" -m 600 -- "$object") 2>/dev/null || return 1
+    _ws_fetch_object_id "$_wsf_dir" directory && [[ "$REPLY" == "$_wsf_dir_id" ]] || return 1
+    _ws_fetch_object_id "$object" fifo || return 1
+    _wsf_objects[$object]="$REPLY"
+  done
+  object="$_wsf_dir/$key.control"
+  sysopen -r -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+  _wsf_cr[$key]="$fd"
+  if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+    # This acquisition is still held here. Close it even if the opened object
+    # differs from the expected path; do not write or unlink that replacement.
+    exec {fd}<&-
+    _wsf_cr[$key]=-1
+    return 1
+  fi
+  _wsf_read_ids[$fd]="${_wsf_objects[$object]}"
+  object="$_wsf_dir/$key.status"
+  sysopen -r -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+  _wsf_sr[$key]="$fd"
+  if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+    exec {fd}<&-
+    _wsf_sr[$key]=-1
+    return 1
+  fi
+  _wsf_read_ids[$fd]="${_wsf_objects[$object]}"
+  object="$_wsf_dir/$key.control"
+  sysopen -w -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+  _wsf_cw[$key]="$fd"
+  if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+    exec {fd}>&-
+    _wsf_cw[$key]=-1
+    return 1
+  fi
+  _wsf_write_ids[$fd]="${_wsf_objects[$object]}"
+  object="$_wsf_dir/$key.status"
+  sysopen -w -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+  _wsf_sw[$key]="$fd"
+  if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+    exec {fd}>&-
+    _wsf_sw[$key]=-1
+    return 1
+  fi
+  _wsf_write_ids[$fd]="${_wsf_objects[$object]}"
+  if [[ "${_wsf_mode[$key]-}" == guard ]]; then
+    object="$_wsf_dir/$key.go"
+    sysopen -r -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+    _wsf_gr[$key]="$fd"
+    if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+      exec {fd}<&-; _wsf_gr[$key]=-1; return 1
+    fi
+    _wsf_read_ids[$fd]="${_wsf_objects[$object]}"
+    sysopen -w -o nonblock,nofollow,cloexec -u fd -- "$object" 2>/dev/null || return 1
+    _wsf_gw[$key]="$fd"
+    if ! _ws_fetch_fd_matches "$fd" "${_wsf_objects[$object]}"; then
+      exec {fd}>&-; _wsf_gw[$key]=-1; return 1
+    fi
+    _wsf_write_ids[$fd]="${_wsf_objects[$object]}"
   fi
 
-  _ws_count_noun "${#fetchable[@]}" repository repositories
-  _ws_warn "Fetching $REPLY over the network with git fetch --prune (at most $jobs at a time, ${_WS_FETCH_TIMEOUT}s each)."
-  REPLY=0
+}
 
-  _ws_private_dir_create fetch || return 1
-  local status_dir="${reply[1]}" status_identity="${reply[2]}"
-  local -a pids=()
-  local -i index=0 pid=0 operation_rc=0
+_ws_fetch_launch() {
+  emulate -L zsh
+  _ws_fetch_env_clearable || {
+    _ws_error "Read-only repository variables prevent safe --fetch."
+    return 1
+  }
+  local key="$1" mode="$2" program="$3" repository="${4-}" descriptor=""
+  local nonce="${_wsf_dir:t}.$key.$RANDOM" REPLY=""
+  _wsf_nonce[$key]="$nonce"; _wsf_mode[$key]="$mode"
+  _ws_fetch_pair "$key" || return 1
+  [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || return 1
+  (
+    local control="${_wsf_cr[$key]}" result="${_wsf_sw[$key]}"
+    exec 3<&$control 4>&$result
+    if [[ "$mode" == guard ]]; then
+      local gate_reader="${_wsf_gr[$key]}" gate_writer="${_wsf_gw[$key]}"
+      exec 5<&$gate_reader 6>&$gate_writer
+    fi
+    for descriptor in "${(@v)_wsf_cr}" "${(@v)_wsf_cw}" "${(@v)_wsf_sr}" \
+      "${(@v)_wsf_sw}" "${(@v)_wsf_gr}" "${(@v)_wsf_gw}"; do
+      (( descriptor >= 10 )) && exec {descriptor}>&-
+    done
+    local -A _wsf_write_ids=([4]="${_wsf_objects[$_wsf_dir/$key.status]}")
+    if ! unset -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"; then
+      # Refusal before the fixed owner exec still has no native child. Report
+      # that fact instead of treating an ordinary readonly-env refusal as loss.
+      builtin trap ':' HUP PIPE
+      _ws_fetch_send 4 "$nonce" OWNER_ERROR 1
+      _ws_fetch_send 4 "$nonce" NO_CHILD 1
+      exit 1
+    fi
+    export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
+    if [[ "$mode" == capability ]]; then
+      exec "${_wsf_tools[zsh]}" -f "$_wsf_worker" capability "$nonce" \
+        "${_wsf_objects[$_wsf_dir/$key.control]}" "${_wsf_objects[$_wsf_dir/$key.status]}" "$program"
+    else
+      exec "${_wsf_tools[zsh]}" -f "$_wsf_worker" owner "$nonce" \
+        "${_wsf_objects[$_wsf_dir/$key.control]}" "${_wsf_objects[$_wsf_dir/$key.status]}" \
+        "${_wsf_objects[$_wsf_dir/$key.go]}" "$_wsf_backend" "${_WS_FETCH_TIMEOUT}s" \
+        "${_wsf_tools[zsh]}" "$_wsf_worker" "$program" "$repository" "${_wsf_tools[ps]}"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  # $! is not used as a wait/signal/cache certificate. The private owner reports
+  # its actual native wait, and holds the status writer until its kernel exit.
+  for descriptor in "${_wsf_cr[$key]}" "${_wsf_sw[$key]}" \
+    "${_wsf_gr[$key]:--1}" "${_wsf_gw[$key]:--1}"; do
+    (( descriptor >= 0 )) && exec {descriptor}>&-
+  done
+  _wsf_cr[$key]=-1; _wsf_sw[$key]=-1; _wsf_gr[$key]=-1; _wsf_gw[$key]=-1
+  [[ "$mode" == guard ]] && _wsf_phase[$key]=owner || _wsf_phase[$key]=capability
+  _wsf_active+=("$key")
+}
+
+_ws_fetch_cancel_handle() {
+  emulate -L zsh
+  local key="$1" descriptor="${_wsf_cw[$1]:--1}" reason="${_wsf_interrupt:-1}"
+  (( descriptor >= 0 )) || return 0
+  if ! _ws_fetch_fd_matches "$descriptor" "${_wsf_write_ids[$descriptor]-}"; then
+    _wsf_fatal=1; _wsf_retain=1
+    _wsf_cw[$key]=-1
+    return 1
+  fi
+  _ws_fetch_send "$descriptor" "${_wsf_nonce[$key]}" CANCEL "$reason" || _wsf_fatal=1
+  exec {descriptor}>&-
+  _wsf_cw[$key]=-1
+}
+
+_ws_fetch_cancel_active() {
+  emulate -L zsh
+  local key=""
+  for key in "${_wsf_active[@]}"; do _ws_fetch_cancel_handle "$key"; done
+}
+
+# Frame facts are separate: owner events never overwrite a guardian cause.
+_ws_fetch_frame() {
+  emulate -L zsh
+  local key="$1" token="$2" value="$3"
+  if [[ -n "${_wsf_no_child[$key]-}" && "$token" != (OWNER_ERROR|OWNER_INTERRUPT) ]]; then return 1; fi
+  if [[ -n "${_wsf_native[$key]-}" && "$token" != (OWNER_ERROR|OWNER_INTERRUPT) ]]; then return 1; fi
+  case "$token" in
+    QUERY_INTERRUPT)
+      [[ "$value" == (130|143) && "${_wsf_mode[$key]}" == guard \
+        && -n "${_wsf_monitor[$key]-}" && "${_wsf_phase[$key]}" == binding \
+        && -z "${_wsf_query_interrupt[$key]-}${_wsf_native[$key]-}${_wsf_no_child[$key]-}" ]] \
+        && (( ! ${_wsf_started[$key]:-0} )) || return 1
+      _wsf_query_interrupt[$key]="$value"
+      : "${_wsf_interrupt:=$value}"
+      return 0 ;;
+    OWNER_ERROR)
+      [[ -z "${_wsf_owner_error[$key]-}" ]] || return 1
+      _wsf_owner_error[$key]=1; _wsf_fatal=1; _wsf_retain=1
+      return 0 ;;
+    OWNER_INTERRUPT)
+      [[ -z "${_wsf_owner_interrupt[$key]-}" ]] || return 1
+      _wsf_owner_interrupt[$key]="$value"
+      : "${_wsf_interrupt:=$value}"
+      return 0 ;;
+    NO_CHILD)
+      [[ -z "${_wsf_native[$key]-}${_wsf_monitor[$key]-}${_wsf_kind[$key]-}" ]] \
+        && (( ! ${_wsf_started[$key]:-0} )) || return 1
+      _wsf_no_child[$key]=1; _wsf_fatal=1
+      return 0 ;;
+    NATIVE_EXIT)
+      [[ -z "${_wsf_native[$key]-}" ]] || return 1
+      _wsf_native[$key]="$value"
+      # Native completion closes all launch phases. In particular a later
+      # READY cannot authorize START after the monitor has already exited.
+      if [[ "${_wsf_mode[$key]}" == capability ]]; then
+        [[ "${_wsf_kind[$key]-}" == CAPABILITY \
+          || -n "${_wsf_owner_error[$key]-}${_wsf_owner_interrupt[$key]-}" ]] \
+          || { _wsf_bad[$key]=1; _wsf_fatal=1; }
+      elif (( ${_wsf_started[$key]:-0} )); then
+        [[ -n "${_wsf_kind[$key]-}" ]] || { _wsf_bad[$key]=1; _wsf_fatal=1; }
+      else
+        _wsf_fatal=1
+      fi
+      _wsf_phase[$key]=exited
+      (( value != 127 )) || { _wsf_fatal=1; _wsf_retain=1; }
+      return 0 ;;
+  esac
+  case "${_wsf_phase[$key]}:$token" in
+    owner:MONITOR)
+      _wsf_monitor[$key]="$value"; _wsf_phase[$key]=guard ;;
+    guard:BOOT)
+      _ws_fetch_send "${_wsf_cw[$key]}" "${_wsf_nonce[$key]}" BIND "${_wsf_monitor[$key]}" \
+        || _wsf_fatal=1
+      _wsf_phase[$key]=binding ;;
+    binding:READY)
+      if [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )); then
+        # Set BEFORE writing: a failed/short write cannot prove no delivery.
+        _wsf_started[$key]=1
+        _ws_fetch_send "${_wsf_cw[$key]}" "${_wsf_nonce[$key]}" START 0 || _wsf_fatal=1
+        _wsf_phase[$key]=running
+      fi ;;
+    capability:CAPABILITY|running:RESULT|running:DEADLINE)
+      _wsf_kind[$key]="$token"; _wsf_result[$key]="$value"; _wsf_phase[$key]=closing
+      [[ "$token:$value" == RESULT:(130|143) ]] && : "${_wsf_interrupt:=$value}" ;;
+    *:CANCELLED)
+      [[ -z "${_wsf_kind[$key]-}" ]] || return 1
+      _wsf_kind[$key]="$token"; _wsf_result[$key]="$value"; _wsf_phase[$key]=closing
+      : "${_wsf_interrupt:=$value}" ;;
+    *:ERROR)
+      [[ -z "${_wsf_kind[$key]-}" ]] || return 1
+      _wsf_kind[$key]=ERROR; _wsf_result[$key]=1; _wsf_phase[$key]=closing; _wsf_fatal=1 ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+# This checks private protocol facts only, never a caller PID/job-status cache.
+_ws_fetch_verified() {
+  emulate -L zsh
+  local key="$1"
+  (( ! ${_wsf_lost[$key]:-0} && ! ${_wsf_bad[$key]:-0} )) || return 1
+  if [[ -n "${_wsf_no_child[$key]-}" && -z "${_wsf_native[$key]-}" ]] \
+    && (( ! ${_wsf_started[$key]:-0} )); then
+    _wsf_fatal=1
+    return 0
+  fi
+  [[ -n "${_wsf_native[$key]-}" && "${_wsf_native[$key]}" != 127 ]] || return 1
+  if [[ "${_wsf_mode[$key]}" == guard ]]; then
+    if (( ${_wsf_started[$key]:-0} )); then
+      [[ -n "${_wsf_kind[$key]-}" && "${_wsf_native[$key]}" == 137 ]]
+    else
+      # Fixed code received no attempted START: no Git was created. Its actual
+      # Native status (such as 1 or 125) plus EOF is verified refusal, not success.
+      _wsf_fatal=1
+      return 0
+    fi
+  elif [[ -n "${_wsf_owner_interrupt[$key]-}${_wsf_owner_error[$key]-}" ]]; then
+    return 0
+  elif [[ "${_wsf_kind[$key]-}" == CAPABILITY ]]; then
+    if [[ "${_wsf_result[$key]}" == 0 ]]; then [[ "${_wsf_native[$key]}" == 0 ]];
+    else [[ "${_wsf_native[$key]}" != (130|143) ]]; fi
+  else return 1; fi
+}
+
+_ws_fetch_pump() {
+  emulate -L zsh
+  local key="" descriptor="" REPLY="" object=""
+  local -a reply=() remaining=()
+  local -i read_rc=0 frame_count=0
+  for key in "${_wsf_active[@]}"; do
+    descriptor="${_wsf_sr[$key]:--1}"
+    if (( descriptor >= 0 )); then
+      frame_count=0
+      while (( frame_count++ < 12 )); do
+        read_rc=0; _ws_fetch_read "$descriptor" || read_rc=$?
+        (( read_rc == 1 )) && break
+        if (( read_rc == 3 )); then _wsf_eof[$key]=1; break; fi
+        if (( read_rc == 4 )); then
+          _wsf_lost[$key]=1; _wsf_fatal=1; _wsf_retain=1; _wsf_unverified=1
+          _ws_fetch_cancel_handle "$key"
+          break
+        fi
+        if (( read_rc != 0 )) || ! _ws_fetch_decode "${_wsf_nonce[$key]}" "$REPLY" \
+          || ! _ws_fetch_frame "$key" "${reply[1]}" "${reply[2]}"; then
+          _wsf_fatal=1; _wsf_bad[$key]=1; _wsf_buffers[$descriptor]=""
+          break
+        fi
+      done
+    fi
+    if (( ${_wsf_eof[$key]:-0} || ${_wsf_lost[$key]:-0} )); then
+      if ! _ws_fetch_verified "$key"; then
+        _wsf_fatal=1; _wsf_retain=1; _wsf_unverified=1
+      fi
+      for descriptor in "${_wsf_cw[$key]:--1}" "${_wsf_sr[$key]:--1}"; do
+        if (( descriptor >= 0 )); then
+          object="$_wsf_dir/$key.control"
+          [[ "$descriptor" == "${_wsf_sr[$key]}" ]] && object="$_wsf_dir/$key.status"
+          _ws_fetch_fd_matches "$descriptor" "${_wsf_objects[$object]-}" && exec {descriptor}>&-
+        fi
+        unset "_wsf_buffers[$descriptor]" "_wsf_bytes[$descriptor]" \
+          "_wsf_read_ids[$descriptor]" "_wsf_write_ids[$descriptor]"
+      done
+      _wsf_cw[$key]=-1; _wsf_sr[$key]=-1
+      for object in "$_wsf_dir/$key.control" "$_wsf_dir/$key.status" "$_wsf_dir/$key.go"; do
+        [[ -n "${_wsf_objects[$object]-}" ]] || continue
+        (( _wsf_retain )) && continue
+        if _ws_fetch_object_id "$_wsf_dir" directory && [[ "$REPLY" == "$_wsf_dir_id" ]] \
+          && _ws_fetch_object_id "$object" fifo && [[ "$REPLY" == "${_wsf_objects[$object]}" ]]; then
+          command "${_wsf_tools[rm]}" -f -- "$object" 2>/dev/null || _wsf_fatal=1
+          unset "_wsf_objects[$object]"
+        else _wsf_fatal=1; fi
+      done
+    else remaining+=("$key"); fi
+  done
+  _wsf_active=("${remaining[@]}")
+}
+
+# Fetch-only lifecycle. Ordinary Git failures still return their count in REPLY;
+# interrupt and infrastructure statuses propagate before the public report.
+_ws_status_fetch() {
+  emulate -L zsh
+  setopt local_options local_traps no_monitor no_notify
+  local git_path="$1" root="$2"
+  shift 2
+  local -a repositories=("$@") fetchable=() reply=() _wsf_active=()
+  local -A _wsf_tools=() _wsf_objects=() _wsf_cr=() _wsf_cw=() _wsf_sr=() _wsf_sw=()
+  local -A _wsf_gr=() _wsf_gw=() _wsf_phase=() _wsf_nonce=() _wsf_kind=() _wsf_result=()
+  local -A _wsf_monitor=() _wsf_native=() _wsf_no_child=() _wsf_started=()
+  local -A _wsf_owner_error=() _wsf_owner_interrupt=()
+  local -A _wsf_query_interrupt=()
+  local -A _wsf_mode=()
+  local -A _wsf_eof=() _wsf_bad=() _wsf_lost=() _wsf_buffers=() _wsf_bytes=() _wsf_target=()
+  local -A _wsf_read_ids=() _wsf_write_ids=()
+  local _wsf_interrupt="" _wsf_worker="" _wsf_backend="" _wsf_dir="" _wsf_dir_id=""
+  local relative="" remotes="" key="" candidate="" descriptor="" object=""
+  local -i jobs=0 index=0 remote_rc=0 _wsf_fatal=0 _wsf_retain=0 _wsf_unverified=0 failed=0 fetched=0 _wsf_return_status=1
+  builtin trap ': "${_wsf_interrupt:=130}"' INT
+  builtin trap ': "${_wsf_interrupt:=143}"' TERM
+  builtin trap '_wsf_fatal=1' PIPE HUP
   {
-    for relative in "${fetchable[@]}"; do
-      (( ++index ))
-      (
-        # The job is already a subshell, so it removes the repository-local
-        # Git variables itself and the bounded fetch stays its direct child.
-        # A read-only one aborts the job here, before it fetches, and the
-        # missing status reports the fetch as failed.
-        unset -- "${_WS_GIT_LOCAL_ENV_VARS[@]}"
-        export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
-        local -i fetch_rc=0
-        _ws_run_with_timeout "$_WS_FETCH_TIMEOUT" "$git_path" \
-          -C "$root/$relative" fetch --prune --quiet \
-          </dev/null >/dev/null 2>&1 || fetch_rc=$?
-        print -r -- "$fetch_rc" >| "$status_dir/status.$index"
-      ) &
-      pids+=($!)
-      if (( ${#pids[@]} >= jobs )); then
-        for pid in "${pids[@]}"; do
-          while builtin kill -0 "$pid" 2>/dev/null; do
-            wait "$pid" 2>/dev/null
-            (( $? == 127 )) && break
+    () {
+      _ws_fetch_jobs || return 1
+      jobs=$REPLY
+      _ws_fetch_load_helpers || { _ws_error "The private fetch lifecycle helpers are unavailable."; return 1; }
+      _wsf_worker="$REPLY"
+      for relative in "${repositories[@]}"; do
+        [[ -z "$_wsf_interrupt" ]] || return "$_wsf_interrupt"
+        remote_rc=0
+        remotes=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
+          -C "$root/$relative" remote </dev/null 2>/dev/null) || remote_rc=$?
+        (( remote_rc == 130 || remote_rc == 143 )) && return "$remote_rc"
+        (( remote_rc == 0 )) || {
+          _ws_error "Could not inspect remotes: $relative"
+          return 1
+        }
+        if [[ -n "$remotes" ]]; then fetchable+=("$relative"); else fetch_outcomes[$relative]=skipped; fi
+      done
+      [[ -z "$_wsf_interrupt" ]] || return "$_wsf_interrupt"
+      if (( ${#fetchable} == 0 )); then
+        _ws_info "No repository has a remote to fetch."
+        REPLY=0
+        return 0
+      fi
+      _ws_fetch_env_clearable || {
+        _ws_error "Read-only repository variables prevent safe --fetch."
+        return 1
+      }
+      for candidate in zsh ps mkfifo rm rmdir; do
+        _ws_fetch_native_path "$candidate" || {
+          _ws_error "A native $candidate is required for safe --fetch; install the capability and retry."
+          return 1
+        }
+        _wsf_tools[$candidate]="$REPLY"
+      done
+      _ws_private_dir_create fetch || return 1
+      _wsf_dir="${reply[1]}"
+      {
+        _ws_fetch_object_id "$_wsf_dir" directory || return 1
+        _wsf_dir_id="$REPLY"
+        for candidate in timeout gtimeout; do
+          [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+          _ws_fetch_native_path "$candidate" || continue
+          [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+          _wsf_backend="$REPLY"
+          key="cap$(( ++index ))"
+          _ws_fetch_launch "$key" capability "$_wsf_backend" || { _wsf_fatal=1; break; }
+          while (( ${#_wsf_active} )); do
+            _ws_fetch_pump
+            [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || _ws_fetch_cancel_active
+            zselect -t 1 2>/dev/null || true
+          done
+          [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+          [[ "${_wsf_kind[$key]-}:${_wsf_result[$key]-}" == CAPABILITY:0 ]] && break
+          _wsf_backend=""
+        done
+        if [[ -z "$_wsf_backend" ]] && (( ! _wsf_fatal )); then
+          _ws_error "Safe --fetch requires GNU timeout or gtimeout; install coreutils and retry."
+          _wsf_fatal=1
+        fi
+        if [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )); then
+          _ws_count_noun "${#fetchable}" repository repositories
+          _ws_warn "Fetching $REPLY over the network with git fetch --prune (at most $jobs at a time, ${_WS_FETCH_TIMEOUT}s each)."
+          for relative in "${fetchable[@]}"; do
+            _ws_fetch_pump
+            [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+            while (( ${#_wsf_active} >= jobs )); do
+              _ws_fetch_pump
+              [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+              zselect -t 1 2>/dev/null || true
+            done
+            [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || break
+            key="job$(( ++index ))"
+            _wsf_target[$key]="$relative"
+            _ws_fetch_launch "$key" guard "$git_path" "$root/$relative" || { _wsf_fatal=1; break; }
+          done
+        fi
+      } always {
+        while (( ${#_wsf_active} )); do
+          [[ -z "$_wsf_interrupt" ]] && (( ! _wsf_fatal )) || _ws_fetch_cancel_active
+          _ws_fetch_pump
+          zselect -t 1 2>/dev/null || true
+        done
+        for key in "${(@k)_wsf_nonce}"; do
+          for descriptor in "${_wsf_cr[$key]:--1}" "${_wsf_cw[$key]:--1}" \
+            "${_wsf_sr[$key]:--1}" "${_wsf_sw[$key]:--1}" \
+              "${_wsf_gr[$key]:--1}" "${_wsf_gw[$key]:--1}"; do
+            (( descriptor >= 0 )) || continue
+            object="$_wsf_dir/$key.control"
+            [[ "$descriptor" == "${_wsf_sr[$key]:--1}" \
+              || "$descriptor" == "${_wsf_sw[$key]:--1}" ]] && object="$_wsf_dir/$key.status"
+            [[ "$descriptor" == "${_wsf_gr[$key]:--1}" \
+              || "$descriptor" == "${_wsf_gw[$key]:--1}" ]] && object="$_wsf_dir/$key.go"
+            _ws_fetch_fd_matches "$descriptor" "${_wsf_objects[$object]-}" \
+              && exec {descriptor}>&-
           done
         done
-        pids=()
-      fi
-    done
-    for pid in "${pids[@]}"; do
-      while builtin kill -0 "$pid" 2>/dev/null; do
-        wait "$pid" 2>/dev/null
-        (( $? == 127 )) && break
-      done
-    done
-    pids=()
-
-    local status_text=""
-    local -i failed=0 fetched=0
-    index=0
-    for relative in "${fetchable[@]}"; do
-      (( ++index ))
-      status_text=""
-      [[ -f "$status_dir/status.$index" && ! -L "$status_dir/status.$index" ]] \
-        && status_text=$(<"$status_dir/status.$index") 2>/dev/null
-      case "$status_text" in
-        0)
-          fetch_outcomes[$relative]=ok
-          (( ++fetched ))
-          ;;
-        124)
-          fetch_outcomes[$relative]=timed-out
-          (( ++failed ))
-          _ws_warn "Fetch timed out: $relative"
-          ;;
-        *)
-          fetch_outcomes[$relative]=failed
-          (( ++failed ))
-          if [[ "$status_text" == <-> ]]; then
-            _ws_warn "Fetch failed: $relative (status $status_text)"
+        for object in "${(@k)_wsf_objects}"; do
+          (( _wsf_retain )) && continue
+          if _ws_fetch_object_id "$_wsf_dir" directory && [[ "$REPLY" == "$_wsf_dir_id" ]] \
+            && _ws_fetch_object_id "$object" fifo && [[ "$REPLY" == "${_wsf_objects[$object]}" ]]; then
+            command "${_wsf_tools[rm]}" -f -- "$object" 2>/dev/null || _wsf_fatal=1
           else
-            _ws_warn "Fetch failed: $relative"
+            _wsf_fatal=1
           fi
-          ;;
-      esac
-    done
-    _ws_count_noun "${#fetchable[@]}" repository repositories
-    if (( failed == 0 )); then
-      _ws_success "Fetched $REPLY."
-    else
-      _ws_warn "Fetched $fetched of $REPLY; $failed failed."
-    fi
-    operation_rc=$failed
-  } always {
-    for pid in "${pids[@]}"; do
-      builtin kill "$pid" 2>/dev/null
-    done
-    for pid in "${pids[@]}"; do
-      while builtin kill -0 "$pid" 2>/dev/null; do
-        wait "$pid" 2>/dev/null
-        (( $? == 127 )) && break
+        done
+        if [[ -z "$_wsf_dir_id" ]]; then
+          _ws_warn "Private fetch state could not be verified and was retained: ${(V)_wsf_dir}"
+          _wsf_fatal=1
+        elif _ws_fetch_object_id "$_wsf_dir" directory && [[ "$REPLY" == "$_wsf_dir_id" ]]; then
+          command "${_wsf_tools[rmdir]}" -- "$_wsf_dir" 2>/dev/null || {
+            _ws_warn "Private fetch state was retained: ${(V)_wsf_dir}"
+            _wsf_fatal=1
+          }
+        else
+          _ws_warn "Private fetch state changed and was retained: ${(V)_wsf_dir}"
+          _wsf_fatal=1
+        fi
+      }
+      if (( _wsf_unverified )); then
+        _ws_warn "Fetch completion is unverified; private state retained: ${(V)_wsf_dir}"
+      fi
+      [[ -z "$_wsf_interrupt" ]] || return "$_wsf_interrupt"
+      (( ! _wsf_fatal )) || { _ws_error "The fetch lifecycle could not be verified."; return 1; }
+      for key in "${(@k)_wsf_target}"; do
+        relative="${_wsf_target[$key]}"
+        case "${_wsf_kind[$key]-}:${_wsf_result[$key]-}" in
+          RESULT:0) fetch_outcomes[$relative]=ok; (( ++fetched )) ;;
+          DEADLINE:124)
+            fetch_outcomes[$relative]=timed-out; (( ++failed )); _ws_warn "Fetch timed out: $relative" ;;
+          RESULT:*)
+            fetch_outcomes[$relative]=failed; (( ++failed ))
+            _ws_warn "Fetch failed: $relative (status ${_wsf_result[$key]})"
+            ;;
+          *) return 1 ;;
+        esac
       done
-    done
-    _ws_private_dir_remove "$status_dir" "$status_identity" || true
+      _ws_count_noun "${#fetchable}" repository repositories
+      if (( failed == 0 )); then _ws_success "Fetched $REPLY."; else _ws_warn "Fetched $fetched of $REPLY; $failed failed."; fi
+      REPLY=$failed
+      return 0
+    }
+    _wsf_return_status=$?
+  } always {
+    # Parent interruption remains authoritative across every early return.
+    [[ -z "$_wsf_interrupt" ]] || _wsf_return_status=$_wsf_interrupt
   }
-  REPLY=$operation_rc
-  return 0
+  return "${_wsf_interrupt:-$_wsf_return_status}"
 }
 
 ws-status() {

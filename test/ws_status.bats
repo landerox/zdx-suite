@@ -4,7 +4,8 @@
 setup() {
   REAL_GIT=$(command -v git)
   export REAL_GIT
-  load test_helper
+  load test_helper || return "$?"
+  ws_portability_trace_setup || return 1
   WS="$HOME/workspaces"
   export WS
   git config --global user.name "Jane Doe"
@@ -194,6 +195,7 @@ make_outside_repository() {
 }
 
 @test "ws status: --fetch is disclosed, bounded, prompt-free, and skips repositories without remotes" {
+  require_ws_fetch_gnu
   install_fetch_mock
   export WS_FETCH_JOBS=2
   # More fetchable repositories than jobs, so the bound is exercised.
@@ -218,6 +220,7 @@ make_outside_repository() {
 }
 
 @test "ws status: failed and timed-out fetches are reported and return 1" {
+  require_ws_fetch_gnu
   install_fetch_mock
   export MOCK_FETCH_FAIL="dirty"
   run run_zsh 'NO_COLOR=1 ws-status --fetch --json 2>"$HOME/stderr"'
@@ -278,6 +281,7 @@ make_outside_repository() {
 }
 
 @test "ws status: --fetch lists and fetches each repository, not an inherited one" {
+  require_ws_fetch_gnu
   install_fetch_mock
   make_outside_repository
   # An inherited -c option can also name a remote no repository has.
@@ -294,10 +298,10 @@ make_outside_repository() {
   grep -Fq '⚠ Fetching 3 repositories over the network' "$HOME/stderr"
   [ "$(grep '^fetch|' "$MOCK_GIT_LOG" | cut -d '|' -f 2 | sort | tr '\n' ' ')" = "clean dirty diverged " ]
   ! grep '^fetch|' "$MOCK_GIT_LOG" | grep -vF '|inherited=none|' || false
-  # Each job stays one subshell whose child is the bound (timeout or
-  # gtimeout), so stopping the job addresses the same tree as before.
+  # The status shell owns a fresh OWNER, which owns GNU timeout. Its fixed
+  # guardian is the recorder parent, so these three ancestors precede the shell.
   if command -v timeout >/dev/null || command -v gtimeout >/dev/null; then
-    ! grep '^fetch|' "$MOCK_GIT_LOG" | grep -vF '|depth=2|' || false
+    ! grep '^fetch|' "$MOCK_GIT_LOG" | grep -vF '|depth=3|' || false
   fi
   printf '%s\n' "$output" | jq -e '
     [.repositories[] | {repository, branch, fetch}] | sort_by(.repository)
@@ -312,13 +316,13 @@ make_outside_repository() {
   ' >/dev/null
 }
 
-@test "ws status: a read-only repository variable stops each fetch job before it fetches" {
+@test "ws status: a read-only repository variable refuses fetch before starting the batch" {
   install_fetch_mock
   make_outside_repository
   run run_zsh '
     typeset -rx GIT_DIR="$WS_OUTSIDE/.git"
-    # Every repository lists a remote, so each fetch job starts and must
-    # refuse the variable on its own.
+    # Permit discovery only; the read-only carrier must fail preflight before
+    # any capability owner, fetch job or private endpoint set starts.
     functions[_ws_test_git_command]="${functions[_ws_git_command]}"
     _ws_git_command() {
       [[ "${@[-1]}" == remote ]] && { print -r -- origin; return 0; }
@@ -329,13 +333,12 @@ make_outside_repository() {
   sed 's/^/stderr: /' "$HOME/stderr" >&2
   sed 's/^/log: /' "$MOCK_GIT_LOG" >&2
   [ "$status" -eq 1 ]
-  grep -Fq '⚠ Fetching 6 repositories over the network' "$HOME/stderr"
-  grep -Fq '⚠ Fetched 0 of 6 repositories; 6 failed.' "$HOME/stderr"
+  [ -z "$output" ]
+  grep -Fq 'Read-only repository variables prevent safe --fetch.' "$HOME/stderr"
+  ! grep -Eq 'Fetching |Fetched |retained|unverified' "$HOME/stderr" || false
   ! grep -q '^fetch|' "$MOCK_GIT_LOG" || false
-  printf '%s\n' "$output" | jq -e '
-    (.repositories | length) == 6
-    and ([.repositories[] | select(.fetch != "failed")] | length) == 0
-  ' >/dev/null
+  local leftovers=("$TMPDIR"/zdx-ws-fetch.*)
+  [ ! -e "${leftovers[0]}" ]
 }
 
 @test "ws status: a read-only inherited GIT_DIR fails closed instead of redirecting" {
@@ -389,4 +392,248 @@ make_outside_repository() {
   [ "$status" -eq 1 ]
   [ -z "$output" ]
   grep -Fq 'jq is required for ws-status --json' "$HOME/stderr"
+}
+
+# Published fixture traces always belong to the current test sandbox.
+ws_portability_trace_setup() {
+  case "${BATS_TEST_NUMBER-}" in ''|*[!0-9]*) return 1 ;; esac
+  [[ -n "${TEST_TEMP_DIR-}" && "$TEST_TEMP_DIR" == "${_ZDX_TEST_SANDBOX_ROOT-}" \
+    && -d "$TEST_TEMP_DIR" && ! -L "$TEST_TEMP_DIR" ]] || return 1
+  WSP_TRACE_ROOT="$TEST_TEMP_DIR/ws-portability-traces"
+  mkdir -m 700 "$WSP_TRACE_ROOT" || return 1
+  WSP_TRACE_CASE="$BATS_TEST_NUMBER"
+  WSP_TRACE_NAME="${BATS_TEST_DESCRIPTION-}"
+  [[ -n "$WSP_TRACE_NAME" ]] || return 1
+  export WSP_TRACE_ROOT WSP_TRACE_CASE WSP_TRACE_NAME
+}
+
+ws_portability_common_prelude() {
+  cat <<'WSP_COMMON_PROGRAM'
+source "$ZSH_CUSTOM/functions/ws-menu.zsh" || exit 90
+_ws_fetch_load_helpers || exit 91
+# Private test support. Definitions only; execution needs separate approval.
+typeset -g _wsp_trace_base="" _wsp_trace_fault=0
+
+_wsp_trace_begin() {
+  emulate -L zsh
+  unsetopt MULTIBYTE
+  local kind="$1" root="${WSP_TRACE_ROOT-}" name="${WSP_TRACE_NAME-}"
+  local -A info=()
+  local -i serial=0 fd=-1 count=0
+  [[ "$kind" == (controlled|absence|capability|model) \
+    && "${WSP_TRACE_CASE-}" == <1-> && -n "$name" \
+    && "$name" != *[[:cntrl:]]* && "$root" == /* \
+    && "$root" == "${root:A}" && -d "$root" && ! -L "$root" ]] || return 1
+  zstat -LH info -- "$root" 2>/dev/null \
+    && (( info[uid] == EUID && (info[mode] & 8#777) == 8#700 )) || return 1
+  local trace_path="" record=$'BEGIN\t'"$kind"$'\t'"$name"$'\n'
+  for serial in {1..8}; do
+    trace_path="$root/case-$WSP_TRACE_CASE.call-$serial.begin.trace"
+    if sysopen -w -o creat,excl,nofollow,cloexec -m 600 -u fd -- "$trace_path" 2>/dev/null; then
+      _wsp_trace_base="${trace_path%.begin.trace}"
+      syswrite -o "$fd" -c count -- "$record" 2>/dev/null
+      local -i rc=$?
+      exec {fd}>&-
+      (( rc == 0 && count == ${#record} )) || { _wsp_trace_fault=1; return 1; }
+      return 0
+    fi
+    [[ -f "$trace_path" && ! -L "$trace_path" ]] || return 1
+  done
+  return 1
+}
+
+_wsp_trace_event() {
+  emulate -L zsh
+  unsetopt MULTIBYTE
+  local event="$1" detail="${2-}" fd=""
+  local -i count=0 rc=0
+  [[ -n "$_wsp_trace_base" && "$event" == \
+    (fuses|missing-timeout|missing-gtimeout|pair|launch|result|capability) \
+    && "$detail" != *$'\n'* && ${#detail} -le 4096 ]] || {
+    _wsp_trace_fault=1; return 1
+  }
+  local record="$event"$'\t'"$detail"$'\n'
+  sysopen -w -o creat,excl,nofollow,cloexec -m 600 -u fd \
+    -- "$_wsp_trace_base.$event.trace" 2>/dev/null || {
+    _wsp_trace_fault=1; return 1
+  }
+  syswrite -o "$fd" -c count -- "$record" 2>/dev/null || rc=$?
+  exec {fd}>&-
+  (( rc == 0 && count == ${#record} )) || { _wsp_trace_fault=1; return 1; }
+}
+
+WSP_COMMON_PROGRAM
+}
+
+ws_portability_capability_program() {
+  ws_portability_common_prelude || return 1
+  cat <<'WSP_CAPABILITY_PROGRAM'
+# Private test-only predicate: 0 AVAILABLE, 1 ABSENT, 2 CHECK_ERROR.
+# The real caller loads ws-menu/fetch helpers and starts a trace first.
+_wsp_timeout_resolve() {
+  builtin whence -p -- "$1" 2>/dev/null
+}
+
+_wsp_cap_finish() {
+  emulate -L zsh
+  local kind="$1" detail="${2-}" header="${3-}"
+  local -i rc=2
+  case "$kind" in AVAILABLE) rc=0 ;; ABSENT) rc=1 ;; CHECK_ERROR) rc=2 ;; *) return 2 ;; esac
+  _wsp_trace_event capability "$kind"$'\t'"$detail"$'\t'"$header"$'\t'"${_wsp_cap_observations-}" || return 2
+  print -r -- "$kind"$'\t'"$detail"
+  return "$rc"
+}
+
+_wsp_gnu_capability() {
+  emulate -L zsh
+  unsetopt MULTIBYTE
+  local token="" found="" program="" version="" header="" REPLY=""
+  local _wsp_cap_observations=""
+  local -i resolve_rc=0 probe_rc=0
+  (( ${+functions[_zdx_timeout_watchdog]} )) || {
+    _wsp_cap_finish CHECK_ERROR missing-core-watchdog; return $?
+  }
+  for token in timeout gtimeout; do
+    resolve_rc=0
+    found=$(_wsp_timeout_resolve "$token") || resolve_rc=$?
+    if (( resolve_rc == 1 )); then
+      _wsp_cap_observations+="$token=missing;"
+      continue
+    fi
+    if (( resolve_rc != 0 )) || [[ "$found" != /* || "$found" == *[[:cntrl:]]* ]]; then
+      _wsp_cap_finish CHECK_ERROR discovery; return $?
+    fi
+    _ws_fetch_native_path "$token" || {
+      _wsp_cap_observations+="$token=qualification-rejected;"
+      _wsp_cap_finish CHECK_ERROR native-qualification; return $?
+    }
+    program="$REPLY"
+    if [[ "$program" != /* || "$program" != "${found:A}" ]]; then
+      _wsp_cap_finish CHECK_ERROR changed-qualified-path; return $?
+    fi
+    _wsp_cap_observations+="$token:path=$program;"
+    probe_rc=0
+    version=$(_zdx_timeout_watchdog 2 "$program" --version </dev/null 2>/dev/null) || probe_rc=$?
+    _wsp_cap_observations+="status=$probe_rc,bytes=${#version};"
+    if (( probe_rc != 0 )); then
+      _wsp_cap_finish CHECK_ERROR "version-status-$probe_rc"; return $?
+    fi
+    if (( ${#version} == 0 || ${#version} > 4096 )); then
+      _wsp_cap_finish CHECK_ERROR version-size; return $?
+    fi
+    header="${version%%$'\n'*}"
+    if [[ -z "$header" || "$header" == *[[:cntrl:]]* ]]; then
+      _wsp_cap_finish CHECK_ERROR version-header; return $?
+    fi
+    if [[ "$header" == (timeout|gtimeout)' (GNU coreutils) '* ]]; then
+      _wsp_cap_finish AVAILABLE "$program" "$header"; return $?
+    fi
+    # Only an observed version-shaped non-GNU response is definite absence.
+    if [[ "$header" != (timeout|gtimeout)' ('*') '?* ]]; then
+      _wsp_cap_finish CHECK_ERROR malformed-non-GNU-header; return $?
+    fi
+    _wsp_cap_observations+="non-GNU=${header[1,256]};"
+  done
+  _wsp_cap_finish ABSENT no-qualified-native-GNU
+}
+
+_wsp_trace_begin capability || exit 98
+_wsp_gnu_capability
+
+_wsp_program_status=$?
+_wsp_trace_event result "$_wsp_program_status" || exit 98
+(( _wsp_trace_fault == 0 )) || exit 98
+exit "$_wsp_program_status"
+WSP_CAPABILITY_PROGRAM
+}
+
+require_ws_fetch_gnu() {
+  local program=""
+  program=$(ws_portability_capability_program) || return 1
+  run run_zsh "$program"
+  local check_status="$status" check_output="$output"
+  case "$check_status" in
+    0)
+      [[ "$check_output" == AVAILABLE$'\t'/* ]] || {
+        printf 'GNU capability observation malformed: %s\n' "$check_output" >&2
+        return 1
+      }
+      ;;
+    1)
+      [[ "$check_output" == ABSENT$'\t'no-qualified-native-GNU ]] || {
+        printf 'GNU absence observation malformed: %s\n' "$check_output" >&2
+        return 1
+      }
+      skip "requires qualified native GNU timeout/gtimeout for real fetch coverage"
+      ;;
+    *)
+      printf 'GNU capability CHECK ERROR (status %s): %s\n' "$check_status" "$check_output" >&2
+      return 1
+      ;;
+  esac
+}
+
+ws_status_no_gnu_prelude() {
+  ws_portability_common_prelude || return 1
+  cat <<'WSP_NO_GNU_PROGRAM'
+_wsp_trace_begin "${WSP_TRACE_KIND:-absence}" || exit 98
+functions[_wsp_original_native_path]="${functions[_ws_fetch_native_path]}"
+_ws_fetch_native_path() {
+  case "${1-}" in
+    timeout|gtimeout)
+      _wsp_trace_event "missing-$1" refused || return 1
+      return 1 ;;
+    *) _wsp_original_native_path "$@" ;;
+  esac
+}
+_ws_fetch_pair() {
+  _wsp_trace_event pair unexpected || :
+  return 1
+}
+_ws_fetch_launch() {
+  _wsp_trace_event launch unexpected || :
+  return 1
+}
+_wsp_trace_event fuses installed || exit 98
+WSP_NO_GNU_PROGRAM
+}
+
+run_ws_status_without_gnu() {
+  local body="$1" prelude="" postlude=""
+  prelude=$(ws_status_no_gnu_prelude) || return 98
+  postlude=$(cat <<'WSP_POSTLUDE'
+
+_wsp_program_status=$?
+_wsp_trace_event result "$_wsp_program_status" || exit 98
+(( _wsp_trace_fault == 0 )) || exit 98
+exit "$_wsp_program_status"
+WSP_POSTLUDE
+  ) || return 98
+  run_zsh "$prelude
+$body
+$postlude"
+}
+
+@test "ws status: fetch without GNU refuses before any owner or job" {
+  install_fetch_mock
+  export WSP_TRACE_KIND=absence
+  run run_ws_status_without_gnu 'ws-status --fetch --json >"$HOME/no-gnu.data" 2>"$HOME/no-gnu.ui"'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [ ! -s "$HOME/no-gnu.data" ]
+  grep -Fq 'Safe --fetch requires GNU timeout or gtimeout; install coreutils and retry.' "$HOME/no-gnu.ui"
+  ! grep -Eq 'Fetching |Fetched ' "$HOME/no-gnu.ui" || false
+  ! grep -q '^fetch|' "$MOCK_GIT_LOG" || false
+  local leftovers=("$TMPDIR"/zdx-ws-fetch.*)
+  [ ! -e "${leftovers[0]}" ]
+  local begins=("$WSP_TRACE_ROOT"/case-"$BATS_TEST_NUMBER".call-*.begin.trace)
+  [ "${#begins[@]}" -eq 1 ]
+  [ -f "${begins[0]}" ]
+  local prefix="${begins[0]%.begin.trace}"
+  [ "$(cat "$prefix.fuses.trace")" = $'fuses\tinstalled' ]
+  [ "$(cat "$prefix.missing-timeout.trace")" = $'missing-timeout\trefused' ]
+  [ "$(cat "$prefix.missing-gtimeout.trace")" = $'missing-gtimeout\trefused' ]
+  [ ! -e "$prefix.pair.trace" ]
+  [ ! -e "$prefix.launch.trace" ]
+  [ "$(cat "$prefix.result.trace")" = $'result\t1' ]
 }

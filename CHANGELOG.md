@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Workspace: retain ownership of each fetch process group through interruption
+  and deadline cleanup, preserve the first interrupt status, and retain private
+  diagnostics when termination cannot be proved. Fetchable batches require
+  native GNU timeout; ordinary local status needs no new dependency.
+
 - Environment: preserve exact exported values through direct, lazy and master
   routes, reject unprovable picker snapshots, and cover clipboard fallback and
   encoding paths with isolated recorders.

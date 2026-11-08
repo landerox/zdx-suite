@@ -2250,14 +2250,18 @@ unintended targets.
   prunes older reports while always protecting the report just published and
   never deleting an entry that fails owner-only validation; invalid retention
   configuration fails the command closed before any report work.
-- The Workspace suite persists no state of its own. `ws-clone` writes only
+- The Workspace suite maintains no workspace index or configuration.
+  Private fetch diagnostics can remain after unverified cleanup. `ws-clone`
+  writes only
   below an existing `WS_BASE_DIR` that resolves through trusted aliases, is
   owned by the current user, cannot be written by group or other users, and
   has trusted ancestors; existing platform and identity directories must meet
   the same rules and must not be symbolic links, and new ones are created with
   the umask plus `022`. Picker results, the `ws-jump` path snapshot, and fetch
-  statuses live in owner-only directories below a validated `TMPDIR` and are
-  removed, after an identity check, on every exit path. Read-only discovery
+  state live in owner-only directories below a validated `TMPDIR`. Verified
+  state is removed after identity checks; unknown fetch ownership or a failed
+  initial directory-identity observation retains it and reports an escaped
+  path without attempting deletion. Read-only discovery
   never follows symbolic links. Every Workspace Git command that uses a
   repository or Git configuration, including the delegated
   `git-menu git-identity-switcher --switch NAME local`, runs without the
@@ -2954,8 +2958,20 @@ memory or CPU during inspection.
   ceiling and fails closed above 2,000 repositories. Each `ws-status` probe and
   each SSH alias or Git configuration probe is bounded through the core timeout
   service, and `ws-status --fetch` runs at most `WS_FETCH_JOBS` fetches at a
-  time, each bounded to 60 seconds without prompts and with closed stdin;
-  every started job is stopped and waited for on every exit path. The
+  time with a 60-second work deadline, Git/GCM prompt suppression and closed
+  stdin. Fetchable batches require qualified native GNU timeout and FIFO/job
+  support; plain status has no new dependency. A separate owner binds each
+  fresh process group before Git starts. Cleanup completes the TERM grace and
+  KILL pass even after Git success, and certifies correlated native termination
+  plus channel closure before releasing ownership. The caller never signals a
+  stale numeric PID/group. First-observed `130`/`143` prevents later scheduling
+  and survives cleanup. Missing proof retains private state, reports its escaped
+  path, and fails instead of claiming completion or publishing partial JSON.
+  The boundary covers same-group descendants; trusted transports may detach,
+  inherited caller descriptors and startup/configuration remain trusted, and
+  an externally stopped owner can prevent bounded completion. No real SSH,
+  PTY, core-loaded or macOS lifetime acceptance follows from the finite models
+  and separate controlled Linux/WSL cases. The
   `ws-clone` transfer itself is deliberately unbounded, because a large
   repository can legitimately take long and Git may ask for credentials in
   the foreground; `Ctrl-C` stops it and its staging directory is removed.
@@ -3133,7 +3149,8 @@ transports, stages each clone privately, publishes it without replacing
 anything, and leaves identity configuration to the Git suite's public
 command. Its discovery is bounded, its `ws-jump` preview receives only a row
 index, its network access is limited to an explicit clone and an opt-in,
-disclosed, bounded fetch, and its JSON omits remote URLs. Real remote hosts,
+disclosed fetch with a work deadline and group cleanup; its JSON omits remote
+URLs. Real remote hosts,
 a Windows SSH configuration, and BSD `mv` on a Mac are manual acceptance
 boundaries.
 

@@ -576,10 +576,15 @@ cd "$(ws-clone https://gitlab.com/acme/tool.git --identity work --yes)"
   commits, stashes, a detached `HEAD`, or an upstream branch that no longer
   exists come first, and a final line counts them.
 - **Fetch first (`ws-status --fetch`)**: Runs `git fetch --prune` in every
-  repository with a remote, at most `WS_FETCH_JOBS` (4) at a time and 60
-  seconds each, after saying so. Fetches never prompt for credentials; load SSH
-  keys that need a passphrase into your agent first. Without `--fetch`, the
-  status uses no network.
+  repository with a remote, at most `WS_FETCH_JOBS` (4) at a time, with a
+  60-second work deadline. Cleanup takes additional time. Fetchable batches
+  require native GNU `timeout` (`gtimeout` on macOS); missing support gives
+  manual instructions. Load SSH keys into your agent first: Git/GCM prompts
+  are disabled, while custom SSH behavior remains your configuration.
+  Interruptions stop later fetches and clean up owned groups before returning.
+  If cleanup cannot be verified, the command reports retained private state
+  and stops the report. Without `--fetch`, status uses no network or GNU
+  fetch backend.
 - **For scripts (`ws-status --json`)**: one JSON document with the
   `zdx.ws-status.v1` schema on stdout; it never includes remote URLs.
 
