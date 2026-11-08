@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Environment: preserve exact exported values through direct, lazy and master
+  routes, reject unprovable picker snapshots, and cover clipboard fallback and
+  encoding paths with isolated recorders.
+
 - Environment: disable configured Git filesystem-monitor hooks in dotenv
   probes, retain unknown facts after repository refusals, and bind reads,
   hygiene and JSON paths to the same physical input directory.

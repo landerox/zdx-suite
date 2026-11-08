@@ -674,6 +674,16 @@ remain manual boundaries.
 
 ### Environment coverage
 
+`env_exact_copy.bats` covers exported names that collide with implementation,
+loader and master-selection locals in direct, nested, lazy and interactive
+routes. It checks exact scalar bytes, empty values and trailing newlines,
+stale/type/missing/corrupted snapshot refusal, the conservative hidden tied
+case, occupied/exhausted master carriers, hostile caller options and persistent
+override effects. Strict clipboard recorders cover picker and direct success,
+backend failure/fallback and iconv-less ASCII/Unicode behavior without any real
+clipboard. Separate core/plugin tests cover the transparent loading and master
+boundaries; all original Env tests remain unchanged.
+
 `env_dotenv_git_safety.bats` exercises real private filesystem-monitor canaries,
 inherited monitor configuration, ownership refusals, damaged and dangling Git
 metadata, known non-repositories and discovery ceilings, physical `link/..`

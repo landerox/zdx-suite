@@ -2223,7 +2223,7 @@ else
     }
   }
 
-  _zdx_lazy_dispatch() {
+  _zdx_lazy_load() {
     # No emulated ancestor may surround a public override or local extension.
     local function_name="$1" file_name="" module_file=""
     shift
@@ -2243,7 +2243,13 @@ else
       return $source_rc
     fi
     _zdx_overrides_reapply
-    "$function_name" "$@"
+  }
+
+  _zdx_lazy_dispatch() {
+    # Loading locals must leave scope before an export-inspecting command runs.
+    # Preserve caller options and literal arguments through the public call.
+    _zdx_lazy_load "${1-}" || return
+    "$@"
   }
 
   () {
