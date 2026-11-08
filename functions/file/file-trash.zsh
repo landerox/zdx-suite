@@ -157,7 +157,7 @@ _file_trash_locate() {
 
 # Creates the missing trash directories, each mode 700, and validates the
 # result. REPLY is the canonical trash; reply is the identity of its info
-# directory, which record publication revalidates.
+# and files directories, which every publication and move revalidate.
 _file_trash_prepare() {
   emulate -L zsh
   _file_trash_locate || return 1
@@ -196,7 +196,9 @@ _file_trash_prepare() {
   done
   _file_validate_ancestor_chain "$trash_dir" || return 1
   _file_directory_identity "$trash_dir/info" || return 1
-  reply=("$REPLY")
+  local info_identity="$REPLY"
+  _file_directory_identity "$trash_dir/files" || return 1
+  reply=("$info_identity" "$REPLY")
   REPLY="$trash_dir"
 }
 
@@ -743,6 +745,51 @@ _file_trash_list_text() {
   return 0
 }
 
+# Inventories only the deletion engine's reserved recovery namespace in the
+# validated private trash containers. A matching name is a bounded recovery
+# candidate, not historical proof of which invocation created it. No new ID or
+# record format is assigned. reply holds exact paths, never their contents.
+_file_trash_recovery_paths() {
+  emulate -L zsh
+  setopt local_options no_multibyte
+  local LC_ALL=C trash_dir="$1" directory="" candidate=""
+  local MATCH="" MBEGIN="" MEND=""
+  local -a match=() mbegin=() mend=() candidates=() recovered=()
+  local -i count=0 bytes=0
+  reply=()
+  _file_trash_private_dir "$trash_dir" || return 1
+  _file_validate_ancestor_chain "$trash_dir" || return 1
+  for directory in "$trash_dir/files" "$trash_dir/info"; do
+    [[ -e "$directory" || -L "$directory" ]] || continue
+    _file_trash_private_dir "$directory" || return 1
+    _file_directory_identity "$directory" || return 1
+    local directory_identity="$REPLY"
+    candidates=("$directory"/.zdx-file-delete.*(DN))
+    for candidate in "${candidates[@]}"; do
+      (( ++count <= _FILE_MAX_CANDIDATES )) || return 1
+      (( bytes += ${#candidate} + 1 ))
+      (( bytes <= _FILE_MAX_PICKER_BYTES )) || return 1
+      if [[ ! "${candidate:t}" =~ '^\.zdx-file-delete\.((0|[1-9][0-9]*)-[0-9]+)?\.(0|[1-9][0-9]{0,4})\.[1-9][0-9]{0,2}$' ]]; then
+        _file_error "An unrecognized trash recovery name needs manual review: $candidate"
+        return 1
+      fi
+      local -a name_fields=("${(@s:.:)${candidate:t}}")
+      # Empty timestamps came from the historical standalone engine before it
+      # enabled EPOCHREALTIME. The numeric suffix remains strictly bounded.
+      # The engine uses Zsh RANDOM and a bounded 1..128 reservation loop.
+      (( 10#${name_fields[4]} <= 32767 \
+        && 10#${name_fields[5]} >= 1 && 10#${name_fields[5]} <= 128 )) || {
+        _file_error "An unrecognized trash recovery name needs manual review: $candidate"
+        return 1
+      }
+      recovered+=("$candidate")
+    done
+    _file_revalidate_parent "$directory/inventory" "$directory_identity" \
+      || return 1
+  done
+  reply=("${recovered[@]}")
+}
+
 # Usage: _file_trash_list JSON_MODE
 _file_trash_list() {
   emulate -L zsh
@@ -754,11 +801,19 @@ _file_trash_list() {
   fi
   _file_trash_locate || return 1
   local trash_dir="$REPLY"
-  local -a entries=()
+  local -a entries=() recoveries=()
   if [[ "${reply[1]}" == present ]]; then
     _file_trash_load "$trash_dir" || return 1
     entries=("${reply[@]}")
+    _file_trash_recovery_paths "$trash_dir" || return 1
+    recoveries=("${reply[@]}")
   fi
+  local recovery=""
+  for recovery in "${recoveries[@]}"; do
+    _file_warn "Retained trash recovery data needs review; purge --all includes it."
+    _file_path_display "$recovery"
+    _file_label "Recovery path" "$REPLY"
+  done
   if [[ "$json_mode" == yes ]]; then
     _file_trash_list_json "$trash_dir" "${entries[@]}"
   else
@@ -891,7 +946,7 @@ _file_trash_put_plan() {
       fi
     done
     if [[ -d "$absolute" && ! -L "$absolute" ]]; then
-      _file_validate_tree_for_transfer "$absolute" || {
+      _file_validate_tree_for_transfer "$absolute" yes || {
         _file_dim "A directory moves to the trash only when it holds no links, special or hard-linked files, or mounts, so that purge can delete it later."
         return 1
       }
@@ -926,7 +981,7 @@ _file_trash_put_revalidate() {
     _file_revalidate_mutation_target \
       "${targets[index]}" "${identities[index]}" || return 1
     if [[ -d "${targets[index]}" && ! -L "${targets[index]}" ]]; then
-      _file_validate_tree_for_transfer "${targets[index]}" || return 1
+      _file_validate_tree_for_transfer "${targets[index]}" yes || return 1
     fi
     (( ++index ))
   done
@@ -958,8 +1013,9 @@ _file_trash_write_info() {
     exec {write_fd}>&-
     write_fd=-1
     _file_publish_staged_file "$staged" "$info_file" absent "$info_identity" \
-      || return 1
+      || { publish_rc=$?; return $publish_rc; }
     _file_node_identity "$info_file" || return 1
+    [[ "$REPLY" == "$staged_identity" ]] || return 1
     publish_rc=0
   } always {
     (( write_fd >= 0 )) && exec {write_fd}>&-
@@ -984,9 +1040,10 @@ _file_trash_write_info() {
 
 # Removes a record this invocation published, only while it keeps its
 # published identity.
-# Usage: _file_trash_discard_info <record> <node-identity>
+# Usage: _file_trash_discard_info <record> <node-identity> <parent-identity>
 _file_trash_discard_info() {
-  local info_file="$1" expected_identity="$2" REPLY=""
+  local info_file="$1" expected_identity="$2" parent_identity="$3" REPLY=""
+  _file_revalidate_parent "$info_file" "$parent_identity" || return 1
   [[ -e "$info_file" || -L "$info_file" ]] || return 0
   _file_node_identity "$info_file" \
     && [[ "$REPLY" == "$expected_identity" ]] || {
@@ -996,25 +1053,49 @@ _file_trash_discard_info() {
   command rm -f -- "$info_file" 2>/dev/null
 }
 
-# Moves one reviewed target into the trash: reserves an ID by publishing its
-# record, revalidates the target, its tree or mount state, its parent, and
-# the shared filesystem, then renames it without clobbering and verifies the
-# moved identity. A failure before the rename withdraws the record. REPLY is
-# the new ID.
+# Checks the exact reserved record through its reviewed directory, fingerprint,
+# and content digest. These checks bound races; they do not lock the pathname.
+_file_trash_reservation_valid() {
+  local info_file="$1" fingerprint="$2" digest="$3" parent_identity="$4"
+  local REPLY=""
+  local -i check_rc=0
+  _file_revalidate_parent "$info_file" "$parent_identity" \
+    && _file_revalidate_mutation_target "$info_file" "$fingerprint" || {
+    _file_error "The trash reservation changed before the move completed."
+    return 1
+  }
+  _file_sha256_digest "$info_file" || check_rc=$?
+  if (( check_rc != 0 )); then
+    _file_error "Could not verify the reserved trash record."
+    return $check_rc
+  fi
+  [[ "$REPLY" == "$digest" ]] \
+    && _file_revalidate_mutation_target "$info_file" "$fingerprint" || {
+    _file_error "The trash reservation changed before the move completed."
+    return 1
+  }
+}
+
+# Moves one reviewed target into the trash, binding both destination directories
+# and its published reservation before and after the no-clobber move. If the
+# reservation disappears after the move, compensate only to a still-vacant,
+# reviewed original parent; otherwise retain and name the exact recovery item.
 # Usage: _file_trash_put_one <target> <fingerprint> <trash-dir>
-#          <info-dir-identity> <mv-command...>
+#          <info-dir-identity> <files-dir-identity> <mv-command...>
 _file_trash_put_one() {
   emulate -L zsh
   zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null || return 1
   local target="$1" expected_identity="$2" trash_dir="$3" info_identity="$4"
-  shift 4
+  local files_identity="$5"
+  shift 5
   local -a mv_command=("$@")
   local files_dir="$trash_dir/files" info_dir="$trash_dir/info"
   REPLY=""
   _file_fingerprint_node_identity "$expected_identity" || return 1
   local expected_node_identity="$REPLY"
-  _file_node_identity "${target:h}" || return 1
+  _file_directory_identity "${target:h}" || return 1
   local parent_identity="$REPLY"
+  _file_revalidate_parent "$files_dir/reservation" "$files_identity" || return 1
 
   local stamp="" suffix="" id=""
   local -i attempt=0
@@ -1037,54 +1118,120 @@ _file_trash_put_one() {
   local content="[Trash Info]"$'\n'"Path=${REPLY}"$'\n'
   content+="DeletionDate=${deletion_date}"$'\n'
   local info_file="$info_dir/$id.trashinfo" item="$files_dir/$id"
-  _file_trash_write_info "$info_file" "$content" "$info_identity" || return 1
-  local info_node_identity="$REPLY"
-
-  local -i operation_rc=1
+  _file_trash_write_info "$info_file" "$content" "$info_identity" || return $?
+  local info_node_identity="$REPLY" info_fingerprint="" info_digest=""
+  local -i operation_rc=1 reservation_lost=0 cleanup_rc=0
   {
-    _file_revalidate_mutation_target "$target" "$expected_identity" \
-      || return 1
-    # A directory moves with its whole tree, so it takes a fresh snapshot.
-    [[ -d "$target" && ! -L "$target" ]] && _file_mount_mode=""
-    _file_delete_mounts_clear "$target" || return 1
-    _file_node_identity "${target:h}" \
-      && [[ "$REPLY" == "$parent_identity" ]] || {
-      _file_error "The parent of a trash target changed after authorization."
-      return 1
+    () {
+      _file_trash_read_info "$info_file" "$trash_dir" || return 1
+      local -a record_fields=("${(@ps:\t:)REPLY}")
+      [[ "${record_fields[3]}" == "$target" \
+        && "${record_fields[2]}" == "$deletion_date" ]] || return 1
+      _file_path_fingerprint "$info_file" || return 1
+      info_fingerprint="$REPLY"
+      _file_fingerprint_node_identity "$info_fingerprint" \
+        && [[ "$REPLY" == "$info_node_identity" ]] || {
+        _file_error "The published trash reservation was replaced."
+        return 1
+      }
+      _file_sha256_digest "$info_file" || return $?
+      info_digest="$REPLY"
+      _file_revalidate_mutation_target "$target" "$expected_identity" || return 1
+      [[ -d "$target" && ! -L "$target" ]] && _file_mount_mode=""
+      _file_delete_mounts_clear "$target" yes || return 1
+      _file_revalidate_parent "$target" "$parent_identity" || return 1
+      _file_trash_same_filesystem "$target" "$files_dir" || return 1
+      _file_trash_private_dir "$trash_dir" || return 1
+      _file_revalidate_parent "$item" "$files_identity" || return 1
+      _file_trash_reservation_valid "$info_file" "$info_fingerprint" \
+        "$info_digest" "$info_identity" || return $?
+      command "${mv_command[@]}" -- "$target" "$item" 2>/dev/null || {
+        operation_rc=$?
+        _file_error "Could not move the exact target into the trash."
+        return $operation_rc
+      }
+      [[ ! -e "$target" && ! -L "$target" ]] || {
+        _file_error "The trash target remained after the move."
+        return 1
+      }
+      _file_trash_private_dir "$trash_dir" || return 1
+      _file_revalidate_parent "$item" "$files_identity" || return 1
+      _file_path_fingerprint "$item" \
+        && _file_fingerprint_node_identity "$REPLY" \
+        && [[ "$REPLY" == "$expected_node_identity" ]] || {
+        _file_error "The trashed item changed identity during the move."
+        return 1
+      }
+      _file_trash_reservation_valid "$info_file" "$info_fingerprint" \
+        "$info_digest" "$info_identity" || {
+        operation_rc=$?
+        reservation_lost=1
+        return $operation_rc
+      }
+      return 0
     }
-    _file_trash_same_filesystem "$target" "$files_dir" || return 1
-    command "${mv_command[@]}" -- "$target" "$item" 2>/dev/null || {
-      operation_rc=$?
-      _file_error "Could not move the exact target into the trash."
-      return $operation_rc
-    }
-    [[ ! -e "$target" && ! -L "$target" ]] || {
-      _file_error "The trash target remained after the move."
-      return 1
-    }
-    _file_path_fingerprint "$item" \
-      && _file_fingerprint_node_identity "$REPLY" \
-      && [[ "$REPLY" == "$expected_node_identity" ]] || {
-      _file_error "The trashed item changed identity during the move."
-      return 1
-    }
-    operation_rc=0
+    operation_rc=$?
   } always {
     if (( operation_rc != 0 )); then
       local REPLY=""
-      if [[ -e "$item" || -L "$item" ]] && _file_path_fingerprint "$item" \
+      if _file_revalidate_parent "$item" "$files_identity" \
+        && [[ -e "$item" || -L "$item" ]] \
+        && _file_path_fingerprint "$item" \
         && _file_fingerprint_node_identity "$REPLY" \
         && [[ "$REPLY" == "$expected_node_identity" ]]; then
-        _file_dim "The reviewed item is in the trash as $id."
-      elif [[ -e "$target" || -L "$target" ]]; then
-        # The target never left, so the reserved record is withdrawn.
-        _file_trash_discard_info "$info_file" "$info_node_identity"
-      else
-        _file_dim "Trash entry kept for recovery: $item"
+        if (( reservation_lost )) \
+          && [[ ! -e "$target" && ! -L "$target" ]] \
+          && _file_revalidate_parent "$target" "$parent_identity" \
+          && _file_trash_same_filesystem "$item" "${target:h}"; then
+          cleanup_rc=0
+          command "${mv_command[@]}" -- "$item" "$target" 2>/dev/null \
+            || cleanup_rc=$?
+          if (( cleanup_rc == 0 )) && [[ ! -e "$item" && ! -L "$item" ]] \
+            && _file_path_fingerprint "$target" \
+            && _file_fingerprint_node_identity "$REPLY" \
+            && [[ "$REPLY" == "$expected_node_identity" ]]; then
+            _file_warn "The reservation was lost; the reviewed item was returned."
+          elif [[ ! -e "$item" && ! -L "$item" \
+            && -d "$target" && ! -L "$target" \
+            && "$target" == "${target:A}" ]] \
+            && _file_validate_ancestor_chain "$target" \
+            && _file_path_fingerprint "$target/${item:t}" \
+            && _file_fingerprint_node_identity "$REPLY" \
+            && [[ "$REPLY" == "$expected_node_identity" ]]; then
+            # BSD mv -n can receive the item inside a newly appeared directory.
+            # The identity-bound nested item is retained, never moved again.
+            _file_error "Compensation did not return the item to its original path."
+            _file_path_display "$target/${item:t}"
+            _file_label "Recovery path" "$REPLY"
+            _file_path_display "$target"
+            _file_label "Original path" "$REPLY"
+          fi
+        fi
+        if [[ -e "$item" || -L "$item" ]] \
+          && _file_path_fingerprint "$item" \
+          && _file_fingerprint_node_identity "$REPLY" \
+          && [[ "$REPLY" == "$expected_node_identity" ]]; then
+          _file_error "Trash did not complete; the reviewed item was retained."
+          _file_path_display "$item"
+          _file_label "Recovery path" "$REPLY"
+          _file_path_display "$target"
+          _file_label "Original path" "$REPLY"
+        fi
+      elif [[ -e "$item" || -L "$item" ]]; then
+        _file_warn "The trash destination changed; its replacement was kept."
+        _file_path_display "$item"
+        _file_label "Unverified path" "$REPLY"
+      fi
+      if [[ -e "$target" || -L "$target" ]]; then
+        local -i discard_rc=0
+        _file_trash_discard_info "$info_file" "$info_node_identity" "$info_identity" \
+          || discard_rc=$?
+        (( discard_rc == 130 || discard_rc == 143 )) && cleanup_rc=$discard_rc
       fi
     fi
   }
   REPLY="$id"
+  (( cleanup_rc == 130 || cleanup_rc == 143 )) && return $cleanup_rc
   return $operation_rc
 }
 
@@ -1148,7 +1295,7 @@ _file_trash_put_execute() {
     _file_error "The trash location changed after review."
     return 1
   }
-  local info_identity="${reply[1]}"
+  local info_identity="${reply[1]}" files_identity="${reply[2]}"
   local -a mv_command=()
   _file_mv_no_clobber_command || return 1
   mv_command=("${reply[@]}")
@@ -1161,7 +1308,7 @@ _file_trash_put_execute() {
     display="${target#"$base_dir"/}"
     action_rc=0
     _file_trash_put_one "$target" "${identities[index]}" "$trash_dir" \
-      "$info_identity" "${mv_command[@]}" || action_rc=$?
+      "$info_identity" "$files_identity" "${mv_command[@]}" || action_rc=$?
     if (( action_rc == 0 )); then
       _file_success "Trashed $display as $REPLY"
     else
@@ -1264,8 +1411,14 @@ _file_trash_restore_one() {
     fi
     return 1
   }
+  local -i cleanup_rc=0
   _file_quarantine_delete "$info_file" "$info_identity" "${mv_command[@]}" \
-    || _file_warn "Restored, but its trash record could not be removed: $info_file"
+    || cleanup_rc=$?
+  if (( cleanup_rc != 0 )); then
+    _file_warn "Restored, but its trash record could not be removed: $info_file"
+  fi
+  REPLY=restored
+  (( cleanup_rc == 130 || cleanup_rc == 143 )) && return $cleanup_rc
   return 0
 }
 
@@ -1391,13 +1544,16 @@ _file_trash_restore_execute() {
   index=1
   while (( index <= ${#items[@]} )); do
     action_rc=0
+    REPLY=""
     _file_trash_restore_one "${items[index]}" "${item_ids[index]}" \
       "${infos[index]}" "${info_ids[index]}" "${destinations[index]}" \
       "${parent_ids[index]}" "${mv_command[@]}" || action_rc=$?
+    local restored_result="$REPLY"
     _file_path_display "${destinations[index]}"
     if (( action_rc == 0 )); then
       _file_success "Restored $REPLY"
     else
+      [[ "$restored_result" == restored ]] && _file_success "Restored $REPLY"
       _file_error "Failed (status $action_rc): $REPLY"
       (( ++failures ))
       if (( action_rc == 130 || action_rc == 143 )); then
@@ -1420,12 +1576,44 @@ _file_trash_purge_one() {
   local item="$1" item_identity="$2" info_file="$3" info_identity="$4"
   shift 4
   if [[ "$item_identity" != - ]]; then
-    _file_quarantine_delete "$item" "$item_identity" "$@" || return $?
+    _file_quarantine_delete --require-owner-rwx "$item" "$item_identity" "$@" \
+      || return $?
   fi
   if [[ "$info_identity" != - ]]; then
     _file_quarantine_delete "$info_file" "$info_identity" "$@" || return $?
   fi
   return 0
+}
+
+# Validates one complete purge target, including its entire recursive tree,
+# before the plan and again after consent. Links remain links, never targets.
+_file_trash_purge_target_valid() {
+  local target="$1" fingerprint="$2" container="$3" REPLY=""
+  _file_trash_private_dir "${container:h}" || return 1
+  _file_trash_private_dir "$container" || return 1
+  if [[ -L "$target" ]]; then
+    _file_trash_validate_link "$target" "$container" || return 1
+  else
+    _file_validate_mutation_target "$target" "$container" || return 1
+  fi
+  _file_revalidate_mutation_target "$target" "$fingerprint" || return 1
+  _file_delete_mounts_clear "$target" yes || return 1
+}
+
+# Callers keep the four parallel arrays local to the complete purge plan.
+_file_trash_purge_revalidate() {
+  local -i check_index=1
+  while (( check_index <= ${#items[@]} )); do
+    if [[ "${item_ids[check_index]}" != - ]]; then
+      _file_trash_purge_target_valid "${items[check_index]}" \
+        "${item_ids[check_index]}" "${items[check_index]:h}" || return 1
+    fi
+    if [[ "${info_ids[check_index]}" != - ]]; then
+      _file_trash_purge_target_valid "${infos[check_index]}" \
+        "${info_ids[check_index]}" "${infos[check_index]:h}" || return 1
+    fi
+    (( ++check_index ))
+  done
 }
 
 # Usage: _file_trash_purge_execute DRY_RUN AUTO_YES SELECTOR DAYS [ID...]
@@ -1441,10 +1629,14 @@ _file_trash_purge_execute() {
   [[ "$selector" == pick ]] || _file_header "Purge Trash"
   _file_trash_locate || return 1
   local trash_dir="$REPLY"
-  local -a entries=() selected=() fields=()
+  local -a entries=() selected=() fields=() recoveries=()
   if [[ "${reply[1]}" == present ]]; then
     _file_trash_load "$trash_dir" || return 1
     entries=("${reply[@]}")
+    if [[ "$selector" == all ]]; then
+      _file_trash_recovery_paths "$trash_dir" || return 1
+      recoveries=("${reply[@]}")
+    fi
   fi
   local -A records=()
   local record="" id=""
@@ -1476,7 +1668,7 @@ _file_trash_purge_execute() {
       ;;
     all|pick)
       selected=("${entries[@]}")
-      if (( ${#selected[@]} == 0 )); then
+      if (( ${#selected[@]} == 0 && ${#recoveries[@]} == 0 )); then
         _file_info "The trash is empty."
         return 0
       fi
@@ -1522,9 +1714,29 @@ _file_trash_purge_execute() {
     info_ids+=("${fields[8]}")
     (( ++index ))
   done
+  local recovery=""
+  for recovery in "${recoveries[@]}"; do
+    _file_path_fingerprint "$recovery" || return 1
+    items+=("$recovery")
+    item_ids+=("$REPLY")
+    infos+=("")
+    info_ids+=(-)
+    ids+=("$recovery")
+    _file_path_display "$recovery"
+    plan_rows+=("${index}"$'\t'"(retained)"$'\t'"unknown"$'\t'"${REPLY}")
+    (( ++index ))
+  done
   local -A _file_reviewed_parent_ids=()
+  local -a planned_infos=()
+  local info=""
+  for info in "${infos[@]}"; do
+    [[ -n "$info" ]] && planned_infos+=("$info")
+  done
   _file_snapshot_parent_identities items || return 1
-  _file_snapshot_parent_identities infos || return 1
+  _file_snapshot_parent_identities planned_infos || return 1
+  local _file_mount_mode=""
+  local -A _file_mount_targets=()
+  _file_trash_purge_revalidate || return 1
   _file_path_display "$trash_dir"
   _file_label "Trash" "$REPLY"
   print -u2 -r -- ""
@@ -1543,21 +1755,9 @@ _file_trash_purge_execute() {
     (( confirm_rc == 130 )) && return 0
     return $confirm_rc
   }
-  index=1
-  while (( index <= ${#ids[@]} )); do
-    if [[ "${item_ids[index]}" != - ]]; then
-      _file_revalidate_mutation_target "${items[index]}" "${item_ids[index]}" \
-        || return 1
-    fi
-    if [[ "${info_ids[index]}" != - ]]; then
-      _file_revalidate_mutation_target "${infos[index]}" "${info_ids[index]}" \
-        || return 1
-    fi
-    (( ++index ))
-  done
-  # Files share one fresh mount snapshot; each directory takes its own.
-  local _file_mount_mode=""
-  local -A _file_mount_targets=()
+  # Renew every tree before deleting the first item, including retained data.
+  _file_mount_mode=""
+  _file_trash_purge_revalidate || return 1
   local -a mv_command=()
   _file_mv_no_clobber_command || return 1
   mv_command=("${reply[@]}")
