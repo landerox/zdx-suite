@@ -39,6 +39,8 @@ _ws_clone_usage() {
     "                   <platform>/* directories and ZDX_GIT_IDENTITIES profiles."
   print -u2 -r -- \
     "  --name DIR       Repository directory; defaults to the name in the URL."
+  print -u2 -r -- \
+    "                   Names use ASCII letters, digits, '.', '_', or '-'."
   print -u2 -r -- "  --dry-run        Print the plan and stop."
   print -u2 -r -- \
     "  --yes            Accept the plan without a prompt; required without a terminal."
@@ -151,12 +153,13 @@ _ws_clone_parse_url() {
     fi
   fi
 
-  [[ ${#host} -le 253 \
-    && "$host" =~ '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?([.][A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$' ]] || {
+  [[ ${#host} -le 253 ]] \
+    && _ws_ascii_match "$host" '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?([.][A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$' || {
     _ws_error "The repository URL has an invalid host."
     return 2
   }
-  [[ -z "$user" || "$user" =~ '^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$' ]] || {
+  [[ -z "$user" ]] \
+    || _ws_ascii_match "$user" '^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$' || {
     _ws_error "The repository URL has an invalid user name."
     return 2
   }
@@ -168,7 +171,7 @@ _ws_clone_parse_url() {
     return 2
   }
   for component in "${(@s:/:)checked_path}"; do
-    [[ "$component" =~ '^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$' ]] || {
+    _ws_ascii_match "$component" '^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$' || {
       _ws_error "The repository path has an unsupported component: ${component}"
       return 2
     }
@@ -192,6 +195,7 @@ _ws_clone_url_name() {
 # empty when the file holds an invalid name.
 # Usage: _ws_workspace_hostname <root> <platform> <identity>
 _ws_workspace_hostname() {
+  emulate -L zsh
   local root="$1" platform="$2" identity="$3" hostname=""
   local hostname_file="$root/$platform/$identity/.ws-hostname"
   if [[ "$platform" == github ]]; then
@@ -203,7 +207,7 @@ _ws_workspace_hostname() {
   else
     hostname="gitlab.com"
   fi
-  [[ "$hostname" =~ '^[A-Za-z0-9.-]+$' ]] || hostname=""
+  _ws_ascii_match "$hostname" '^[A-Za-z0-9.-]+$' || hostname=""
   REPLY="${hostname:l}"
 }
 
@@ -288,7 +292,7 @@ _ws_ssh_alias_hostname() {
   local output="" line="" resolved="" ssh_path=""
 
   if [[ -z "$ssh_command" ]]; then
-    ssh_command=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
+    ssh_command=$(_ws_git_probe "$_WS_PROBE_TIMEOUT" "$git_path" \
       config --global --get core.sshCommand </dev/null 2>/dev/null) \
       || ssh_command=""
   fi
@@ -298,7 +302,7 @@ _ws_ssh_alias_hostname() {
   else
     ssh_program="${GIT_SSH:-ssh}"
   fi
-  ssh_variant=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
+  ssh_variant=$(_ws_git_probe "$_WS_PROBE_TIMEOUT" "$git_path" \
     config --global --get ssh.variant </dev/null 2>/dev/null) || ssh_variant=""
   if [[ -z "$ssh_variant" || "$ssh_variant" == auto ]]; then
     ssh_variant="${${${ssh_program##*[/\\]}:l}%.exe}"
@@ -319,8 +323,8 @@ _ws_ssh_alias_hostname() {
     line="${line%$'\r'}"
     if [[ "$line" == "hostname "* ]]; then
       line="${line#hostname }"
-      [[ "$line" =~ '^[A-Za-z0-9][A-Za-z0-9.-]*$' \
-        && "${line:l}" != "${alias_host:l}" ]] && resolved="$line"
+      _ws_ascii_match "$line" '^[A-Za-z0-9][A-Za-z0-9.-]*$' \
+        && [[ "${line:l}" != "${alias_host:l}" ]] && resolved="$line"
       break
     fi
   done
@@ -420,7 +424,7 @@ ws-clone() {
           return 2
         }
         _ws_name_valid "$2" || {
-          _ws_error "$1 takes one directory name of letters, digits, '.', '_', or '-' that starts with a letter or digit."
+          _ws_error "$1 takes one directory name of ASCII letters, digits, '.', '_', or '-' that starts with a letter or digit."
           return 2
         }
         case "$1" in
@@ -639,7 +643,7 @@ ws-clone() {
     local alias_host="${platform}-${identity}"
     if [[ "$url_host" == "$alias_host" ]]; then
       alias_note="$alias_host (used by the URL)"
-    elif [[ "$alias_host" =~ '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' ]]; then
+    elif _ws_ascii_match "$alias_host" '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'; then
       _ws_ssh_alias_hostname "$git_path" "$alias_host"
       local alias_target="$REPLY"
       if [[ -n "$alias_target" && "${alias_target:l}" == "$host_folded" ]]; then

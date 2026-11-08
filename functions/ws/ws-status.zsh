@@ -50,13 +50,15 @@ _ws_status_usage() {
 # Usage: _ws_status_probe <git> <repository-directory>
 _ws_status_probe() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   local git_path="$1" repository="$2"
   reply=(error "" 0 "" "" none "" "" "" "" "" "")
   local output="" line="" oid="" head="" upstream="" ahead="" behind=""
   local -i rc=0 changes=0 have_ab=0
 
   # --no-optional-locks keeps status from rewriting the index.
-  output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
+  output=$(_ws_git_probe "$_WS_GIT_TIMEOUT" "$git_path" \
     --no-optional-locks -C "$repository" status --porcelain=v2 --branch \
     --untracked-files=normal </dev/null 2>/dev/null) || rc=$?
   if (( rc != 0 )); then
@@ -111,7 +113,7 @@ _ws_status_probe() {
   if [[ "$oid" != '(initial)' ]]; then
     rc=0
     # log.showSignature would print verification lines before the time.
-    probe_output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
+    probe_output=$(_ws_git_probe "$_WS_GIT_TIMEOUT" "$git_path" \
       -C "$repository" -c log.showSignature=false log -1 --format=%ct \
       </dev/null 2>/dev/null) || rc=$?
     probe_output="${probe_output%%$'\n'*}"
@@ -121,7 +123,7 @@ _ws_status_probe() {
   fi
   # refs/stash is absent until the first stash; git reports that as a failure.
   rc=0
-  probe_output=$(_ws_git_command "$_WS_GIT_TIMEOUT" "$git_path" \
+  probe_output=$(_ws_git_probe "$_WS_GIT_TIMEOUT" "$git_path" \
     -C "$repository" rev-list --walk-reflogs --count refs/stash \
     </dev/null 2>/dev/null) || rc=$?
   probe_output="${probe_output%%$'\n'*}"
@@ -537,7 +539,7 @@ _ws_status_fetch() {
       for relative in "${repositories[@]}"; do
         [[ -z "$_wsf_interrupt" ]] || return "$_wsf_interrupt"
         remote_rc=0
-        remotes=$(_ws_git_command "$_WS_PROBE_TIMEOUT" "$git_path" \
+        remotes=$(_ws_git_probe "$_WS_PROBE_TIMEOUT" "$git_path" \
           -C "$root/$relative" remote </dev/null 2>/dev/null) || remote_rc=$?
         (( remote_rc == 130 || remote_rc == 143 )) && return "$remote_rc"
         (( remote_rc == 0 )) || {

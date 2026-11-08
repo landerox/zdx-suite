@@ -344,6 +344,17 @@ _ws_git_command() {
   )
 }
 
+# Runs an owned read-only Git probe without executing a repository's
+# configured fsmonitor hook. Clone, fetch, and delegated mutations retain
+# their separate execution paths. Usage: _ws_git_probe <seconds> <git> [arg...]
+_ws_git_probe() {
+  emulate -L zsh
+  local seconds="${1-}" git_path="${2-}"
+  (( $# >= 2 )) || return 2
+  shift 2
+  _ws_git_command "$seconds" "$git_path" -c core.fsmonitor=false "$@"
+}
+
 # --- Filesystem trust helpers ----------------------------------------------
 
 _ws_system_root_uid() {
@@ -1063,11 +1074,21 @@ _ws_fzf_rc_is_cancel() {
 
 # --- Workspace root and discovery -----------------------------------------
 
+# Match one suite-owned ASCII grammar without changing the caller's locale,
+# options, or regex captures. The regular expression is fixed by each caller.
+_ws_ascii_match() {
+  emulate -L zsh
+  local LC_ALL=C MATCH MBEGIN MEND
+  local -a match mbegin mend
+  [[ "${1-}" =~ "${2-}" ]]
+}
+
 # True for one workspace path component: a platform, identity, or repository
 # directory name. It starts with a letter or digit, so it can never be read as
 # an option, a hidden name, or a relative traversal.
 _ws_name_valid() {
-  [[ "${1-}" =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]]
+  emulate -L zsh
+  _ws_ascii_match "${1-}" '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
 }
 
 # True when a relative path can appear in a picker record, a table cell, or a

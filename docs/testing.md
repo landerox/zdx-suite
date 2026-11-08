@@ -764,6 +764,15 @@ focused regression cases.
 
 ### Workspace coverage
 
+`ws_input_safety.bats` proves real UTF-8 libc range widening before testing
+ASCII name/URL/hostname/alias refusal, valid ASCII limits, caller locale/match
+isolation and the SSH child's unchanged locale. Real private Git monitor
+canaries first run as a positive control, then remain dormant in text/JSON
+status and the fixed preview with index bytes unchanged. Existing fetch/clone
+fixtures remain mocked; locale tests name a skip only when no installed locale
+actually demonstrates widening. All hooks are private fixture canaries; no host
+configuration or network is used.
+
 `ws_fetch_interrupt.bats` uses finite models for the private owner/group
 protocol, correlated native termination, first-interrupt precedence, retained
 unknown state, metadata-only read-only carrier checks, and initial directory
