@@ -1620,6 +1620,14 @@ without `--yes`, it fails closed and leaves `PATH` unchanged. See
 
 ### 🧾 Dotenv Files
 
+Malformed PEM blocks are consumed through their matching end marker (or EOF),
+with only the start line reported. Encoded-looking keys longer than 32 ASCII
+characters with mixed letter case and a digit but no underscore are withheld
+in both files, including JSON counts and comparison lists. This conservative
+heuristic can withhold legitimate names; it does not identify every secret.
+NUL anywhere in a quoted span makes its start malformed. The existing 1 MiB
+and 10,000-line bounds remain, with no new per-value length limit.
+
 - **Dotenv check (`env-dotenv`)**: Compare `.env` in the current directory
   with the first of `.env.example`, `.env.sample`, `.env.template`, or
   `.env.dist` next to it, or pass `env-dotenv FILE --example FILE`. The report

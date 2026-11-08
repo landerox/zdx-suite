@@ -155,6 +155,25 @@ opening quote that never closes, after which parsing resumes on the next line.
 Backticks are ordinary characters, and no variable expansion or command
 substitution is interpreted.
 
+Two conservative privacy exceptions keep malformed secret bodies out of key
+names. A literal uppercase `-----BEGIN` value prefix or standalone marker,
+including the first nonblank continuation after an empty quoted opener,
+quarantines the block through its matching `-----END ...-----` label. A missing
+or mismatched end consumes the rest of the file. A malformed or unquoted block
+reports its starting line only; a valid quoted PEM value remains one set value,
+including a quote that closes on the line after its end marker.
+
+An otherwise valid key longer than 32 characters, with upper- and lowercase
+ASCII letters and a digit but no underscore, is treated as encoded-looking
+data: its start line is malformed and its name is withheld in both files.
+Legitimate names matching that heuristic are withheld too; it is not a general
+secret detector. No new value or line-length cap applies. NUL on any line of
+a consumed quoted value makes that assignment's starting line malformed.
+
+Quote and continuation indexes scan bounded input without repeatedly copying
+shrinking suffixes or rescanning all remaining lines; unquoted values need
+only their set/empty fact, and duplicate line lists are joined once.
+
 A key assigned on more than one line is a duplicate; the last assignment
 decides whether its value is empty. A value is empty when nothing remains
 after the rules above, such as `KEY=`, `KEY=""`, or `KEY=''`; any other value,
@@ -166,6 +185,8 @@ The report names keys, line numbers, and file paths only. A value's single
 exposed fact is whether it is set or empty; values, value lengths, and
 digests never appear in output, logs, or errors, and example values are
 treated the same way. Malformed lines are identified by number alone.
+PEM payloads and encoded-looking names never enter key counts, comparison or
+duplicate lists, in text or JSON.
 
 - **Missing**: keys in the example but not in the dotenv file.
 - **Extra**: keys in the dotenv file but not in the example.

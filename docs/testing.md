@@ -674,6 +674,14 @@ remain manual boundaries.
 
 ### Environment coverage
 
+`env_dotenv_privacy.bats` covers bounded large escaped/unquoted input and
+repeated unterminated quotes, preserved grammar and duplicate ordering,
+multiline NUL, conservative PEM quarantine and encoded-name withholding in
+both text and JSON. Timeout programs own only private parser fixtures; no
+project data is executed, and the original oversized reproductions are never
+run unbounded. A separate bounded differential fixture compares quote-helper
+statuses and offsets across 10,922 short inputs.
+
 | File | Covered boundary |
 | --- | --- |
 | `env.bats` | Loading and canonical help without state probes, read-only PATH inspection with explicit deduplication, and value classifications that withhold every raw value |

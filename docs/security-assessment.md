@@ -186,6 +186,12 @@ included in a backup, or exposed through an error log.
   fully validated UTF-16LE conversion, so invalid UTF-8 reaches no clipboard.
   Its fallback is the fixed Windows system path, used only when WSL is
   detected.
+- `env-dotenv` quarantines literal uppercase BEGIN/END PEM spans before any
+  key publication; malformed or unterminated blocks disclose start lines only.
+  Both files withhold encoded-looking names longer than 32 ASCII characters
+  with mixed letter case and a digit but no underscore, including comparison,
+  count and duplicate records. Valid names can match that heuristic, and other
+  secret shapes remain outside its recognition; values are never disclosed.
 - `env-dotenv` reports a dotenv file and its example by key name and line
   number only. A value's single exposed fact is whether it is set or empty;
   no value, example value, value length, or digest reaches its text report,
@@ -2862,7 +2868,9 @@ memory or CPU during inspection.
   transaction result.
 - Environment caps the exported-variable inventory at 4,096 names, limits
   `PATH` to 1 MiB and 512 entries, and refuses picker results above 1 MiB
-  before shell arrays or UI rendering. `env-dotenv` refuses a dotenv or
+  before shell arrays or UI rendering. Dotenv quote/chunk scans, precomputed
+  continuation/NUL indexes and once-joined duplicate lists avoid quadratic
+  text rescans within the existing bounds. `env-dotenv` refuses a dotenv or
   example file above 1 MiB, by its inspected size and again while reading, or
   above 10,000 lines before reporting, and bounds each Git probe at 10
   seconds with closed stdin; a timed-out probe leaves its facts unknown.

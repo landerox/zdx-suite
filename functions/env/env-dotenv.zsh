@@ -297,78 +297,156 @@ _env_dotenv_read() {
   reply=("${descriptor_state[mode]}" "${descriptor_state[uid]}")
 }
 
-# REPLY: the length of <text> before its first unescaped <quote>. A backslash
-# escapes the character after it, so \" or \' does not close a value. Status 1
-# when <text> has no closing quote.
-# Usage: _env_dotenv_quote_end <text> <quote>
+# REPLY: the byte length before the first unescaped matching quote.
+# Split once on backslashes; each immutable part is inspected at most once.
 _env_dotenv_quote_end() {
   emulate -L zsh
   setopt LOCAL_OPTIONS NO_MULTIBYTE
-  local text="${1-}" quote="${2-}" head="" special=""
-  local -i offset=0
+  local text="${1-}" quote="${2-}" head="" part="" searchable=""
+  local -i offset=0 escaped=0 skip=0
   REPLY=""
-  if [[ "$quote" == '"' ]]; then
-    special='[\\"]'
-  else
-    special="[\\\\']"
+  head="${text%%"$quote"*}"
+  (( ${#head} < ${#text} )) || return 1
+  if [[ "$head" != *\\* ]]; then
+    REPLY=${#head}
+    return 0
   fi
-  while :; do
-    head="${text%%${~special}*}"
-    (( ${#head} < ${#text} )) || return 1
-    if [[ "${text[${#head}+1]}" == "$quote" ]]; then
-      REPLY=$(( offset + ${#head} ))
+  local -a parts=("${(@ps:\\:)text}")
+  for part in "${parts[@]}"; do
+    skip=0
+    if (( escaped && ${#part} > 0 )); then
+      skip=1
+    fi
+    searchable="${part[skip+1,-1]}"
+    head="${searchable%%"$quote"*}"
+    if (( ${#head} < ${#searchable} )); then
+      REPLY=$(( offset + skip + ${#head} ))
       return 0
     fi
-    # Skip the backslash and the character it escapes.
-    offset+=$(( ${#head} + 2 ))
-    text="${text[${#head}+3,-1]}"
+    # A nonempty part consumes any pending escape. Empty parts represent
+    # adjacent backslashes, so their parity decides the next first byte.
+    (( ${#part} == 0 )) || escaped=0
+    escaped=$(( 1 - escaped ))
+    (( offset += ${#part} + 1 ))
   done
+  return 1
 }
 
-# stdout: summary records for dotenv <content> that carry key names and line
-# numbers only; a value's single exposed fact is whether it is empty.
-#   key<TAB>NAME                  each key once, in order of first assignment
-#   empty<TAB>NAME                a key whose last assignment is empty
-#   duplicate<TAB>NAME<TAB>L,L    a key assigned on more than one line
-#   malformed<TAB>LINE            a line the grammar rejects
-# Status 3 when the content has more than _ENV_DOTENV_MAX_LINES lines.
-# The grammar is documented in docs/env-menu.md.
-# Usage: _env_dotenv_parse <content>
+# A conservative privacy exception for orphaned encoded-looking payloads.
+# The normal ASCII key grammar is checked before this helper is used.
+_env_dotenv_key_looks_encoded() {
+  emulate -L zsh
+  local LC_ALL=C key="${1-}"
+  (( ${#key} > 32 )) && [[ "$key" != *_* && "$key" == *[A-Z]* \
+    && "$key" == *[a-z]* && "$key" == *[0-9]* ]]
+}
+
+# stdout: ordered key/empty/duplicate records and malformed start-line numbers.
+# Values, PEM payloads and encoded-looking names never enter these records.
+# Status 3 means more than the existing maximum number of physical lines.
 _env_dotenv_parse() {
   emulate -L zsh
   setopt LOCAL_OPTIONS EXTENDED_GLOB NO_MULTIBYTE
   local content="${1-}"
   content="${content#$'\xef\xbb\xbf'}"
   local -a lines=("${(@f)content}")
-  # A final newline ends the last line; it does not start another one.
   [[ "$content" == *$'\n' ]] && lines[-1]=()
   (( ${#lines[@]} <= _ENV_DOTENV_MAX_LINES )) || return 3
 
-  local -a keys=() malformed=()
-  local -A key_lines=() key_state=()
+  local -i count=${#lines[@]} index=1 start=0 next=0 closed=0 logical_end=0
+  local -i upcoming_single=0 upcoming_double=0 upcoming_nonblank=0 nul_count=0
+  local -a first_single=() first_double=() next_single=() next_double=() nul_prefix=(0)
+  local -a next_nonblank=()
+  # Normalize once and summarize NUL presence without repeatedly scanning spans.
+  for (( index = 1; index <= count; ++index )); do
+    lines[index]="${lines[index]%$'\r'}"
+    [[ "${lines[index]}" != *$'\0'* ]] || (( ++nul_count ))
+    nul_prefix+=("$nul_count")
+  done
+  # A backwards index preserves the exact first-quote continuation behavior,
+  # including recovery after an ordinary quote that never closes anywhere.
+  for (( index = count; index >= 1; --index )); do
+    next_single[index]=$upcoming_single
+    next_double[index]=$upcoming_double
+    next_nonblank[index]=$upcoming_nonblank
+    [[ "${lines[index]}" == [[:blank:]]# ]] || upcoming_nonblank=$index
+    first_single[index]=-1
+    first_double[index]=-1
+    if _env_dotenv_quote_end "${lines[index]}" "'"; then
+      first_single[index]=$REPLY
+      upcoming_single=$index
+    fi
+    if _env_dotenv_quote_end "${lines[index]}" '"'; then
+      first_double[index]=$REPLY
+      upcoming_double=$index
+    fi
+  done
+
+  local -a keys=() malformed=() assignment_lines=() assignment_next=()
+  local -A key_first=() key_last=() key_state=()
   local line="" rest="" key="" raw_value="" quote="" text="" tail="" state=""
-  local -i index=1 start=0 next=0 closed=0 count=${#lines[@]}
+  local probe="" label="" end_marker="" end_line=""
+  local -i pem_end=0 pem_complete=0 malformed_value=0 assignment=0 previous=0
+  index=1
   while (( index <= count )); do
     start=$index
-    line="${lines[index]%$'\r'}"
+    line="${lines[index]}"
     (( ++index ))
     rest="${line##[[:blank:]]#}"
     [[ -z "$rest" || "$rest" == \#* ]] && continue
-    if [[ "$rest" == *$'\0'* ]]; then
-      malformed+=($start)
-      continue
+
+    # Recognize a PEM boundary even when its assignment or quoting is broken.
+    # Each quarantined span advances index beyond its end, so body searches
+    # are disjoint. An absent/mismatched END conservatively consumes to EOF.
+    probe="$rest"
+    if [[ "$probe" != '-----BEGIN'* && "$probe" == *=* ]]; then
+      probe="${probe#*=}"
     fi
+    probe="${probe##[[:blank:]]#}"
+    if [[ "$probe" == [\"\']* ]]; then
+      probe="${probe[2,-1]}"
+      probe="${probe##[[:blank:]]#}"
+      # PEM text may start on the first nonblank quoted continuation. This
+      # lookup must precede quote recovery so a premature close cannot expose
+      # the remainder of that body as ordinary assignment names.
+      if [[ -z "$probe" ]]; then
+        next=${next_nonblank[start]}
+        (( next == 0 )) || probe="${lines[next]##[[:blank:]]#}"
+      fi
+    fi
+    pem_end=0
+    pem_complete=0
+    if [[ "$probe" == '-----BEGIN'* ]]; then
+      label="${probe#'-----BEGIN'}"
+      label="${label##[[:blank:]]#}"
+      label="${label%%'-----'*}"
+      end_marker="-----END ${label}-----"
+      pem_end=$count
+      for (( next = start; next <= count; ++next )); do
+        end_line="${lines[next]##[[:blank:]]#}"
+        if [[ ( $next == $start && "$probe" == *"$end_marker"* ) \
+          || ( $next != $start && "$end_line" == "$end_marker"* ) ]]; then
+          pem_end=$next
+          pem_complete=1
+          break
+        fi
+      done
+    fi
+
     [[ "$rest" == export[[:blank:]]* ]] \
       && rest="${${rest#export}##[[:blank:]]#}"
     key="${rest%%[^A-Za-z0-9_]*}"
     rest="${${rest:${#key}}##[[:blank:]]#}"
     if [[ "$key" != [A-Za-z_]* || "$rest" != '='* ]] \
       || (( ${#key} > _ENV_DOTENV_MAX_KEY_LENGTH )); then
-      malformed+=($start)
+      malformed+=("$start")
+      (( pem_end == 0 )) || index=$(( pem_end + 1 ))
       continue
     fi
     raw_value="${rest#=}"
     rest="${raw_value##[[:blank:]]#}"
+    logical_end=$start
+    malformed_value=0
 
     if [[ "$rest" == [\"\']* ]]; then
       quote="${rest[1]}"
@@ -380,49 +458,77 @@ _env_dotenv_parse() {
         if (( REPLY > 0 )); then state=set; else state=empty; fi
         tail="${text[REPLY+2,-1]}"
       else
-        # The value continues on the following lines until its quote
-        # closes. Without a closing quote, parsing resumes on the next line.
         state=set
-        for (( next = index; next <= count; ++next )); do
-          text="${lines[next]%$'\r'}"
-          if _env_dotenv_quote_end "$text" "$quote"; then
-            closed=1
-            tail="${text[REPLY+2,-1]}"
-            index=$(( next + 1 ))
-            break
-          fi
-        done
+        if [[ "$quote" == "'" ]]; then
+          next=${next_single[start]}
+          (( next == 0 )) || REPLY=${first_single[next]}
+        else
+          next=${next_double[start]}
+          (( next == 0 )) || REPLY=${first_double[next]}
+        fi
+        if (( next > 0 )); then
+          closed=1
+          logical_end=$next
+          tail="${lines[next][REPLY+2,-1]}"
+          index=$(( next + 1 ))
+        fi
       fi
       tail="${tail##[[:blank:]]#}"
       if (( ! closed )) || [[ -n "$tail" && "$tail" != \#* ]]; then
-        malformed+=($start)
-        continue
+        malformed_value=1
       fi
     else
-      # An unquoted value ends where a # follows a blank.
-      rest="${raw_value%%[[:blank:]]\#*}"
-      rest="${${rest##[[:blank:]]#}%%[[:blank:]]#}"
-      if [[ -n "$rest" ]]; then state=set; else state=empty; fi
+      # Only a # preceded by a blank starts an unquoted comment. There is
+      # no reason to trim the potentially enormous trailing value.
+      if [[ -z "$rest" || ( "$raw_value" == [[:blank:]]* && "$rest" == \#* ) ]]; then
+        state=empty
+      else
+        state=set
+      fi
     fi
 
-    if (( ${+key_lines[$key]} )); then
-      key_lines[$key]+=",$start"
+    if (( pem_end > 0 )); then
+      if (( ! pem_complete || logical_end < pem_end )); then
+        malformed_value=1
+        logical_end=$pem_end
+        index=$(( pem_end + 1 ))
+      fi
+    fi
+    if (( malformed_value || nul_prefix[logical_end+1] != nul_prefix[start] )) \
+      || _env_dotenv_key_looks_encoded "$key"; then
+      malformed+=("$start")
+      continue
+    fi
+
+    # Link occurrences by integer index; join a duplicate's CSV only once.
+    assignment=$(( ${#assignment_lines[@]} + 1 ))
+    assignment_lines+=("$start")
+    assignment_next+=(0)
+    if (( ${+key_last[$key]} )); then
+      previous=${key_last[$key]}
+      assignment_next[previous]=$assignment
     else
       keys+=("$key")
-      key_lines[$key]="$start"
+      key_first[$key]=$assignment
     fi
+    key_last[$key]=$assignment
     key_state[$key]="$state"
   done
 
-  for key in "${keys[@]}"; do
-    printf 'key\t%s\n' "$key"
-  done
+  for key in "${keys[@]}"; do printf 'key\t%s\n' "$key"; done
   for key in "${keys[@]}"; do
     [[ "${key_state[$key]}" == empty ]] && printf 'empty\t%s\n' "$key"
   done
+  local -a duplicate_lines=()
   for key in "${keys[@]}"; do
-    [[ "${key_lines[$key]}" == *,* ]] \
-      && printf 'duplicate\t%s\t%s\n' "$key" "${key_lines[$key]}"
+    [[ "${key_first[$key]}" != "${key_last[$key]}" ]] || continue
+    duplicate_lines=()
+    next=${key_first[$key]}
+    while (( next > 0 )); do
+      duplicate_lines+=("${assignment_lines[next]}")
+      next=${assignment_next[next]}
+    done
+    printf 'duplicate\t%s\t%s\n' "$key" "${(j:,:)duplicate_lines}"
   done
   (( ${#malformed[@]} == 0 )) || printf 'malformed\t%s\n' "${malformed[@]}"
   return 0
