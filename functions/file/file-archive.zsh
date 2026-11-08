@@ -323,12 +323,19 @@ _file_compress_execute() {
   # The backend is checked before planning, so a dry run reports it too; an
   # interrupted probe keeps its 130 or 143.
   _file_archive_require_format "$format" || return $?
+  local _file_operation_base="${_file_operation_base-}"
+  local _file_operation_base_identity="${_file_operation_base_identity-}"
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
+  _file_directory_identity "$base_dir" || return 1
+  _file_operation_base="$base_dir"
+  _file_operation_base_identity="$REPLY"
 
   _file_archive_inputs_plan "$base_dir" "${requested_inputs[@]}" || return $?
   local -a inputs=("${reply[@]}")
   local identities_text="$REPLY"
+  local -A _file_reviewed_parent_ids=()
+  _file_snapshot_parent_identities inputs || return 1
 
   _file_validate_destination_parent "$output_file" "$base_dir" || {
     _file_error "Invalid archive output: $output_file"
@@ -336,6 +343,7 @@ _file_compress_execute() {
   }
   local destination="$REPLY"
   local destination_parent_identity="${reply[2]}"
+  _file_reviewed_parent_ids[$destination]="$destination_parent_identity"
   local input=""
   for input in "${inputs[@]}"; do
     if [[ -d "$input" && "$destination" == "$input"/* ]]; then
@@ -433,6 +441,7 @@ _file_compress_execute() {
     # COPYFILE_DISABLE is set; other platforms ignore it.
     (
       builtin cd -- "$base_dir" || return 1
+      _file_archive_revalidate_inputs inputs "$identities_text" || return 1
       export COPYFILE_DISABLE=1
       _file_run_archive_tool "${archive_command[@]}" "${archive_operands[@]}"
     ) >&2
@@ -1044,12 +1053,20 @@ _file_extract_execute() {
 
   _file_extract_max_bytes || return 1
   local max_bytes="$REPLY"
+  local _file_operation_base="${_file_operation_base-}"
+  local _file_operation_base_identity="${_file_operation_base_identity-}"
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
+  _file_directory_identity "$base_dir" || return 1
+  _file_operation_base="$base_dir"
+  _file_operation_base_identity="$REPLY"
   _file_validate_mutation_target "$archive_file" "$base_dir" || return 1
   local archive_plan="$REPLY"
   local archive_absolute="${archive_plan%%|*}"
   local archive_identity="${archive_plan#*|}"
+  local -A _file_reviewed_parent_ids=()
+  local -a reviewed_archive=("$archive_absolute")
+  _file_snapshot_parent_identities reviewed_archive || return 1
   [[ -f "$archive_absolute" ]] || {
     _file_error "The archive must be a regular file."
     return 1
@@ -1069,6 +1086,7 @@ _file_extract_execute() {
     || return 1
   local destination="${REPLY%/}"
   local destination_parent_identity="${reply[2]}"
+  _file_reviewed_parent_ids[$destination]="$destination_parent_identity"
   [[ "$destination" != "/" \
     && "$destination" != "${HOME:A}" \
     && "$destination" != "$base_dir" \

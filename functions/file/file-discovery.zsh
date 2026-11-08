@@ -61,6 +61,10 @@ _file_large_inventory() {
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
   local minimum_bytes="$1"
   reply=()
+  _file_current_base "$PWD" || return 1
+  local base="$REPLY" base_identity=""
+  _file_directory_identity "$base" || return 1
+  base_identity="$REPLY"
   _file_collect_paths files "." || return $?
   local -a candidates=("${reply[@]}")
   reply=()
@@ -74,6 +78,11 @@ _file_large_inventory() {
     }
     (( state[size] >= minimum_bytes )) && reply+=("$candidate")
   done
+  _file_current_base "$PWD" || return 1
+  [[ "$REPLY" == "$base" ]] || return 1
+  _file_directory_identity "$base" \
+    && [[ "$REPLY" == "$base_identity" ]] || return 1
+  REPLY="$base"
   return 0
 }
 
@@ -84,7 +93,11 @@ file-find-large() {
   if (( $# == 0 )); then
     _file_read_line "Minimum file size" "10M" || return $?
     _file_size_to_bytes "$REPLY" || return $?
-    _file_large_inventory "$REPLY" || return $?
+    local minimum_bytes="$REPLY"
+    _file_large_inventory "$minimum_bytes" || return $?
+    local _file_operation_base="$REPLY" _file_operation_base_identity=""
+    _file_directory_identity "$_file_operation_base" || return 1
+    _file_operation_base_identity="$REPLY"
     local -a candidates=("${reply[@]}")
     (( ${#candidates[@]} > 0 )) || {
       _file_success "No files meet the requested size."
@@ -104,7 +117,7 @@ file-find-large() {
       return $action_rc
     fi
     if [[ "$REPLY" == "delete" ]]; then
-      _file_delete_execute no no "${selected_files[@]}"
+      _file_delete_execute --minimum-bytes "$minimum_bytes" no no "${selected_files[@]}"
     else
       print -rl -- "${selected_files[@]}"
     fi
@@ -138,11 +151,16 @@ file-find-large() {
     return 2
   }
   _file_size_to_bytes "$minimum" || return $?
-  _file_large_inventory "$REPLY" || return $?
+  local minimum_bytes="$REPLY"
+  _file_large_inventory "$minimum_bytes" || return $?
+  local _file_operation_base="$REPLY" _file_operation_base_identity=""
+  _file_directory_identity "$_file_operation_base" || return 1
+  _file_operation_base_identity="$REPLY"
   local -a matches=("${reply[@]}")
   (( ${#matches[@]} > 0 )) || return 0
   if [[ "$delete_mode" == "yes" ]]; then
-    _file_delete_execute "$dry_run" "$auto_yes" "${matches[@]}"
+    _file_delete_execute --minimum-bytes "$minimum_bytes" \
+      "$dry_run" "$auto_yes" "${matches[@]}"
   else
     print -rl -- "${matches[@]}"
   fi
@@ -189,6 +207,12 @@ _file_junk_inventory() {
       _file_warn "Skipped a junk file whose name contains '|': $record"
       continue
     fi
+    case "${record:t}" in
+      *:Zone.Identifier|.DS_Store|._*|Thumbs.db|desktop.ini) ;;
+      *)
+        _file_error "The junk inventory contains a name outside the reviewed criteria: $record"
+        return 1 ;;
+    esac
     junk_files+=("$record")
   done
 
@@ -314,8 +338,13 @@ file-clean-junk() {
   done
 
   _file_header "Junk File Cleanup"
+  local _file_operation_base="${_file_operation_base-}"
+  local _file_operation_base_identity="${_file_operation_base_identity-}"
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
+  _file_directory_identity "$base_dir" || return 1
+  _file_operation_base="$base_dir"
+  _file_operation_base_identity="$REPLY"
   _file_junk_inventory || return $?
   local -a candidates=("${reply[@]}")
   if (( ${#candidates[@]} == 0 )); then

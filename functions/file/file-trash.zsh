@@ -782,7 +782,7 @@ _file_trash_validate_link() {
     _file_error "Refusing an empty or unrepresentable path."
     return 1
   }
-  _file_path_in_base "$target" "$base"
+  _file_path_in_base "$target" "$base" || return 1
   local lexical="$REPLY" parent="${REPLY:h}"
   REPLY=""
   [[ "$lexical" == "$base"/* ]] || {
@@ -857,7 +857,7 @@ _file_trash_put_plan() {
   local -A planned_targets=() planned_ancestors=()
   local requested="" validation="" absolute="" ancestor=""
   for requested in "$@"; do
-    _file_path_in_base "$requested" "$base_dir"
+    _file_path_in_base "$requested" "$base_dir" || return 1
     if [[ -L "$REPLY" ]]; then
       _file_trash_validate_link "$requested" "$base_dir" || return 1
     else
@@ -1094,8 +1094,13 @@ _file_trash_put_execute() {
   local dry_run="$1" auto_yes="$2"
   shift 2
   _file_header "Move to Trash"
+  local _file_operation_base="${_file_operation_base-}"
+  local _file_operation_base_identity="${_file_operation_base_identity-}"
   _file_validate_base "$PWD" || return 1
   local base_dir="$REPLY"
+  _file_directory_identity "$base_dir" || return 1
+  _file_operation_base="$base_dir"
+  _file_operation_base_identity="$REPLY"
   _file_trash_locate || return 1
   local trash_dir="$REPLY"
   # One mount snapshot serves the plan; execution takes a fresh one.
@@ -1105,6 +1110,8 @@ _file_trash_put_execute() {
   local -a targets=("${reply[@]}")
   local identities_text="$REPLY"
   local -a identities=("${(@f)identities_text}")
+  local -A _file_reviewed_parent_ids=()
+  _file_snapshot_parent_identities targets || return 1
 
   local -a plan_rows=()
   local -i index=1
@@ -1341,6 +1348,9 @@ _file_trash_restore_execute() {
     (( ++index ))
   done
 
+  local -A _file_reviewed_parent_ids=()
+  _file_snapshot_parent_identities items || return 1
+  _file_snapshot_parent_identities infos || return 1
   _file_path_display "$trash_dir"
   _file_label "Trash" "$REPLY"
   print -u2 -r -- ""
@@ -1512,6 +1522,9 @@ _file_trash_purge_execute() {
     info_ids+=("${fields[8]}")
     (( ++index ))
   done
+  local -A _file_reviewed_parent_ids=()
+  _file_snapshot_parent_identities items || return 1
+  _file_snapshot_parent_identities infos || return 1
   _file_path_display "$trash_dir"
   _file_label "Trash" "$REPLY"
   print -u2 -r -- ""

@@ -620,6 +620,13 @@ not a substitute for a real macOS host run.
 
 ### File coverage
 
+`file_operation_boundary.bats` covers stale cwd/PWD, raw traversal, ancestor
+and reviewed-parent changes, complete scan records, unsafe or replaced staging
+objects/descriptors, renewed large-file size criteria and exact junk names.
+Two strict mktemp-recorder escape controls remain fixture evidence. All
+mutations are confined to disposable roots; native fixture execution does not
+establish macOS/WSL host acceptance or general producer-status conformance.
+
 | File | Covered boundary |
 | --- | --- |
 | `file.bats` | Split-module loading, top-level help naming all five commands, unknown-command status, a large-file deletion dry run that preserves every target and prints the numbered plan and dry-run line, and non-interactive deletion that fails closed without `--yes` |

@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- File: bind operations to the actual working directory, reject raw traversal,
+  renew ancestor and reviewed parent identities, and publish only complete
+  inventories read through validated private staging descriptors.
+
 - Python: report retained environment data after interrupted removal, including
   interruption between rename and bookkeeping, and distinguish verified
   recovery paths, unverified leftovers and an empty quarantine.
