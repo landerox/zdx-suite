@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- File: bind trash moves to their published reservation and private container,
+  preserve interruption status through compensation and record cleanup, and
+  validate complete purge trees before review or deletion. Reviewed `--all`
+  purges can finish retained deletion quarantines after manual access repair.
+
 - File: bind extraction codecs to validated extensions, preserve private
   staging metadata for root members, and report retained or replaced staging
   truthfully after failed cleanup.

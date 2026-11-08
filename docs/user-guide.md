@@ -1510,6 +1510,17 @@ FILE_EXTRACT_MAX_GIB=4 file-extract --destination big -- big.tar.zst
 
 ### 🗑️ Trash
 
+Trash directories require owner read/write/search access on every descendant;
+review the refusal's `chmod u+rwx` remedy and repair permissions yourself when
+appropriate. Failed deletions can leave a reserved quarantine in the private
+trash: `list` names it on stderr, and `purge --all --dry-run` previews its exact
+removal before a new authorization. These retained paths have no restore ID
+or extra JSON fields. Reservations and private container identities are checked
+before and after moves; a failed compensation reports the retained item and
+original path. Interruption stops later items, including when a completed
+restore's record cleanup interrupts. Payload modes such as `644` are kept
+inside the mode-`700` containers; the suite never repairs them automatically.
+
 - **Trash (`file-trash`)**: Move files, directories, and symbolic links below
   the current directory into a private trash in
   `${XDG_DATA_HOME:-~/.local/share}/zdx/trash`, then restore them to their
@@ -1529,7 +1540,7 @@ file-trash                                         # pick items, then restore or
 Items move by rename only, so the trash must be on the same filesystem as
 what you trash: a path on another disk or mount is refused rather than
 copied. A directory is accepted only when it holds no links, special or
-hard-linked files, or mounts, so it can always be purged later. A restore
+hard-linked files, or mounts, so its reviewed tree is eligible for later purge. A restore
 never replaces anything: if something now exists at the original path, or
 its parent directory is gone, the item stays in the trash and the message
 says what to fix. `file-trash list --json` prints one machine-readable

@@ -1012,12 +1012,24 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   reviewed output name, and `--format` alone selects the format
   (`file_platform.bats`). Real 7-Zip and Info-ZIP binaries are verified only
   by hand.
+- Trash publication binds the exact record inode/content and private `files/`
+  identity before and after each rename. Lost reservations refuse success;
+  no-clobber compensation requires the unchanged parent and vacant original
+  path, and reports verified retained data when it cannot restore it. Record
+  publication, withdrawal and cleanup retain `130`/`143` and stop later targets.
+  All selected purge trees validate before the plan and again after consent
+  before deletion. Owner read/write/search is required on every trash directory
+  without automatic chmod; ordinary owned `644` payloads remain valid inside
+  private `700` containers. Bounded reserved-quarantine inventory reaches only
+  their direct `files/` and `info/` children, names them on stderr without new
+  IDs/schema fields, and adds exact safe targets to a reviewed `purge --all`.
+  A reserved name is not proof of origin; same-EUID final races remain.
 - `file-trash` is the one File mutation outside the current directory. `put`
   plans its targets under the same per-target boundary, plans a symbolic link
   as the link itself below a canonical trusted parent and never follows it,
   refuses the trash, a directory containing it, and paths inside it, and
   accepts a directory only when the deletion engine's recursive check passes,
-  so every trashed item can later be purged. Items move only by the
+  so each reviewed tree is eligible for later purge. Items move only by the
   no-clobber `mv` adapter after the source and destination match by device
   number and, on Linux and WSL, by nearest mount point, so a cross-filesystem
   or bind-mount move is refused instead of becoming a copy and delete.

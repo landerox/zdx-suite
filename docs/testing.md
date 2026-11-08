@@ -620,6 +620,15 @@ not a substitute for a real macOS host run.
 
 ### File coverage
 
+`file_trash_transactions.bats` covers a real synchronized second invocation
+that consumes a reservation, container and same-content record replacement,
+no-clobber compensation and retained/nested recovery paths, interrupted
+publication/withdrawal/restore cleanup, full-set purge-tree validation,
+owner access requirements and reviewed cleanup of actual retained quarantines.
+Private inode/mode checks preserve `644` payloads and read-only compression;
+no host trash, mount or permission is changed. Returned interruptions and
+private native filesystem behavior do not establish macOS/WSL acceptance.
+
 `file_extraction_scope.bats` covers exact codec arguments across both
 inventories and extraction, disguised compressed/plain archives, ordinary root
 directory members, staged privacy, failed or ineffective cleanup, changed

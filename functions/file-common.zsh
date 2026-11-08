@@ -1884,7 +1884,7 @@ _file_mount_table_clear_below() {
 _file_delete_mounts_clear() {
   local target="$1"
   if [[ -d "$target" && ! -L "$target" ]]; then
-    _file_validate_tree_for_transfer "$target"
+    _file_validate_tree_for_transfer "$target" "${2:-no}"
   else
     _file_mountpoint_clear "$target"
   fi

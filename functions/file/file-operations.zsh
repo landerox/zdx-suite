@@ -18,7 +18,8 @@ fi
 _file_validate_tree_for_transfer() {
   emulate -L zsh
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
-  local tree_root="$1"
+  local tree_root="$1" require_owner_rwx="${2:-no}"
+  [[ "$require_owner_rwx" == no || "$require_owner_rwx" == yes ]] || return 2
   [[ ( -f "$tree_root" || -d "$tree_root" ) && ! -L "$tree_root" ]] \
     || return 1
   _file_require_cmd head "bounded tree inventory" || return 1
@@ -54,6 +55,9 @@ _file_validate_tree_for_transfer() {
     }
     (( producer_rc == 0 )) || {
       _file_error "Could not inventory transfer target: $tree_root"
+      if [[ "$require_owner_rwx" == yes ]]; then
+        _file_dim "Review tree directory access; trash requires owner read, write, and search permission. Use chmod u+rwx only after reviewing the affected directories."
+      fi
       return 1
     }
     local -a inspected_entries=("$tree_root")
@@ -85,6 +89,12 @@ _file_validate_tree_for_transfer() {
           "Transfers require owned, non-writable tree entries: $inspected_entry"
         return 1
       }
+      if [[ "$require_owner_rwx" == yes && -d "$inspected_entry" ]] \
+        && (( (entry_state[mode] & 8#700) != 8#700 )); then
+        _file_error "Trash requires owner read, write, and search permission: $inspected_entry"
+        _file_dim "Review the directory and use chmod u+rwx before retrying."
+        return 1
+      fi
       if [[ -f "$inspected_entry" ]] && (( entry_state[nlink] != 1 )); then
         _file_error \
           "Transfers refuse hard-linked regular files: $inspected_entry"
@@ -103,7 +113,8 @@ _file_validate_tree_for_transfer() {
 }
 
 # Deletes one reviewed target through a same-directory quarantine.
-# Usage: _file_quarantine_delete <target> <identity> [mv-command...]
+# Usage: _file_quarantine_delete [--require-owner-rwx] <target> <identity>
+#          [mv-command...]
 # The optional mv command comes from _file_mv_no_clobber_command, so a batch
 # probes mv once. A file shares the caller's mount snapshot; a directory,
 # which is removed recursively, always takes a fresh one. A target reviewed
@@ -111,6 +122,12 @@ _file_validate_tree_for_transfer() {
 # link itself and never followed.
 _file_quarantine_delete() {
   emulate -L zsh
+  zmodload -F zsh/datetime p:EPOCHREALTIME 2>/dev/null || return 1
+  local require_owner_rwx=no
+  if [[ "${1:-}" == --require-owner-rwx ]]; then
+    require_owner_rwx=yes
+    shift
+  fi
   local target="$1"
   local expected_identity="$2"
   shift 2
@@ -125,8 +142,10 @@ _file_quarantine_delete() {
     local -A _file_mount_targets=()
   fi
   _file_revalidate_mutation_target "$target" "$expected_identity" || return 1
-  _file_delete_mounts_clear "$target" || return 1
+  _file_delete_mounts_clear "$target" "$require_owner_rwx" || return 1
 
+  _file_fingerprint_node_identity "$expected_identity" || return 1
+  local expected_node_identity="$REPLY"
   local parent="${target:h}"
   _file_node_identity "$parent" || return 1
   local parent_identity="$REPLY"
@@ -146,7 +165,7 @@ _file_quarantine_delete() {
     _file_revalidate_mutation_target "$target" "$expected_identity" || return 1
     # A directory's second check must not reuse the first snapshot.
     [[ -d "$target" && ! -L "$target" ]] && _file_mount_mode=""
-    _file_delete_mounts_clear "$target" || return 1
+    _file_delete_mounts_clear "$target" "$require_owner_rwx" || return 1
     _file_node_identity "$parent" || return 1
     [[ "$REPLY" == "$parent_identity" ]] || {
       _file_error "The deletion parent changed after authorization."
@@ -161,8 +180,6 @@ _file_quarantine_delete() {
       _file_error "The deletion target remained after quarantine."
       return 1
     }
-    _file_fingerprint_node_identity "$expected_identity" || return 1
-    local expected_node_identity="$REPLY"
     # The type is part of the node identity, so a quarantine that is not the
     # reviewed file, directory, or link never matches.
     _file_path_fingerprint "$quarantine" || return 1
@@ -177,8 +194,16 @@ _file_quarantine_delete() {
   } always {
     if (( operation_rc != 0 )) \
       && [[ -e "$quarantine" || -L "$quarantine" ]]; then
-      _file_error "Deletion was incomplete; recovery data was retained."
-      _file_dim "Recovery path: $quarantine"
+      local REPLY=""
+      if _file_path_fingerprint "$quarantine" \
+        && _file_fingerprint_node_identity "$REPLY" \
+        && [[ "$REPLY" == "$expected_node_identity" ]]; then
+        _file_error "Deletion was incomplete; recovery data was retained."
+        _file_dim "Recovery path: $quarantine"
+      else
+        _file_error "The deletion quarantine changed; its replacement was kept."
+        _file_dim "Unverified path: $quarantine"
+      fi
     fi
   }
   return $operation_rc

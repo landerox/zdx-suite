@@ -270,7 +270,9 @@ the user owns and others cannot write. The trash and its `files` and `info`
 directories must remain real, owned, mode `700` directories: a looser or
 linked one is refused, never repaired, and on WSL a trash on a Windows drive
 gets the DrvFs hint. Records are published mode `600`. Read-only actions and
-dry runs never create the trash.
+dry runs never create the trash. Payloads retain their modes: an owned regular
+file with mode `644` is valid inside these private containers; records remain
+private and the existing no-group/world-write payload rule is unchanged.
 
 ### Actions
 
@@ -282,8 +284,10 @@ dry runs never create the trash.
   planned as the link itself, below a canonical trusted parent, and is never
   followed. A directory must pass the recursive check the deletion engine
   applies before a purge (no links, special or hard-linked files, foreign or
-  writable entries, or mounts, and at most 4,096 entries), so everything in
-  the trash can be purged later. The plan shows `Directory:`, `Trash:`, and a
+  writable entries, or mounts, and at most 4,096 entries), so its reviewed tree is eligible for a later purge. Every directory also needs owner read,
+  write and search permission; a refusal explains the manual `chmod u+rwx`
+  remedy without changing permissions. Compression retains its separate
+  read-only input policy. The plan shows `Directory:`, `Trash:`, and a
   `# · Path · Type` table, a dry run ends with
   `Dry run: 2 items planned; nothing was moved.`, and the question is
   `Move 2 items to the trash?`.
@@ -292,7 +296,10 @@ dry runs never create the trash.
   of its regular files. Entries that cannot be restored, a record without an
   item, an item without a record, an invalid record, or an unsafe item, are
   counted in one warning and listed when at most three or with
-  `ZDX_VERBOSE=1`.
+  `ZDX_VERBOSE=1`. Reserved deletion quarantines left directly in `files/`
+  or `info/` are named separately on stderr for manual inspection or a new
+  reviewed `purge --all`; they add no IDs or JSON fields and cannot be restored
+  by this interface.
 - **`restore [ID...]`** moves valid entries back. Nothing may exist at the
   original path, and its parent must still exist as a canonical directory
   that the user owns and others cannot write, below trusted ancestors; a
@@ -305,7 +312,14 @@ dry runs never create the trash.
   IDs and `--all` also reach damaged entries. The plan
   (`# · ID · Deleted · Original path`) carries the disclosure
   `Purged items cannot be restored.`, and the question is
-  `Permanently delete 2 items?`.
+  `Permanently delete 2 items?`. Every selected tree is validated before the
+  plan and dry-run success, then the complete set is revalidated after consent
+  before the first deletion. `--all` also plans exact safe reserved deletion
+  quarantines in the two private containers, including the standalone legacy
+  name whose timestamp was empty. Names, bounded inventory, parents, ownership,
+  modes, links, mounts and full identities must validate; an unknown reserved
+  name fails closed. Shape is not provenance: a hand-placed safe object in that
+  reserved namespace can be selected by a new explicit `--all` plan.
 - **No action**, or `restore` and `purge` without a selection, opens a
   picker of the current entries. Rows carry only their snapshot index back
   from `fzf`; the selection must be in the snapshot, and the dispatcher then
@@ -335,9 +349,19 @@ reviewed device, inode, type, owner, and link count.
 `put` reserves an ID by publishing its record first: the record is written
 to private staging in `info/` and published with the suite's hard-link
 publication, which fails rather than replace an existing name. A failure
-before the rename withdraws that record. `restore` deletes the record through
-the quarantine engine after the item is back; if that fails, the restore
-still counts and the record remains as an entry without an item.
+before the rename withdraws that exact record. The published reservation's
+identity/content and the `files/` directory identity are revalidated immediately
+before and after each move. A lost reservation cannot produce success: the
+suite attempts a no-clobber return only to a vacant original location under
+its reviewed parent; otherwise it names the verified retained item and original
+path for manual recovery. A destination-directory race names the actual nested
+item, with no second unreviewed move.
+
+`restore` deletes the record through the quarantine engine after the item is
+back; if that fails, the verified restore still counts and the record can
+remain as an entry without an item. Status `130` or `143` during publication,
+withdrawal, reservation checks, compensation or post-restore cleanup stops
+later targets and preserves that status.
 
 Records are parsed strictly as data. A record must be a private, singly
 linked regular file owned by the user, at most 16 KiB, containing exactly
@@ -355,8 +379,11 @@ The File suite has no lock primitive, so each trash operation is safe under
 concurrency instead: a record reserves its ID with a no-clobber publication,
 every move uses a no-clobber rename whose result is identity-checked, and
 every plan revalidates after authorization and before each move. A
-concurrent invocation can make an operation fail, but it cannot clobber an
-item or record or make one item restore twice.
+concurrent invocation can make an operation fail. Narrow identity checks and
+no-clobber moves refuse detected replacements; the record/move checks are
+separate userspace operations, so a same-EUID final check-to-use race remains.
+Retained data is named only when it matches the reviewed inode; a replacement
+is labeled `Unverified path` and is neither deleted nor recursively chmodded.
 
 ### JSON
 
