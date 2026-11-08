@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Environment: disable configured Git filesystem-monitor hooks in dotenv
+  probes, retain unknown facts after repository refusals, and bind reads,
+  hygiene and JSON paths to the same physical input directory.
+
 - Environment: avoid quadratic dotenv text scans, quarantine malformed PEM
   blocks and encoded-looking names, and reject NUL throughout quoted spans
   without disclosing payloads in text or JSON.

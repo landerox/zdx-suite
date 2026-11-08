@@ -1620,6 +1620,13 @@ without `--yes`, it fails closed and leaves `PATH` unchanged. See
 
 ### 🧾 Dotenv Files
 
+Git hygiene probes disable configured filesystem-monitor commands. Refused or
+damaged repositories produce unknown facts and a warning; unknown Git facts
+alone retain the existing advisory status policy. Input parents are resolved
+physically before `..`, so the read, Git/sops facts and absolute JSON paths
+refer to the same file even through a symbolic parent. The final file itself
+must still be a regular non-symlink file. No Git remedy runs automatically.
+
 Malformed PEM blocks are consumed through their matching end marker (or EOF),
 with only the start line reported. Encoded-looking keys longer than 32 ASCII
 characters with mixed letter case and a digit but no underscore are withheld

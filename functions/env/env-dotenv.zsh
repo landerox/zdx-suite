@@ -131,8 +131,50 @@ _env_dotenv_git() {
       GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX \
       GIT_IMPLICIT_WORK_TREE
     _env_run_with_timeout "$_ENV_DOTENV_GIT_TIMEOUT" "$git_program" \
-      --no-optional-locks -C "$directory" "$@" </dev/null
+      --no-optional-locks -c core.fsmonitor=false -C "$directory" "$@" </dev/null
   )
+}
+
+# Status 0 only when searchable ancestors inside Git's discovery scope lack a
+# Git entry. Its ceiling excludes ancestors, never the starting directory.
+# A refused or damaged repository must not become a known negative fact.
+_env_dotenv_outside_repository() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local directory="${1:h}" starting_directory="${1:h}" ceiling=""
+  local -a ceilings=()
+  local -i resolve_links=1 cross_filesystems=0
+  local -A current_state=() parent_state=()
+  case "${(L)${GIT_DISCOVERY_ACROSS_FILESYSTEM-}}" in
+    ''|0|false|no|off) ;;
+    1|true|yes|on) cross_filesystems=1 ;;
+    *) return 1 ;;
+  esac
+  for ceiling in "${(@s/:/)${GIT_CEILING_DIRECTORIES-}}"; do
+    [[ -n "$ceiling" ]] || { resolve_links=0; continue; }
+    [[ "$ceiling" == /* ]] || continue
+    if (( resolve_links )); then
+      [[ -d "$ceiling" ]] || continue
+      ceilings+=("${ceiling:P}")
+    else
+      ceilings+=("${ceiling:a}")
+    fi
+  done
+  while :; do
+    if [[ "$directory" != "$starting_directory" ]] \
+      && (( ${ceilings[(Ie)$directory]} )); then
+      return 0
+    fi
+    [[ -d "$directory" && -x "$directory" ]] || return 1
+    [[ ! -e "$directory/.git" && ! -L "$directory/.git" ]] || return 1
+    [[ "$directory" != / ]] || return 0
+    if (( ! cross_filesystems )); then
+      zstat -H current_state -- "$directory" 2>/dev/null \
+        && zstat -H parent_state -- "${directory:h}" 2>/dev/null || return 1
+      (( current_state[device] == parent_state[device] )) || return 0
+    fi
+    directory="${directory:h}"
+  done
 }
 
 # reply: (repository tracked ignored note) for <file>. The first three are
@@ -141,7 +183,7 @@ _env_dotenv_git() {
 _env_dotenv_git_facts() {
   emulate -L zsh
   local file_path="$1"
-  local directory="${file_path:a:h}" file_name="${file_path:t}"
+  local directory="${${file_path:h}:P}" file_name="${file_path:t}"
   local inside="" REPLY=""
   local -i probe_rc=0
   reply=(unknown unknown unknown "")
@@ -157,7 +199,14 @@ _env_dotenv_git_facts() {
   case "$probe_rc" in
     0) ;;
     124) reply[4]=timeout; return 0 ;;
-    128) reply=(no unknown unknown ""); return 0 ;;
+    128)
+      if _env_dotenv_outside_repository "$directory/$file_name"; then
+        reply=(no unknown unknown "")
+      else
+        reply[4]=failed
+      fi
+      return 0
+      ;;
     *) reply[4]=failed; return 0 ;;
   esac
   if [[ "$inside" != true ]]; then
@@ -193,6 +242,16 @@ _env_dotenv_git_facts() {
 
 # --- Reading and parsing ----------------------------------------------------
 
+# REPLY: the physical parent plus the unchanged leaf. Resolve symbolic links
+# before .., without following a final link that the descriptor reader refuses.
+_env_dotenv_physical_path() {
+  emulate -L zsh
+  local file_path="$1" directory="${${1:h}:P}"
+  REPLY=""
+  [[ "$directory" == /* && -d "$directory" ]] || return 1
+  REPLY="${directory%/}/${file_path:t}"
+}
+
 # REPLY: the first of _ENV_DOTENV_EXAMPLE_NAMES that exists next to
 # <dotenv-file>, other than that file itself. A symbolic link or other
 # non-regular entry still wins its turn, so the reader refuses it rather than
@@ -222,11 +281,12 @@ _env_dotenv_find_example() {
 # Refuses a symbolic link, a non-regular file, and a file larger than
 # _ENV_MAX_FILE_BYTES. The bytes are read through a no-follow, non-blocking
 # descriptor whose device and inode must match the inspected path.
-# Usage: _env_dotenv_read <file> <label>
+# Usage: _env_dotenv_read <file> <label> [display-path]
 _env_dotenv_read() {
   emulate -L zsh
   setopt LOCAL_OPTIONS NO_MULTIBYTE
   local file_path="$1" label="$2"
+  local display_path="${3-$1}"
   REPLY=""
   reply=()
   { zmodload -F zsh/stat b:zstat && zmodload zsh/system; } 2>/dev/null || {
@@ -235,22 +295,22 @@ _env_dotenv_read() {
   }
 
   if [[ -L "$file_path" ]]; then
-    _env_error "Refusing the $label $file_path: it is a symbolic link."
+    _env_error "Refusing the $label $display_path: it is a symbolic link."
     _env_info "Pass the file it points to instead."
     return 1
   fi
   local -A path_state=() descriptor_state=()
   zstat -LH path_state -- "$file_path" 2>/dev/null || {
-    _env_error "Cannot inspect the $label $file_path."
+    _env_error "Cannot inspect the $label $display_path."
     return 1
   }
   (( (path_state[mode] & 8#170000) == 8#100000 )) || {
-    _env_error "Refusing the $label $file_path: it is not a regular file."
+    _env_error "Refusing the $label $display_path: it is not a regular file."
     return 1
   }
   local -i limit_mib=$(( _ENV_MAX_FILE_BYTES / 1048576 ))
   (( path_state[size] <= _ENV_MAX_FILE_BYTES )) || {
-    _env_error "Refusing the $label $file_path: it is larger than $limit_mib MiB."
+    _env_error "Refusing the $label $display_path: it is larger than $limit_mib MiB."
     return 1
   }
 
@@ -258,7 +318,7 @@ _env_dotenv_read() {
   local content="" chunk=""
   sysopen -r -o nofollow,nonblock,cloexec -u read_fd \
     -- "$file_path" 2>/dev/null || {
-    _env_error "Cannot read the $label $file_path."
+    _env_error "Cannot read the $label $display_path."
     return 1
   }
   {
@@ -281,16 +341,16 @@ _env_dotenv_read() {
   }
 
   if (( read_rc == -1 )); then
-    _env_error "The $label $file_path changed while it was opened."
+    _env_error "The $label $display_path changed while it was opened."
     return 1
   fi
   (( ${#content} <= _ENV_MAX_FILE_BYTES )) || {
-    _env_error "Refusing the $label $file_path: it is larger than $limit_mib MiB."
+    _env_error "Refusing the $label $display_path: it is larger than $limit_mib MiB."
     return 1
   }
   # sysread reports end of file as status 5.
   (( read_rc == 5 )) || {
-    _env_error "Cannot read the $label $file_path."
+    _env_error "Cannot read the $label $display_path."
     return 1
   }
   REPLY="$content"
@@ -548,20 +608,21 @@ _env_dotenv_select() {
 
 # REPLY: the records of <file> from _env_dotenv_parse after a bounded read.
 # reply: (mode uid) as _env_dotenv_read reports them.
-# Usage: _env_dotenv_scan <file> <label>
+# Usage: _env_dotenv_scan <file> <label> [display-path]
 _env_dotenv_scan() {
   local file_path="$1" label="$2"
+  local display_path="${3-$1}"
   local -i parse_rc=0
-  _env_dotenv_read "$file_path" "$label" || return 1
+  _env_dotenv_read "$file_path" "$label" "$display_path" || return 1
   local records=""
   records=$(_env_dotenv_parse "$REPLY") || parse_rc=$?
   REPLY=""
   if (( parse_rc == 3 )); then
     _env_error \
-      "Refusing the $label $file_path: it has more than $_ENV_DOTENV_MAX_LINES lines."
+      "Refusing the $label $display_path: it has more than $_ENV_DOTENV_MAX_LINES lines."
     return 1
   elif (( parse_rc != 0 )); then
-    _env_error "Could not parse the $label $file_path."
+    _env_error "Could not parse the $label $display_path."
     return 1
   fi
   REPLY="$records"
@@ -578,7 +639,7 @@ _env_dotenv_scan() {
 # Usage: _env_dotenv_sops_config <dotenv-file>
 _env_dotenv_sops_config() {
   emulate -L zsh
-  local directory="${1:A:h}"
+  local directory="${${1:h}:P}"
   local -i level=0
   REPLY=""
   while (( level < _ENV_DOTENV_SOPS_MAX_LEVELS )); do
@@ -853,21 +914,38 @@ env-dotenv() {
     fi
     return 1
   fi
+  _env_dotenv_physical_path "$dotenv_path" || {
+    _env_error "Cannot resolve the dotenv file directory."
+    return 1
+  }
+  local dotenv_absolute="$REPLY" example_absolute=""
   if (( have_example )); then
     [[ -e "$example_path" || -L "$example_path" ]] || {
       _env_error "No example file exists at $example_path."
       return 1
     }
-  elif _env_dotenv_find_example "$dotenv_path"; then
-    example_path="$REPLY"
+    _env_dotenv_physical_path "$example_path" || {
+      _env_error "Cannot resolve the example file directory."
+      return 1
+    }
+    example_absolute="$REPLY"
+  elif _env_dotenv_find_example "$dotenv_absolute"; then
+    example_absolute="$REPLY"
+    # Discovery stays at the frozen physical parent; only display preserves
+    # the original spelling of the supplied dotenv path.
+    if [[ "$dotenv_path" == */* ]]; then
+      example_path="${${dotenv_path:h}%/}/${example_absolute:t}"
+    else
+      example_path="${example_absolute:t}"
+    fi
   fi
 
-  _env_dotenv_scan "$dotenv_path" "dotenv file" || return 1
+  _env_dotenv_scan "$dotenv_absolute" "dotenv file" "$dotenv_path" || return 1
   local -a dotenv_records=("${(@f)REPLY}")
   local -i dotenv_mode="${reply[1]}" dotenv_uid="${reply[2]}"
   local -a example_records=()
   if [[ -n "$example_path" ]]; then
-    _env_dotenv_scan "$example_path" "example file" || return 1
+    _env_dotenv_scan "$example_absolute" "example file" "$example_path" || return 1
     example_records=("${(@f)REPLY}")
   fi
 
@@ -909,7 +987,7 @@ env-dotenv() {
   (( (dotenv_mode & 8#022) == 0 )) || writable_by_others="yes"
   (( dotenv_uid == EUID )) || owned_by_user="no"
 
-  _env_dotenv_git_facts "$dotenv_path"
+  _env_dotenv_git_facts "$dotenv_absolute"
   local git_repository="${reply[1]}" git_tracked="${reply[2]}"
   local git_ignored="${reply[3]}" git_note="${reply[4]}"
   if [[ "$git_note" == timeout ]]; then
@@ -922,14 +1000,22 @@ env-dotenv() {
   # Secret hygiene is advisory: it adds no issue and leaves the status alone.
   local sops_config="no" sops_config_path=""
   local -i sops_config_rc=0
-  _env_dotenv_sops_config "$dotenv_path" || sops_config_rc=$?
+  _env_dotenv_sops_config "$dotenv_absolute" || sops_config_rc=$?
   case "$sops_config_rc" in
     0) sops_config="yes" sops_config_path="$REPLY" ;;
     3) sops_config="unknown" ;;
   esac
-  _env_dotenv_sops_counterparts "$dotenv_path"
+  _env_dotenv_sops_counterparts "$dotenv_absolute"
   local -a counterpart_slots=("${reply[@]}")
-  local -a counterparts=("${(@)counterpart_slots:#}")
+  local -a counterparts=()
+  local counterpart="" counterpart_prefix=""
+  if [[ "$dotenv_path" == */* ]]; then
+    counterpart_prefix="${dotenv_path:h}"
+    [[ "$counterpart_prefix" == / ]] || counterpart_prefix+="/"
+  fi
+  for counterpart in "${counterpart_slots[@]}"; do
+    [[ -z "$counterpart" ]] || counterparts+=("$counterpart_prefix${counterpart:t}")
+  done
   local -A empty_has=()
   local -a static_credential_keys=()
   for key in "${empty_keys[@]}"; do
@@ -976,21 +1062,11 @@ env-dotenv() {
     for key in "${static_credential_keys[@]}"; do
       json_records+=("dotenv-static-credential"$'\t'"$key")
     done
-    local example_absolute="" slot=""
-    local -a counterpart_absolute=()
-    [[ -z "$example_path" ]] || example_absolute="${example_path:a}"
-    for slot in "${counterpart_slots[@]}"; do
-      if [[ -n "$slot" ]]; then
-        counterpart_absolute+=("${slot:a}")
-      else
-        counterpart_absolute+=("")
-      fi
-    done
-    _env_dotenv_print_json "${dotenv_path:a}" "$example_absolute" \
+    _env_dotenv_print_json "$dotenv_absolute" "$example_absolute" \
       "$mode_text" "$readable_by_others" "$writable_by_others" \
       "$owned_by_user" "$git_repository" "$git_tracked" "$git_ignored" \
       "$issue_count" "$sops_config" "$sops_config_path" \
-      "${counterpart_absolute[@]}" "${json_records[@]}" || return 1
+      "${counterpart_slots[@]}" "${json_records[@]}" || return 1
     return $result_rc
   fi
 
@@ -1078,7 +1154,7 @@ env-dotenv() {
     _env_warn "$dotenv_display is $access by other users (mode $mode_text)."
     _env_command_display chmod -- 600 "$dotenv_path"
     _env_dim "Restrict it with: $REPLY"
-    if [[ "${dotenv_path:A}" == /mnt/[a-z]/* ]] && _env_host_is_wsl; then
+    if [[ "$dotenv_absolute" == /mnt/[a-z]/* ]] && _env_host_is_wsl; then
       _env_dim \
         "This file is on a Windows drive (DrvFs), which reports mode 777 unless metadata is enabled."
       _env_dim \
