@@ -192,7 +192,7 @@ _git_sync_local_snapshot() {
 _git_sync_ref_oid() {
   local ref="$1"
   REPLY=$(command git rev-parse --verify "${ref}^{object}" 2>/dev/null) \
-    || return 1
+    || return $?
   _git_validate_oid "$REPLY"
 }
 
@@ -211,8 +211,11 @@ _git_sync_direct_ref_oid() {
   output=$(command git for-each-ref \
     --format='%(objectname)%09%(refname)%09%(symref)' \
     "$wanted_ref" 2>/dev/null) || {
+    local -i inspection_rc=$?
     _git_error \
       "Unable to inspect local ref '$(_git_display_escape "$wanted_ref")'."
+    (( inspection_rc == 124 || inspection_rc == 130 || inspection_rc == 143 )) \
+      && return $inspection_rc
     return 1
   }
 
@@ -642,7 +645,8 @@ _git_sync_rebase_result_paths() {
 }
 
 # Promotes one fetched OID to a canonical tracking ref with an exact old-value
-# lease. The all-zero OID means the ref must still be absent.
+# lease. The all-zero OID means the ref must still be absent. The optional
+# fourth argument names the owning action in the reflog.
 _git_sync_promote_tracking_ref() {
   local tracking_ref="$1"
   local new_oid="$2"
@@ -658,16 +662,21 @@ _git_sync_promote_tracking_ref() {
   }
 
   local expected_old="$old_oid"
+  local reflog_message="${4:-zdx-suite git-pull}"
   [[ "$expected_old" != "absent" ]] \
     || expected_old="${new_oid//?/0}"
 
   command git update-ref --no-deref \
-    -m "zdx-suite git-pull" \
+    -m "$reflog_message" \
     "$tracking_ref" "$new_oid" "$expected_old" >/dev/null
   local -i update_rc=$?
   if (( update_rc != 0 )); then
+    if (( update_rc == 124 || update_rc == 130 || update_rc == 143 )); then
+      _git_error "Tracking-ref promotion stopped (exit $update_rc)."
+      return $update_rc
+    fi
     _git_error \
-      "The tracking ref changed during fetch; no planned ref was promoted."
+      "Unable to promote the tracking ref; its expected value may have changed."
     return 1
   fi
   return 0
@@ -966,6 +975,8 @@ _git_push_require_fast_forward() {
   local remote_type=""
   remote_type=$(command git --no-replace-objects \
     cat-file -t "$remote_oid" 2>/dev/null) || {
+    local -i object_rc=$?
+    (( object_rc == 124 || object_rc == 130 || object_rc == 143 )) && return $object_rc
     _git_error \
       "Cannot prove a fast-forward for $displayed_ref; fetch the remote ref first."
     return 1
@@ -977,6 +988,8 @@ _git_push_require_fast_forward() {
   local local_type=""
   local_type=$(command git --no-replace-objects \
     cat-file -t "$local_oid" 2>/dev/null) || {
+    local -i object_rc=$?
+    (( object_rc == 124 || object_rc == 130 || object_rc == 143 )) && return $object_rc
     _git_error "The planned local branch target is not a commit."
     return 1
   }
@@ -996,6 +1009,9 @@ _git_push_require_fast_forward() {
       _git_error \
         "Refusing non-fast-forward $displayed_ref; review explicit --force-with-lease first."
       return 1
+      ;;
+    124|130|143)
+      return $ancestor_rc
       ;;
     *)
       _git_error \
@@ -1017,7 +1033,7 @@ _git_push_require_integrated_lease() {
   GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor \
     "$remote_oid" "$local_oid" 2>/dev/null || proof_rc=$?
   (( proof_rc == 0 )) && return 0
-  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  (( proof_rc == 124 || proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
   if (( proof_rc != 1 )); then
     _git_error "Unable to prove that the force lease was integrated locally."
     return 1
@@ -1026,7 +1042,7 @@ _git_push_require_integrated_lease() {
   proof_rc=0
   reflog_output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects rev-list \
     --walk-reflogs "$local_ref" -- 2>/dev/null) || proof_rc=$?
-  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  (( proof_rc == 124 || proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
   (( proof_rc == 0 )) || {
     _git_error "Unable to inspect the local branch reflog for the force lease."
     return 1
@@ -1052,7 +1068,7 @@ _git_push_require_integrated_lease() {
     # Without an observed reflog tip no history can establish integration.
     unreachable_count=1
   fi
-  (( proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
+  (( proof_rc == 124 || proof_rc == 130 || proof_rc == 143 )) && return $proof_rc
   if (( proof_rc != 0 )) || [[ -z "$unreachable_count" \
     || "$unreachable_count" == *[^0-9]* ]]; then
     _git_error "Unable to verify the force-lease branch reflog history."
@@ -1091,7 +1107,7 @@ _git_push_build_plan() {
       remote_oid="$REPLY"
       [[ "$remote_oid" == "$candidate_oid" ]] && continue
       _git_push_require_fast_forward \
-        "$candidate_ref" "$remote_oid" "$candidate_oid" || return 1
+        "$candidate_ref" "$remote_oid" "$candidate_oid" || return $?
       reply+=("${candidate_ref}"$'\t'"${candidate_oid}"$'\t'"${candidate_ref}"$'\t'"${remote_oid}")
     done
     return 0
@@ -1101,6 +1117,12 @@ _git_push_build_plan() {
   local -a exact_remote_records=("${reply[@]}")
   _git_sync_find_remote_oid "$remote_ref" "${exact_remote_records[@]}"
   local remote_oid="$REPLY"
+  # An equal destination needs no remote write. Upstream mode still has a
+  # separately reviewed local configuration action.
+  if [[ "$remote_oid" == "$local_oid" && "$mode" != set-upstream ]]; then
+    reply=()
+    return 0
+  fi
   if [[ "$mode" == "force" && "$remote_oid" == "absent" ]]; then
     _git_error \
       "A force-with-lease push requires an existing remote object ID."
@@ -1122,7 +1144,7 @@ _git_push_build_plan() {
       || return $?
   else
     _git_push_require_fast_forward \
-      "$remote_ref" "$remote_oid" "$local_oid" || return 1
+      "$remote_ref" "$remote_oid" "$local_oid" || return $?
   fi
   reply=("${local_ref}"$'\t'"${local_oid}"$'\t'"${remote_ref}"$'\t'"${remote_oid}")
   return 0
@@ -1134,15 +1156,29 @@ _git_push_show_plan() {
   local mode="$3"
   local remote="$4"
   local push_url="$5"
-  shift 5
+  local upstream_tracking_oid="$6"
+  shift 6
   local -a plan=("$@")
 
-  _git_label "Repository:" "$root"
+  local REPLY=""
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "HEAD:" "$head_oid"
   _git_label "Mode:" "$mode"
   _git_label "Remote:" "$remote"
   _git_label "Push URL:" "$(_git_redact_remote_url "$push_url")"
-  _git_label "Ref updates:" "${#plan[@]}"
+  local -i ref_updates=0
+  local plan_record="" plan_remainder="" source_oid="" destination_oid=""
+  for plan_record in "${plan[@]}"; do
+    plan_remainder="${plan_record#*$'\t'}"
+    source_oid="${plan_remainder%%$'\t'*}"
+    destination_oid="${plan_record##*$'\t'}"
+    [[ "$source_oid" == "$destination_oid" ]] || (( ++ref_updates ))
+  done
+  _git_label "Ref updates:" "$ref_updates"
+  if [[ "$mode" == set-upstream ]]; then
+    _git_label "Upstream configuration:" "1 local branch"
+  fi
   _git_blank
 
   local record remainder local_ref local_oid remote_ref remote_oid
@@ -1155,23 +1191,64 @@ _git_push_show_plan() {
     remote_oid="${remainder##*$'\t'}"
     _git_dim \
       "$local_ref @ $local_oid -> $remote/$remote_ref @ $remote_oid"
+    if [[ "$mode" == set-upstream && "$upstream_tracking_oid" != "$local_oid" ]]; then
+      _git_dim \
+        "Local tracking ref refs/remotes/$remote/${remote_ref#refs/heads/}: $upstream_tracking_oid -> $local_oid"
+    fi
   done
 }
 
+# Lists exactly the remaining reviewed destinations after a stopped push.
+# FIRST is one-based; after a write started, its destination is excluded.
+_git_push_report_stopped() {
+  local -i stop_rc="$1" pushed="$2" first="$3"
+  shift 3
+  local -a records=("$@")
+  (( first >= 1 )) || first=1
+  local -i index=0
+  local remaining_record="" remaining_ref="" REPLY=""
+  for (( index=first; index<=${#records[@]}; ++index )); do
+    remaining_record="${records[index]#*$'\t'*$'\t'}"
+    remaining_ref="${remaining_record%%$'\t'*}"
+    _git_outcome_line "$remaining_ref" not-run
+  done
+  _git_count_noun "$pushed" "ref update"
+  if (( stop_rc == 124 )); then
+    _git_warn "Push stopped (exit 124): $REPLY completed."
+  else
+    _git_warn "Push interrupted: $REPLY completed before the interruption."
+  fi
+}
+
 _git_push_apply_plan() {
+  emulate -L zsh
+  setopt localtraps
   local mode="$1"
   local remote="$2"
   local push_url="$3"
   shift 3
   local -a plan=("$@")
 
-  local -i pushed=0 failed=0
+  local -i pushed=0 failed=0 plan_index=0 mutation_started=0
   local record remainder local_ref local_oid remote_ref expected_remote_oid
   local current_url actual_local_oid actual_remote_oid
   local -a remote_records=()
   local REPLY=""
 
+  trap '
+    (( mutation_started )) && _git_outcome_line "$remote_ref" interrupted "status 130"
+    _git_push_report_stopped 130 "$pushed" "$(( plan_index + mutation_started ))" "${plan[@]}"
+    return 130
+  ' INT
+  trap '
+    (( mutation_started )) && _git_outcome_line "$remote_ref" interrupted "status 143"
+    _git_push_report_stopped 143 "$pushed" "$(( plan_index + mutation_started ))" "${plan[@]}"
+    return 143
+  ' TERM HUP
+
   for record in "${plan[@]}"; do
+    (( ++plan_index ))
+    mutation_started=0
     local_ref="${record%%$'\t'*}"
     remainder="${record#*$'\t'}"
     local_oid="${remainder%%$'\t'*}"
@@ -1217,8 +1294,13 @@ _git_push_apply_plan() {
     # Initialize: a bare re-declaration in a loop would print the raw push
     # URL, credentials included, to stdout on every later record.
     local push_urls_output=""
+    local -i url_rc=0
     push_urls_output=$(command git remote get-url --push --all \
-      "$remote" 2>/dev/null) || push_urls_output=""
+      "$remote" 2>/dev/null) || url_rc=$?
+    if (( url_rc == 124 || url_rc == 130 || url_rc == 143 )); then
+      _git_push_report_stopped "$url_rc" "$pushed" "$plan_index" "${plan[@]}"
+      return $url_rc
+    fi
     local -a push_urls=()
     [[ -n "$push_urls_output" ]] \
       && push_urls=("${(@f)push_urls_output}")
@@ -1233,7 +1315,13 @@ _git_push_apply_plan() {
       continue
     fi
 
-    _git_sync_ref_oid "$local_ref" || REPLY=""
+    local -i local_ref_rc=0
+    _git_sync_ref_oid "$local_ref" || local_ref_rc=$?
+    if (( local_ref_rc == 124 || local_ref_rc == 130 || local_ref_rc == 143 )); then
+      _git_push_report_stopped "$local_ref_rc" "$pushed" "$plan_index" "${plan[@]}"
+      return $local_ref_rc
+    fi
+    (( local_ref_rc == 0 )) || REPLY=""
     actual_local_oid="$REPLY"
     if [[ "$actual_local_oid" != "$local_oid" ]]; then
       _git_error \
@@ -1244,9 +1332,11 @@ _git_push_apply_plan() {
 
     _git_sync_remote_snapshot "$push_url" "$remote_ref" || {
       local -i probe_rc=$?
+      if (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )); then
+        _git_push_report_stopped "$probe_rc" "$pushed" "$plan_index" "${plan[@]}"
+        return $probe_rc
+      fi
       failed=$(( failed + 1 ))
-      (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
-        && return $probe_rc
       continue
     }
     remote_records=("${reply[@]}")
@@ -1263,6 +1353,11 @@ _git_push_apply_plan() {
       current|set-upstream|all)
         _git_push_require_fast_forward \
           "$remote_ref" "$expected_remote_oid" "$local_oid" || {
+          local -i ancestry_rc=$?
+          if (( ancestry_rc == 124 || ancestry_rc == 130 || ancestry_rc == 143 )); then
+            _git_push_report_stopped "$ancestry_rc" "$pushed" "$plan_index" "${plan[@]}"
+            return $ancestry_rc
+          fi
           failed=$(( failed + 1 ))
           continue
         }
@@ -1275,10 +1370,20 @@ _git_push_apply_plan() {
           continue
         fi
         local force_local_type="" force_remote_type=""
+        local -i force_type_rc=0
         force_local_type=$(command git --no-replace-objects cat-file -t \
-          "$local_oid" 2>/dev/null) || force_local_type=""
+          "$local_oid" 2>/dev/null) || force_type_rc=$?
+        if (( force_type_rc == 124 || force_type_rc == 130 || force_type_rc == 143 )); then
+          _git_push_report_stopped "$force_type_rc" "$pushed" "$plan_index" "${plan[@]}"
+          return $force_type_rc
+        fi
+        force_type_rc=0
         force_remote_type=$(command git --no-replace-objects cat-file -t \
-          "$expected_remote_oid" 2>/dev/null) || force_remote_type=""
+          "$expected_remote_oid" 2>/dev/null) || force_type_rc=$?
+        if (( force_type_rc == 124 || force_type_rc == 130 || force_type_rc == 143 )); then
+          _git_push_report_stopped "$force_type_rc" "$pushed" "$plan_index" "${plan[@]}"
+          return $force_type_rc
+        fi
         if [[ "$force_local_type" != "commit" \
           || "$force_remote_type" != "commit" ]]; then
           _git_error \
@@ -1289,9 +1394,8 @@ _git_push_apply_plan() {
         local -i lease_rc=0
         _git_push_require_integrated_lease \
           "$local_ref" "$local_oid" "$expected_remote_oid" || lease_rc=$?
-        if (( lease_rc == 130 || lease_rc == 143 )); then
-          _git_count_noun "$pushed" "ref update"
-          _git_warn "Push interrupted: $REPLY completed before the interruption."
+        if (( lease_rc == 124 || lease_rc == 130 || lease_rc == 143 )); then
+          _git_push_report_stopped "$lease_rc" "$pushed" "$plan_index" "${plan[@]}"
           return $lease_rc
         fi
         if (( lease_rc != 0 )); then
@@ -1320,8 +1424,7 @@ _git_push_apply_plan() {
     _git_require_direct_tracking_refs "$remote" "$remote_ref" \
       || tracking_rc=$?
     if (( tracking_rc == 130 || tracking_rc == 143 )); then
-      _git_count_noun "$pushed" "ref update"
-      _git_warn "Push interrupted: $REPLY completed before the interruption."
+      _git_push_report_stopped "$tracking_rc" "$pushed" "$plan_index" "${plan[@]}"
       return "$tracking_rc"
     elif (( tracking_rc != 0 )); then
       failed=$(( failed + 1 ))
@@ -1331,30 +1434,49 @@ _git_push_apply_plan() {
     _git_require_direct_remote_branch "$push_url" "$remote_ref" \
       || remote_alias_rc=$?
     if (( remote_alias_rc == 124 )); then
-      _git_count_noun "$pushed" "ref update"
-      _git_warn "Push stopped after a remote query timed out: $REPLY completed."
+      _git_push_report_stopped "$remote_alias_rc" "$pushed" "$plan_index" "${plan[@]}"
       return $remote_alias_rc
     elif (( remote_alias_rc == 130 || remote_alias_rc == 143 )); then
-      _git_count_noun "$pushed" "ref update"
-      _git_warn "Push interrupted: $REPLY completed before the interruption."
+      _git_push_report_stopped "$remote_alias_rc" "$pushed" "$plan_index" "${plan[@]}"
       return $remote_alias_rc
     elif (( remote_alias_rc != 0 )); then
       failed=$(( failed + 1 ))
       continue
     fi
+    mutation_started=1
     "${push_cmd[@]}" >&2
     local -i push_rc=$?
     if (( push_rc == 0 )); then
       pushed=$(( pushed + 1 ))
       if [[ "$mode" == "set-upstream" ]]; then
-        _git_sync_ref_oid "$local_ref" || REPLY=""
+        local -i upstream_local_rc=0
+        _git_sync_ref_oid "$local_ref" || upstream_local_rc=$?
+        if (( upstream_local_rc == 124 || upstream_local_rc == 130 \
+          || upstream_local_rc == 143 )); then
+          _git_error \
+            "Remote push succeeded, but local branch inspection stopped (exit $upstream_local_rc)."
+          return $upstream_local_rc
+        elif (( upstream_local_rc != 0 )); then
+          _git_error "Remote push succeeded, but local branch inspection failed."
+          return 1
+        fi
         if [[ "$REPLY" != "$local_oid" ]]; then
           _git_error \
             "Remote push succeeded, but the local branch moved before upstream configuration."
           return 1
         fi
+        local -i upstream_url_rc=0
         push_urls_output=$(command git remote get-url --push --all \
-          "$remote" 2>/dev/null) || push_urls_output=""
+          "$remote" 2>/dev/null) || upstream_url_rc=$?
+        if (( upstream_url_rc == 124 || upstream_url_rc == 130 \
+          || upstream_url_rc == 143 )); then
+          _git_error \
+            "Remote push succeeded, but push URL inspection stopped (exit $upstream_url_rc)."
+          return $upstream_url_rc
+        elif (( upstream_url_rc != 0 )); then
+          _git_error "Remote push succeeded, but push URL inspection failed."
+          return 1
+        fi
         push_urls=()
         [[ -n "$push_urls_output" ]] \
           && push_urls=("${(@f)push_urls_output}")
@@ -1382,32 +1504,54 @@ _git_push_apply_plan() {
           return 1
         fi
         local tracking_ref="refs/remotes/${remote}/${remote_ref#refs/heads/}"
-        _git_sync_direct_ref_oid "$tracking_ref" || {
+        local -i upstream_tracking_rc=0
+        _git_sync_direct_ref_oid "$tracking_ref" || upstream_tracking_rc=$?
+        if (( upstream_tracking_rc == 124 || upstream_tracking_rc == 130 \
+          || upstream_tracking_rc == 143 )); then
+          _git_error \
+            "Remote push succeeded, but tracking-ref inspection stopped (exit $upstream_tracking_rc)."
+          return $upstream_tracking_rc
+        elif (( upstream_tracking_rc != 0 )); then
           _git_error \
             "Remote push succeeded, but the tracking ref could not be inspected."
           return 1
-        }
+        fi
         local tracking_oid="$REPLY"
+        local -i upstream_promote_rc=0
         _git_sync_promote_tracking_ref \
-          "$tracking_ref" "$local_oid" "$tracking_oid" || {
+          "$tracking_ref" "$local_oid" "$tracking_oid" \
+          || upstream_promote_rc=$?
+        if (( upstream_promote_rc == 124 || upstream_promote_rc == 130 \
+          || upstream_promote_rc == 143 )); then
           _git_error \
-            "Remote push succeeded, but the tracking ref changed locally."
+            "Remote push succeeded, but promotion stopped (exit $upstream_promote_rc)."
+          return $upstream_promote_rc
+        elif (( upstream_promote_rc != 0 )); then
+          _git_error \
+            "Remote push succeeded, but promotion failed."
           return 1
-        }
+        fi
+        local -i upstream_config_rc=0
         command git branch \
           "--set-upstream-to=refs/remotes/${remote}/${remote_ref#refs/heads/}" \
-          "${local_ref#refs/heads/}" >&2 || {
+          "${local_ref#refs/heads/}" >&2 || upstream_config_rc=$?
+        if (( upstream_config_rc == 124 || upstream_config_rc == 130 \
+          || upstream_config_rc == 143 )); then
+          _git_error \
+            "Remote push succeeded, but upstream configuration stopped (exit $upstream_config_rc)."
+          return $upstream_config_rc
+        elif (( upstream_config_rc != 0 )); then
           _git_error \
             "Remote push succeeded, but upstream configuration failed."
           return 1
-        }
+        fi
       fi
       local displayed_local="$(_git_display_escape "$local_ref")"
       local displayed_remote="$(_git_display_escape "$remote_ref")"
       _git_success "Pushed $displayed_local to $remote/$displayed_remote."
     elif (( push_rc == 130 || push_rc == 143 )); then
-      _git_count_noun "$pushed" "ref update"
-      _git_warn "Push interrupted: $REPLY completed before the interruption."
+      _git_outcome_line "$remote_ref" interrupted "status $push_rc"
+      _git_push_report_stopped "$push_rc" "$pushed" "$(( plan_index + 1 ))" "${plan[@]}"
       return "$push_rc"
     else
       _git_error \
@@ -1417,7 +1561,13 @@ _git_push_apply_plan() {
   done
 
   if (( failed > 0 )); then
-    _git_error "Push incomplete: $pushed succeeded, $failed failed."
+    _git_count_noun "${#plan[@]}" "ref update"
+    if (( pushed > 0 )); then
+      _git_error "Push completed with partial failures: $failed of $REPLY failed."
+      _git_mark_partial
+    else
+      _git_error "Push failed: $failed of $REPLY failed."
+    fi
     return 1
   fi
   _git_count_noun "$pushed" "ref update"
@@ -1489,12 +1639,16 @@ git-push() {
     _git_warn \
       "Force mode can rewrite remote history; the exact remote OID is leased."
   fi
+  local upstream_tracking_oid="absent"
   if [[ "$_git_push_opt_mode" == "set-upstream" ]]; then
-    # Setting the upstream writes this tracking ref after the push.
+    # Review the old value even when the remote needs no push. Configuration
+    # requires a direct tracking ref that reflects the reviewed destination.
     local -a case_planned_refs=("$_git_sync_tracking_ref")
     _git_ref_case_guard case_planned_refs refs/remotes \
       "Push to a branch name that differs by more than letter case, or delete a stale tracking ref with 'git update-ref --no-deref -d <ref>', then retry." \
       || return 1
+    _git_sync_direct_ref_oid "$_git_sync_tracking_ref" || return $?
+    upstream_tracking_oid="$REPLY"
   fi
 
   local -a reply=()
@@ -1507,6 +1661,11 @@ git-push() {
   if (( ${#plan[@]} == 0 )); then
     _git_success "The remote already matches every planned ref."
     return 0
+  fi
+  local -i upstream_only=0
+  if [[ "$_git_push_opt_mode" == set-upstream \
+    && "${plan[1]##*$'\t'}" == "$_git_sync_local_oid" ]]; then
+    upstream_only=1
   fi
   # A push to the remote URL updates the refs that the remote's fetch
   # refspecs map each pushed ref to, and Git would follow a symbolic one to
@@ -1522,9 +1681,13 @@ git-push() {
 
   _git_push_show_plan \
     "$root" "$head_oid" "$_git_push_opt_mode" "$_git_sync_remote" \
-    "$_git_sync_push_url" "${plan[@]}"
+    "$_git_sync_push_url" "$upstream_tracking_oid" "${plan[@]}"
 
   if (( _git_push_opt_dry_run )); then
+    if (( upstream_only )); then
+      _git_info "Dry run: 1 upstream configuration planned; nothing was changed."
+      return 0
+    fi
     _git_count_noun "${#plan[@]}" "ref update"
     _git_info "Dry run: $REPLY planned; nothing was pushed."
     return 0
@@ -1532,10 +1695,15 @@ git-push() {
 
   local -i authorize_rc=0
   local plan_label=""
-  _git_count_noun "${#plan[@]}" "exact ref update"
-  plan_label="$REPLY"
-  _git_sync_authorize "$_git_push_opt_yes" \
-    "Push ${plan_label} to '$_git_sync_remote'?" \
+  if (( upstream_only )); then
+    plan_label="1 upstream configuration"
+  else
+    _git_count_noun "${#plan[@]}" "exact ref update"
+    plan_label="$REPLY"
+  fi
+  local authorization_question="Push ${plan_label} to '$_git_sync_remote'?"
+  (( upstream_only )) && authorization_question="Apply ${plan_label} for '$_git_sync_remote'?"
+  _git_sync_authorize "$_git_push_opt_yes" "$authorization_question" \
     || authorize_rc=$?
   (( authorize_rc == 3 )) && return 0
   (( authorize_rc != 0 )) && return $authorize_rc
@@ -1544,6 +1712,48 @@ git-push() {
     "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
     "$_git_sync_local_oid" "$_git_sync_remote" "$_git_sync_push_url" push \
     || return 1
+
+  if (( upstream_only )); then
+    # No remote write is needed, but the reviewed destination and local
+    # tracking lease must still hold before the local configuration action.
+    _git_sync_remote_snapshot "$_git_sync_push_url" "$_git_sync_remote_ref" \
+      || return $?
+    local -a upstream_remote_records=("${reply[@]}")
+    _git_sync_find_remote_oid "$_git_sync_remote_ref" "${upstream_remote_records[@]}"
+    [[ "$REPLY" == "$_git_sync_local_oid" ]] || {
+      _git_error "The remote destination changed before upstream configuration."
+      return 1
+    }
+    _git_require_direct_tracking_refs "$_git_sync_remote" "$_git_sync_remote_ref" \
+      || return $?
+    _git_require_direct_remote_branch "$_git_sync_push_url" "$_git_sync_remote_ref" \
+      || return $?
+    _git_sync_direct_ref_oid "$_git_sync_tracking_ref" || return $?
+    [[ "$REPLY" == "$upstream_tracking_oid" ]] || {
+      _git_error "The tracking ref changed before upstream configuration."
+      return 1
+    }
+    _git_sync_revalidate_context \
+      "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
+      "$_git_sync_local_oid" "$_git_sync_remote" "$_git_sync_push_url" push \
+      || return 1
+    if [[ "$upstream_tracking_oid" != "$_git_sync_local_oid" ]]; then
+      _git_sync_promote_tracking_ref \
+        "$_git_sync_tracking_ref" "$_git_sync_local_oid" "$upstream_tracking_oid" \
+        "zdx-suite git-push upstream" || return $?
+    fi
+    # Recheck the direct value immediately before Git resolves the upstream.
+    _git_sync_direct_ref_oid "$_git_sync_tracking_ref" || return $?
+    [[ "$REPLY" == "$_git_sync_local_oid" ]] || {
+      _git_error "The tracking destination changed before upstream configuration."
+      return 1
+    }
+    command git branch \
+      "--set-upstream-to=$_git_sync_tracking_ref" "$_git_sync_branch" >&2 \
+      || return $?
+    _git_success "Upstream configured for $(_git_display_escape "$_git_sync_local_ref")."
+    return 0
+  fi
 
   _git_push_apply_plan \
     "$_git_push_opt_mode" "$_git_sync_remote" "$_git_sync_push_url" \
@@ -1883,7 +2093,9 @@ _git_pull_show_plan() {
   local tracking_ref="$9"
   local tracking_oid="${10}"
 
-  _git_label "Repository:" "$root"
+  local REPLY=""
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "HEAD:" "$head_oid"
   _git_label "Current ref:" "$local_ref"
   _git_label "Mode:" "$mode"
@@ -1904,7 +2116,9 @@ _git_pull_show_prune_plan() {
   shift 5
   local -a plan=("$@")
 
-  _git_label "Repository:" "$root"
+  local REPLY=""
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "HEAD:" "$head_oid"
   _git_label "Current ref:" "$local_ref"
   _git_label "Mode:" "fetch and prune"
@@ -2037,7 +2251,12 @@ git-pull() {
   fi
 
   if (( _git_pull_opt_dry_run )); then
-    _git_info "Dry run: 1 $_git_pull_opt_mode update planned; nothing was fetched or changed."
+    if [[ "$_git_pull_opt_mode" == fetch-prune ]]; then
+      _git_count_noun "${#prune_plan[@]}" "tracking change"
+      _git_info "Dry run: $REPLY planned; nothing was fetched or changed."
+    else
+      _git_info "Dry run: 1 $_git_pull_opt_mode update planned; nothing was fetched or changed."
+    fi
     return 0
   fi
 
@@ -2069,62 +2288,74 @@ git-pull() {
     _git_sync_allocate_temp_prefix || return 1
     local prune_temp_prefix="$REPLY"
     local prune_refspec="refs/heads/*:${prune_temp_prefix}/*"
-    _git_sync_fetch_temp "$_git_sync_remote" "$prune_refspec"
-    local -i prune_fetch_rc=$?
-
+    local -i prune_fetch_rc=0 prune_operation_rc=0 prune_cleanup_rc=0
     local -a prune_temp_records=()
-    _git_sync_temp_snapshot "$prune_temp_prefix" || {
-      _git_error \
-        "Unable to inventory the temporary refs; inspect '$prune_temp_prefix'."
-      return 1
-    }
-    prune_temp_records=("${reply[@]}")
-    if (( prune_fetch_rc != 0 )); then
-      _git_sync_cleanup_temp_refs \
-        "$prune_temp_prefix" "${prune_temp_records[@]}" || return 1
-      _git_error \
-        "Fetch and prune failed for '$_git_sync_remote' (exit $prune_fetch_rc)."
-      return $prune_fetch_rc
-    fi
+    setopt localtraps
+    # Register cleanup before fetch can allocate any invocation-owned refs.
+    {
+      trap 'prune_operation_rc=130; return 130' INT
+      trap 'prune_operation_rc=143; return 143' TERM HUP
 
-    _git_pull_normalize_temp_records \
-      "$prune_temp_prefix" "${prune_temp_records[@]}" || {
-      _git_sync_cleanup_temp_refs \
-        "$prune_temp_prefix" "${prune_temp_records[@]}" || true
-      return 1
+      _git_sync_fetch_temp "$_git_sync_remote" "$prune_refspec" \
+        || prune_fetch_rc=$?
+      if (( prune_fetch_rc != 0 )); then
+        _git_error \
+          "Fetch and prune failed for '$_git_sync_remote' (exit $prune_fetch_rc)."
+        prune_operation_rc=$prune_fetch_rc
+        return $prune_operation_rc
+      fi
+      _git_sync_temp_snapshot "$prune_temp_prefix" || {
+        _git_error \
+          "Unable to inventory the temporary refs; inspect '$prune_temp_prefix'."
+        prune_operation_rc=1
+        return 1
+      }
+      prune_temp_records=("${reply[@]}")
+      _git_pull_normalize_temp_records \
+        "$prune_temp_prefix" "${prune_temp_records[@]}" || {
+        prune_operation_rc=$?
+        return $prune_operation_rc
+      }
+      local -a fetched_remote_records=("${reply[@]}")
+      if [[ "${(j:$'\n':)fetched_remote_records}" \
+        != "${(j:$'\n':)frozen_prune_remote_records}" ]]; then
+        _git_error \
+          "The fetched remote snapshot does not match the frozen prune plan."
+        prune_operation_rc=1
+        return 1
+      fi
+      _git_sync_validate_temp_commits "${prune_temp_records[@]}" || {
+        prune_operation_rc=$?
+        return $prune_operation_rc
+      }
+      _git_sync_revalidate_context \
+        "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
+        "$_git_sync_local_oid" "$_git_sync_remote" \
+        "$_git_sync_fetch_url" fetch || {
+        prune_operation_rc=$?
+        return $prune_operation_rc
+      }
+      _git_pull_apply_prune_plan \
+        "$_git_sync_remote" "${prune_plan[@]}" || {
+        prune_operation_rc=$?
+        return $prune_operation_rc
+      }
+    } always {
+      trap - INT TERM HUP
+      if (( prune_operation_rc == 130 || prune_operation_rc == 143 )); then
+        _git_error "The fetch and prune was interrupted (exit $prune_operation_rc)."
+      fi
+      local -a remaining_prune_records=()
+      if _git_sync_temp_snapshot "$prune_temp_prefix" 2>/dev/null; then
+        remaining_prune_records=("${reply[@]}")
+        _git_sync_cleanup_temp_refs "$prune_temp_prefix" \
+          "${remaining_prune_records[@]}" || prune_cleanup_rc=$?
+      else
+        prune_cleanup_rc=1
+        _git_warn \
+          "Unable to inventory the temporary refs; inspect '$prune_temp_prefix'."
+      fi
     }
-    local -a fetched_remote_records=("${reply[@]}")
-    if [[ "${(j:$'\n':)fetched_remote_records}" \
-      != "${(j:$'\n':)frozen_prune_remote_records}" ]]; then
-      _git_sync_cleanup_temp_refs \
-        "$prune_temp_prefix" "${prune_temp_records[@]}" || true
-      _git_error \
-        "The fetched remote snapshot does not match the frozen prune plan."
-      return 1
-    fi
-    _git_sync_validate_temp_commits "${prune_temp_records[@]}" || {
-      _git_sync_cleanup_temp_refs \
-        "$prune_temp_prefix" "${prune_temp_records[@]}" || true
-      return 1
-    }
-
-    _git_sync_revalidate_context \
-      "$root" "$head_oid" "$fingerprint" "$_git_sync_local_ref" \
-      "$_git_sync_local_oid" "$_git_sync_remote" \
-      "$_git_sync_fetch_url" fetch || {
-      _git_sync_cleanup_temp_refs \
-        "$prune_temp_prefix" "${prune_temp_records[@]}" || true
-      return 1
-    }
-
-    local -i prune_apply_rc=0
-    _git_pull_apply_prune_plan \
-      "$_git_sync_remote" "${prune_plan[@]}" || prune_apply_rc=$?
-    local -i prune_cleanup_rc=0
-    _git_sync_cleanup_temp_refs \
-      "$prune_temp_prefix" "${prune_temp_records[@]}" \
-      || prune_cleanup_rc=$?
-    (( prune_apply_rc == 0 )) || return $prune_apply_rc
     (( prune_cleanup_rc == 0 )) || return $prune_cleanup_rc
 
     _git_success "Fetched and pruned '$_git_sync_remote'."

@@ -373,7 +373,7 @@ ZSH
   '
 
   [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; cat "$HOME/undo.stderr" >&2; false; }
-  grep -Fq "Branch: feature" "$HOME/undo.stderr"
+  grep -Eq '^  Branch: +feature$' "$HOME/undo.stderr"
   grep -Fq "refusing to reset" "$HOME/undo.stderr"
 }
 

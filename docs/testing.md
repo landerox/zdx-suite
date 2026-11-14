@@ -94,6 +94,9 @@ test/
 ├── git_json.bats          Git --json documents
 ├── git_platform.bats      Git on case-insensitive, WSL, and macOS hosts
 ├── git_remote.bats        disposable local/remote transaction verification
+├── git_sync_results.bats  fetch cleanup, push no-ops, progress, and plan facts
+├── git_cleanup_results.bats cleanup warnings, interruption, and observed refs
+├── git_output_results.bats headings, undo plans, submodules, and atomic JSON
 ├── vpn_contract.bats      frozen VPN public-surface parity
 ├── vpn_interface.bats     VPN routing, menu, preview, and load-mode behavior
 ├── vpn_privilege.bats     VPN privilege, secret, and destructive safety
@@ -413,6 +416,27 @@ inventory is truncated, explicit successful Command Line Tools qualification,
 failed and interrupted qualification, and the bounded standalone fallback.
 `git_probe_status.bats` covers public authentication failures, stopped batch
 revalidation, frozen probe binaries, closed stdin and disabled prompts.
+
+`git_sync_results.bats` covers native INT/TERM after real fixture fetches,
+leased temporary-ref cleanup for fetch-prune and exact fetch, equal-OID push
+no-ops, upstream-only and post-publication configuration, exact later refs
+after stopped writes or observations, partial timing, actual tracking-change
+counts and HOME facts.
+`git_cleanup_results.bats` covers explicit missing versus unnamed empty
+targets, successful deletion with retained or unverified branch configuration,
+ordinary failures versus stopped cleanup, first/later remote interruptions,
+partial tag results, interrupted OID, ancestry, URL and worktree observations,
+and observed absent, matching, moved or unknown tracking refs. Recorders
+impose post-push state rather than assume a Git version's
+fetch-refspec side effects.
+`git_output_results.bats` covers core-step and private-delegation headings,
+nonrecursive standalone fallbacks, literal path-display boundaries, one
+numbered undo plan with counted dry-run and cancel forms, passive PR plans,
+real modified submodule exclusion with ordinary-file restore controls, and
+failed jq producers that publish no prefix. Successful controls preserve the
+JSON schemas, absolute data paths, compact monochrome output and text status.
+All repositories and file-protocol remotes are disposable; injected backend
+return codes do not establish native signal behavior.
 
 `git_remote_proofs.bats` covers replacement-ref and legacy-graft ancestry, explicit force-lease
 integration through the local branch's reflog, expired proof after review,

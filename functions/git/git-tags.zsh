@@ -42,8 +42,11 @@ _git_tag_normalize_ref() {
 
 _git_tag_ref_oid() {
   local ref="$1"
-  REPLY=$(command git rev-parse --verify "${ref}^{object}" 2>/dev/null) \
-    || return 1
+  REPLY=$(command git rev-parse --verify "${ref}^{object}" 2>/dev/null) || {
+    local -i ref_rc=$?
+    REPLY=""
+    return $ref_rc
+  }
   _git_validate_oid "$REPLY"
 }
 
@@ -133,6 +136,23 @@ _git_tag_filter_local() {
     (( duplicate )) || reply+=("$matched")
   done
   return 0
+}
+
+# Lists only the records after the stopped target in the frozen mutation plan.
+_git_tag_report_not_run() {
+  local stopped_record="$1" detail="$2"
+  shift 2
+  local -i passed_current=0
+  [[ -z "$stopped_record" ]] && passed_current=1
+  local pending_record="" pending_ref=""
+  for pending_record in "$@"; do
+    if (( ! passed_current )); then
+      [[ "$pending_record" == "$stopped_record" ]] && passed_current=1
+      continue
+    fi
+    pending_ref="${pending_record%%$'\t'*}"
+    _git_outcome_line "$pending_ref" not-run "$detail"
+  done
 }
 
 # Sets reply to selected canonical tag records. Cancellation is a successful
@@ -275,7 +295,10 @@ _git_tag_validate_remote() {
 
   local output
   output=$(command git remote 2>/dev/null) || {
-    _git_error "Unable to list configured remotes."
+    local -i remote_rc=$?
+    _git_error "Unable to list configured remotes (exit $remote_rc)."
+    (( remote_rc == 124 || remote_rc == 130 || remote_rc == 143 )) \
+      && return $remote_rc
     return 1
   }
   local candidate
@@ -368,8 +391,8 @@ _git_tag_remote_url() {
 _git_tag_revalidate_remote() {
   local remote="$1"
   local expected_url="$2"
-  _git_tag_validate_remote "$remote" || return 1
-  _git_remote_push_url "$remote" || return 1
+  _git_tag_validate_remote "$remote" || return $?
+  _git_remote_push_url "$remote" || return $?
   [[ "$REPLY" == "$expected_url" ]] || {
     _git_error "The push URL for '$remote' changed after planning."
     return 1
@@ -669,7 +692,8 @@ git-tag-create() {
       || return $?
   fi
 
-  _git_label "Repository:" "$root"
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "Tag ref:" "$tag_ref"
   _git_label "Target OID:" "$target_oid"
   _git_label "Type:" "$_git_tag_create_opt_type"
@@ -851,7 +875,7 @@ git-tag-verify() {
   local -a tags=()
   _git_tag_collect_local || return $?
   tags=("${reply[@]}")
-  if (( ${#tags[@]} == 0 )); then
+  if (( ${#tags[@]} == 0 )) && [[ -z "$requested" ]]; then
     _git_success "No local tags were found."
     return 0
   fi
@@ -1042,7 +1066,7 @@ git-tag-push() {
   local -a all_tags=()
   _git_tag_collect_local || return $?
   all_tags=("${reply[@]}")
-  if (( ${#all_tags[@]} == 0 )); then
+  if (( ${#all_tags[@]} == 0 && ${#_git_tag_push_opt_targets[@]} == 0 )); then
     _git_success "No local tags were found."
     return 0
   fi
@@ -1077,7 +1101,8 @@ git-tag-push() {
     return 0
   fi
 
-  _git_label "Repository:" "$root"
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "HEAD:" "$head_oid"
   _git_label "Remote:" "$remote"
   _git_label "Push URL:" "$(_git_redact_remote_url "$remote_url")"
@@ -1121,7 +1146,22 @@ git-tag-push() {
     local_oid="${remainder%%$'\t'*}"
     remote_oid="${remainder##*$'\t'}"
 
-    _git_tag_ref_oid "$ref" || REPLY=""
+    local -i local_read_rc=0
+    _git_tag_ref_oid "$ref" || local_read_rc=$?
+    if (( local_read_rc == 124 || local_read_rc == 130 || local_read_rc == 143 )); then
+      local local_read_outcome=interrupted
+      (( local_read_rc == 124 )) && local_read_outcome=timed-out
+      _git_outcome_line "$ref" "$local_read_outcome" \
+        "local tag inspection stopped; mutation not run"
+      _git_tag_report_not_run "$record" "local tag inspection stopped" "${plan[@]}"
+      _git_count_noun "$pushed" tag
+      _git_warn "Tag push stopped: $REPLY pushed before local tag inspection stopped."
+      return $local_read_rc
+    elif (( local_read_rc != 0 )); then
+      _git_outcome_line "$ref" blocked "local tag could not be inspected; mutation not run"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     actual_local_oid="$REPLY"
     if [[ "$actual_local_oid" != "$local_oid" ]]; then
       _git_error "Refused moved local tag: $(_git_display_escape "$ref")"
@@ -1129,15 +1169,35 @@ git-tag-push() {
       continue
     fi
 
-    _git_tag_revalidate_remote "$remote" "$remote_url" || {
+    local -i destination_rc=0
+    _git_tag_revalidate_remote "$remote" "$remote_url" || destination_rc=$?
+    if (( destination_rc == 124 || destination_rc == 130 || destination_rc == 143 )); then
+      local destination_outcome=interrupted
+      (( destination_rc == 124 )) && destination_outcome=timed-out
+      _git_outcome_line "$ref" "$destination_outcome" \
+        "push destination inspection stopped; mutation not run"
+      _git_tag_report_not_run "$record" "push destination inspection stopped" "${plan[@]}"
+      _git_count_noun "$pushed" tag
+      _git_warn "Tag push stopped: $REPLY pushed before push destination inspection stopped."
+      return $destination_rc
+    elif (( destination_rc != 0 )); then
+      _git_outcome_line "$ref" blocked "push destination could not be inspected; mutation not run"
       failed=$(( failed + 1 ))
       continue
-    }
+    fi
     _git_tag_remote_snapshot "$remote_url" "$ref" || {
       local -i probe_rc=$?
       failed=$(( failed + 1 ))
-      (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
-        && return $probe_rc
+      if (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )); then
+        local probe_outcome=interrupted
+        (( probe_rc == 124 )) && probe_outcome=timed-out
+        _git_outcome_line "$(_git_display_escape "$ref")" "$probe_outcome" \
+          "remote tag inspection stopped; mutation not run"
+        _git_tag_report_not_run "$record" "remote tag inspection stopped" "${plan[@]}"
+        _git_count_noun "$pushed" tag
+        _git_warn "Tag push stopped: $REPLY pushed before the query stopped."
+        return $probe_rc
+      fi
       continue
     }
     current_remote_records=("${reply[@]}")
@@ -1151,9 +1211,18 @@ git-tag-push() {
     local -i tracking_rc=0
     _git_require_direct_tracking_refs --allow-self-tag "$remote" "$ref" \
       || tracking_rc=$?
-    if (( tracking_rc == 130 || tracking_rc == 143 )); then
+    if (( tracking_rc == 124 || tracking_rc == 130 || tracking_rc == 143 )); then
+      local tracking_outcome=interrupted
+      (( tracking_rc == 124 )) && tracking_outcome=timed-out
+      _git_outcome_line "$(_git_display_escape "$ref")" "$tracking_outcome" \
+        "tracking-ref inspection stopped; mutation not run"
+      _git_tag_report_not_run "$record" "tracking-ref inspection stopped" "${plan[@]}"
       _git_count_noun "$pushed" tag
-      _git_warn "Tag push interrupted: $REPLY pushed before the interruption."
+      if (( tracking_rc == 124 )); then
+        _git_warn "Tag push stopped: $REPLY pushed before tracking-ref inspection stopped."
+      else
+        _git_warn "Tag push interrupted: $REPLY pushed before the interruption."
+      fi
       return "$tracking_rc"
     elif (( tracking_rc != 0 )); then
       failed=$(( failed + 1 ))
@@ -1171,6 +1240,8 @@ git-tag-push() {
       _git_success "Pushed $ref at $local_oid."
       pushed=$(( pushed + 1 ))
     elif (( push_rc == 130 || push_rc == 143 )); then
+      _git_outcome_line "$(_git_display_escape "$ref")" interrupted
+      _git_tag_report_not_run "$record" "not run after interruption" "${plan[@]}"
       _git_count_noun "$pushed" tag
       _git_warn "Tag push interrupted: $REPLY pushed before the interruption."
       return "$push_rc"
@@ -1181,7 +1252,13 @@ git-tag-push() {
   done
 
   if (( failed > 0 )); then
-    _git_error "Tag push incomplete: $pushed succeeded, $failed failed."
+    _git_count_noun "${#plan[@]}" "tag push" "tag pushes"
+    if (( pushed > 0 )); then
+      _git_error "Tag push completed with partial failures: $failed of $REPLY failed."
+      _git_mark_partial
+    else
+      _git_error "Tag push failed: $failed of $REPLY failed."
+    fi
     return 1
   fi
   _git_count_noun "$pushed" tag
@@ -1375,7 +1452,7 @@ git-tag-delete() {
   local -a all_tags=()
   _git_tag_collect_local || return $?
   all_tags=("${reply[@]}")
-  if (( ${#all_tags[@]} == 0 )); then
+  if (( ${#all_tags[@]} == 0 && ${#_git_tag_delete_opt_targets[@]} == 0 )); then
     _git_success "No local tags were found."
     return 0
   fi
@@ -1425,7 +1502,8 @@ git-tag-delete() {
     "${selected_tags[@]}" || return $?
   plan=("${reply[@]}")
 
-  _git_label "Repository:" "$root"
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
   _git_label "HEAD:" "$head_oid"
   _git_label "Local deletions:" "${#plan[@]}"
   if (( _git_tag_delete_opt_delete_remote )); then
@@ -1476,7 +1554,22 @@ git-tag-delete() {
     local_oid="${remainder%%$'\t'*}"
     remote_oid="${remainder##*$'\t'}"
 
-    _git_tag_ref_oid "$ref" || REPLY=""
+    local -i local_read_rc=0
+    _git_tag_ref_oid "$ref" || local_read_rc=$?
+    if (( local_read_rc == 124 || local_read_rc == 130 || local_read_rc == 143 )); then
+      local local_read_outcome=interrupted
+      (( local_read_rc == 124 )) && local_read_outcome=timed-out
+      _git_outcome_line "$ref" "$local_read_outcome" \
+        "local tag inspection stopped; mutation not run"
+      _git_tag_report_not_run "$record" "local tag inspection stopped" "${plan[@]}"
+      _git_count_noun "$deleted" tag
+      _git_warn "Tag deletion stopped: $REPLY deleted before local tag inspection stopped."
+      return $local_read_rc
+    elif (( local_read_rc != 0 )); then
+      _git_outcome_line "$ref" blocked "local tag could not be inspected; mutation not run"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     actual_local_oid="$REPLY"
     if [[ "$actual_local_oid" != "$local_oid" ]]; then
       _git_error "Refused moved or missing local tag: $(_git_display_escape "$ref")"
@@ -1486,10 +1579,22 @@ git-tag-delete() {
 
     if (( _git_tag_delete_opt_delete_remote )) \
       && [[ "$remote_oid" != "absent" ]]; then
-      _git_tag_revalidate_remote "$remote" "$remote_url" || {
+      local -i destination_rc=0
+      _git_tag_revalidate_remote "$remote" "$remote_url" || destination_rc=$?
+      if (( destination_rc == 124 || destination_rc == 130 || destination_rc == 143 )); then
+        local destination_outcome=interrupted
+        (( destination_rc == 124 )) && destination_outcome=timed-out
+        _git_outcome_line "$ref" "$destination_outcome" \
+          "push destination inspection stopped; mutation not run; local tag retained"
+        _git_tag_report_not_run "$record" "push destination inspection stopped" "${plan[@]}"
+        _git_count_noun "$deleted" tag
+        _git_warn "Tag deletion stopped: $REPLY deleted before push destination inspection stopped."
+        return $destination_rc
+      elif (( destination_rc != 0 )); then
+        _git_outcome_line "$ref" blocked "push destination could not be inspected; mutation not run"
         failed=$(( failed + 1 ))
         continue
-      }
+      fi
       # Just before this push; an interrupted query stops the whole run.
       local -i probe_rc=0
       _git_tag_remote_snapshot "$remote_url" "$ref" || probe_rc=$?
@@ -1498,14 +1603,20 @@ git-tag-delete() {
         _git_remote_symbolic_refs "$remote_url" "$ref" || probe_rc=$?
       fi
       if (( probe_rc == 124 )); then
+        _git_outcome_line "$(_git_display_escape "$ref")" timed-out \
+          "remote tag inspection timed out; mutation not run; local tag retained"
+        _git_tag_report_not_run "$record" "remote tag inspection timed out" "${plan[@]}"
         _git_count_noun "$deleted" tag
         _git_warn \
           "Tag deletion stopped after a query timed out: $REPLY deleted; local $ref retained."
         return "$probe_rc"
       elif (( probe_rc == 130 || probe_rc == 143 )); then
+        _git_outcome_line "$(_git_display_escape "$ref")" interrupted \
+          "remote tag inspection interrupted; mutation not run; local tag retained"
+        _git_tag_report_not_run "$record" "not run after interruption" "${plan[@]}"
         _git_count_noun "$deleted" tag
         _git_warn \
-          "Tag deletion interrupted: $REPLY deleted; local $ref retained."
+          "Tag deletion stopped: $REPLY deleted; local $ref retained."
         return "$probe_rc"
       elif (( probe_rc != 0 )); then
         failed=$(( failed + 1 ))
@@ -1533,10 +1644,20 @@ git-tag-delete() {
       fi
       local -i tracking_rc=0
       _git_require_direct_tracking_refs "$remote" "$ref" || tracking_rc=$?
-      if (( tracking_rc == 130 || tracking_rc == 143 )); then
+      if (( tracking_rc == 124 || tracking_rc == 130 || tracking_rc == 143 )); then
+        local tracking_outcome=interrupted
+        (( tracking_rc == 124 )) && tracking_outcome=timed-out
+        _git_outcome_line "$(_git_display_escape "$ref")" "$tracking_outcome" \
+          "tracking-ref inspection stopped; mutation not run; local tag retained"
+        _git_tag_report_not_run "$record" "tracking-ref inspection stopped" "${plan[@]}"
         _git_count_noun "$deleted" tag
-        _git_warn \
-          "Tag deletion interrupted: $REPLY deleted; local $ref retained."
+        if (( tracking_rc == 124 )); then
+          _git_warn \
+            "Tag deletion stopped: $REPLY deleted; local $ref retained."
+        else
+          _git_warn \
+            "Tag deletion interrupted: $REPLY deleted; local $ref retained."
+        fi
         return "$tracking_rc"
       elif (( tracking_rc != 0 )); then
         failed=$(( failed + 1 ))
@@ -1555,6 +1676,9 @@ git-tag-delete() {
       "${delete_remote_cmd[@]}" >&2
       local -i remote_delete_rc=$?
       if (( remote_delete_rc == 130 || remote_delete_rc == 143 )); then
+        _git_outcome_line "$(_git_display_escape "$ref")" interrupted \
+          "remote deletion interrupted; local tag retained"
+        _git_tag_report_not_run "$record" "not run after interruption" "${plan[@]}"
         _git_count_noun "$deleted" tag
         _git_warn \
           "Tag deletion interrupted: $REPLY deleted; local $ref retained."
@@ -1580,17 +1704,7 @@ git-tag-delete() {
       if (( local_delete_rc == 130 || local_delete_rc == 143 )); then
         _git_count_noun "$deleted" tag
         _git_warn "Tag deletion interrupted: $REPLY deleted before the interruption."
-        local -i passed_current=0
-        local pending_record="" pending_ref=""
-        for pending_record in "${plan[@]}"; do
-          if (( ! passed_current )); then
-            [[ "$pending_record" == "$record" ]] && passed_current=1
-            continue
-          fi
-          pending_ref="${pending_record%%$'\t'*}"
-          _git_outcome_line "$(_git_display_escape "$pending_ref")" skipped \
-            "not run after interruption"
-        done
+        _git_tag_report_not_run "$record" "not run after interruption" "${plan[@]}"
         return $local_delete_rc
       fi
       failed=$(( failed + 1 ))
@@ -1598,7 +1712,13 @@ git-tag-delete() {
   done
 
   if (( failed > 0 )); then
-    _git_error "Tag deletion incomplete: $deleted deleted, $failed failed."
+    _git_count_noun "${#plan[@]}" "tag deletion"
+    if (( deleted > 0 )); then
+      _git_error "Tag deletion completed with partial failures: $failed of $REPLY failed."
+      _git_mark_partial
+    else
+      _git_error "Tag deletion failed: $failed of $REPLY failed."
+    fi
     return 1
   fi
   _git_count_noun "$deleted" "local tag"

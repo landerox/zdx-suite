@@ -255,7 +255,7 @@ _git_clean_remote_default_ref() {
     symref="${symref%%$'\t'*}"
     local -i validation_rc=0
     _git_validate_full_ref "$symref" || validation_rc=$?
-    (( validation_rc == 130 || validation_rc == 143 )) && return $validation_rc
+    (( validation_rc == 124 || validation_rc == 130 || validation_rc == 143 )) && return $validation_rc
     (( validation_rc == 0 )) && [[ "$symref" == refs/heads/* ]] || {
       _git_error "The remote advertised an invalid default branch."
       return 1
@@ -273,12 +273,21 @@ _git_clean_remote_default_ref() {
 _git_clean_worktree_snapshot() {
   local listing
   listing=$(command git worktree list --porcelain 2>/dev/null) || {
+    local -i snapshot_rc=$?
     _git_error "Unable to inspect linked worktrees."
+    (( snapshot_rc == 124 || snapshot_rc == 130 || snapshot_rc == 143 )) \
+      && return $snapshot_rc
     return 1
   }
 
   REPLY=$(print -rn -- "$listing" | command git hash-object --stdin \
-    2>/dev/null) || return 1
+    2>/dev/null) || {
+    local -i snapshot_rc=$?
+    REPLY=""
+    (( snapshot_rc == 124 || snapshot_rc == 130 || snapshot_rc == 143 )) \
+      && return $snapshot_rc
+    return 1
+  }
   _git_validate_oid "$REPLY" || {
     _git_error "Unable to freeze the worktree state."
     return 1
@@ -290,6 +299,9 @@ _git_clean_worktree_snapshot() {
     [[ "$line" == "branch "* ]] || continue
     ref="${line#branch }"
     _git_validate_full_ref "$ref" || {
+      local -i snapshot_rc=$?
+      (( snapshot_rc == 124 || snapshot_rc == 130 || snapshot_rc == 143 )) \
+        && return $snapshot_rc
       _git_error "Git returned an invalid worktree branch reference."
       return 1
     }
@@ -319,13 +331,13 @@ _git_clean_configured_default() {
   configured_default=$(command git config --get init.defaultBranch 2>/dev/null) \
     || config_rc=$?
   (( config_rc == 1 )) && return 0
-  (( config_rc == 130 || config_rc == 143 )) && return $config_rc
+  (( config_rc == 124 || config_rc == 130 || config_rc == 143 )) && return $config_rc
   if (( config_rc != 0 )); then
     _git_error "Unable to inspect the configured local default branch."
     return 1
   fi
   _git_validate_branch_name "$configured_default" || branch_rc=$?
-  (( branch_rc == 130 || branch_rc == 143 )) && return $branch_rc
+  (( branch_rc == 124 || branch_rc == 130 || branch_rc == 143 )) && return $branch_rc
   if (( branch_rc != 0 )); then
     _git_error "The configured local default branch is invalid."
     return 1
@@ -333,7 +345,7 @@ _git_clean_configured_default() {
   command git show-ref --verify --quiet "refs/heads/$configured_default" \
     2>/dev/null || branch_rc=$?
   (( branch_rc == 1 )) && return 0
-  (( branch_rc == 130 || branch_rc == 143 )) && return $branch_rc
+  (( branch_rc == 124 || branch_rc == 130 || branch_rc == 143 )) && return $branch_rc
   if (( branch_rc != 0 )); then
     _git_error "Unable to inspect the configured local default branch ref."
     return 1
@@ -361,7 +373,7 @@ _git_clean_selected_remote() {
     probe_rc=0
     selected=$(command git config --get "$key" 2>/dev/null) || probe_rc=$?
     (( probe_rc == 1 )) && continue
-    (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+    (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
     if (( probe_rc != 0 )); then
       _git_error "Unable to inspect the selected cleanup remote."
       return 1
@@ -381,14 +393,14 @@ _git_clean_selected_remote() {
     REPLY=origin
     return 0
   fi
-  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( probe_rc != 2 )); then
     _git_error "Unable to inspect the cleanup origin remote."
     return 1
   fi
   probe_rc=0
   output=$(command git remote 2>/dev/null) || probe_rc=$?
-  (( probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
+  (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) && return $probe_rc
   if (( probe_rc != 0 )); then
     _git_error "Unable to enumerate cleanup remotes."
     return 1
@@ -421,7 +433,7 @@ _git_clean_collect_local_candidates() {
   output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects for-each-ref \
     --format='%(refname)%09%(objectname)%09%(symref)%09%(upstream)' \
     --merged "$default_oid" refs/heads 2>/dev/null) || collection_rc=$?
-  (( collection_rc == 130 || collection_rc == 143 )) && return $collection_rc
+  (( collection_rc == 124 || collection_rc == 130 || collection_rc == 143 )) && return $collection_rc
   if (( collection_rc != 0 )); then
     _git_error "Unable to enumerate merged local branches."
     return 1
@@ -447,6 +459,9 @@ _git_clean_collect_local_candidates() {
     upstream="${remainder#*$'\t'}"
     [[ -z "$symbolic_target" ]] || continue
     _git_validate_full_ref "$ref" && _git_validate_oid "$oid" || {
+      local -i validation_rc=$?
+      (( validation_rc == 124 || validation_rc == 130 || validation_rc == 143 )) \
+        && return $validation_rc
       _git_error "Git returned an invalid local branch record."
       return 1
     }
@@ -478,7 +493,7 @@ _git_clean_collect_remote_candidates() {
   output=$(GIT_GRAFT_FILE=/dev/null command git --no-replace-objects for-each-ref \
     --format='%(refname)%09%(objectname)%09%(symref)' \
     --merged "$default_oid" "$prefix" 2>/dev/null) || collection_rc=$?
-  (( collection_rc == 130 || collection_rc == 143 )) && return $collection_rc
+  (( collection_rc == 124 || collection_rc == 130 || collection_rc == 143 )) && return $collection_rc
   if (( collection_rc != 0 )); then
     _git_error "Unable to enumerate merged remote branches."
     return 1
@@ -498,6 +513,9 @@ _git_clean_collect_remote_candidates() {
     symbolic_target="${remainder#*$'\t'}"
     [[ -z "$symbolic_target" ]] || continue
     _git_validate_full_ref "$tracking_ref" && _git_validate_oid "$oid" || {
+      local -i validation_rc=$?
+      (( validation_rc == 124 || validation_rc == 130 || validation_rc == 143 )) \
+        && return $validation_rc
       _git_error "Git returned an invalid remote branch record."
       return 1
     }
@@ -509,6 +527,9 @@ _git_clean_collect_remote_candidates() {
     branch_ref="refs/heads/${short_name}"
     _git_validate_branch_name "$short_name" \
       && _git_validate_full_ref "$branch_ref" || {
+      local -i validation_rc=$?
+      (( validation_rc == 124 || validation_rc == 130 || validation_rc == 143 )) \
+        && return $validation_rc
       _git_error "Git returned an invalid remote branch name."
       return 1
     }
@@ -656,8 +677,10 @@ _git_clean_show_local_plan() {
   shift 7
   local -a records=("$@")
 
-  _git_label "Repository:" "$root"
-  _git_label "Git common dir:" "$common_dir"
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
+  _git_path_display "$common_dir"
+  _git_label "Git common dir:" "$REPLY"
   _git_label "Worktree state:" "$worktree_digest"
   _git_label "HEAD:" "$head_oid"
   _git_label "Current branch:" "${current_ref:-(detached)}"
@@ -690,8 +713,10 @@ _git_clean_show_remote_plan() {
   shift 9
   local -a records=("$@")
 
-  _git_label "Repository:" "$root"
-  _git_label "Git common dir:" "$common_dir"
+  _git_path_display "$root"
+  _git_label "Repository:" "$REPLY"
+  _git_path_display "$common_dir"
+  _git_label "Git common dir:" "$REPLY"
   _git_label "Worktree state:" "$worktree_digest"
   _git_label "HEAD:" "$head_oid"
   _git_label "Current branch:" "${current_ref:-(detached)}"
@@ -718,23 +743,147 @@ _git_clean_show_remote_plan() {
 
 # Prints the verdict of a branch cleanup and returns its status: complete,
 # completed with partial failures, or failed.
-# Usage: _git_clean_verdict <subject> <deleted> <failed>
+# Usage: _git_clean_verdict <subject> <deleted> <failed> [configuration-warnings]
 _git_clean_verdict() {
   local subject="$1" REPLY=""
-  local -i deleted="$2" failed="$3"
+  local -i deleted="$2" failed="$3" warnings="${4:-0}"
+  local warning_detail=""
+  if (( warnings > 0 )); then
+    _git_count_noun "$warnings" "configuration warning"
+    warning_detail="; $REPLY"
+  fi
   if (( failed == 0 )); then
     _git_count_noun "$deleted" branch branches
-    _git_success "$subject complete: $REPLY deleted."
+    local deleted_label="$REPLY"
+    if (( warnings > 0 )); then
+      _git_warn "$subject complete: $deleted_label deleted$warning_detail."
+    else
+      _git_success "$subject complete: $deleted_label deleted."
+    fi
     return 0
   fi
   _git_count_noun $(( deleted + failed )) branch branches
   if (( deleted > 0 )); then
-    _git_error "$subject completed with partial failures: $failed of $REPLY failed."
+    _git_error "$subject completed with partial failures: $failed of $REPLY failed$warning_detail."
     _git_mark_partial
   else
-    _git_error "$subject failed: $failed of $REPLY failed."
+    _git_error "$subject failed: $failed of $REPLY failed$warning_detail."
   fi
   return 1
+}
+
+# The second field is the exact branch ref in either cleanup plan format.
+# An empty stopped record means execution never reached the first target.
+_git_clean_report_not_run() {
+  local stopped_record="$1" remote="$2" detail="$3"
+  shift 3
+  local -i passed_current=0
+  [[ -z "$stopped_record" ]] && passed_current=1
+  local pending_record="" pending_ref="" label=""
+  for pending_record in "$@"; do
+    if (( ! passed_current )); then
+      [[ "$pending_record" == "$stopped_record" ]] && passed_current=1
+      continue
+    fi
+    pending_ref="${${pending_record#*$'\t'}%%$'\t'*}"
+    label="$pending_ref"
+    [[ -z "$remote" ]] || label="$remote/${pending_ref#refs/heads/} ($pending_ref)"
+    _git_outcome_line "$label" not-run "$detail"
+  done
+}
+
+# A failed remove-section is not proof that the section is absent. Enumerate
+# key names only, with a fixed expression and literal subsection comparison;
+# configuration values never enter the result or the diagnostic stream.
+# Sets REPLY to absent, retained, or unknown, preserving producer failures.
+_git_clean_branch_config_state() {
+  local section="$1" output="" key=""
+  local -i config_rc=0
+  REPLY=unknown
+  output=$(command git config --local --name-only --get-regexp '^branch\.' \
+    2>/dev/null) || config_rc=$?
+  if (( config_rc == 1 )); then
+    REPLY=absent
+    return 0
+  elif (( config_rc != 0 )); then
+    return $config_rc
+  fi
+  for key in "${(@f)output}"; do
+    if [[ "${key%.*}" == "$section" ]]; then
+      REPLY=retained
+      return 0
+    fi
+  done
+  REPLY=absent
+  return 0
+}
+
+# Observe both ref kind and object identity. for-each-ref alone omits dangling
+# symbolic refs, so the final symbolic-ref observation must also succeed.
+# Sets REPLY to absent, symbolic, or the direct ref's OID; no failed read is
+# absence. Literal filtering excludes children of the requested ref prefix.
+_git_clean_tracking_state() {
+  emulate -L zsh
+  local tracking_ref="$1" output=""
+  local record="" ref="" remainder="" oid="" symbolic="" exact_record=""
+  local -i read_rc=0 symbolic_rc=0
+  REPLY=""
+  output=$(command git for-each-ref \
+    --format='%(refname)%09%(objectname)%09%(symref)' \
+    "$tracking_ref" 2>/dev/null) || read_rc=$?
+  (( read_rc == 0 )) || return $read_rc
+  command git symbolic-ref --quiet "$tracking_ref" >/dev/null 2>&1 \
+    || symbolic_rc=$?
+  if (( symbolic_rc == 0 )); then
+    REPLY=symbolic
+    return 0
+  elif (( symbolic_rc != 1 )); then
+    return $symbolic_rc
+  fi
+  for record in "${(@f)output}"; do
+    ref="${record%%$'\t'*}"
+    [[ "$ref" == "$tracking_ref" ]] || continue
+    [[ -z "$exact_record" && "$record" == *$'\t'*$'\t'* ]] || return 1
+    exact_record="$record"
+    remainder="${record#*$'\t'}"
+    oid="${remainder%%$'\t'*}"
+    symbolic="${remainder#*$'\t'}"
+    [[ -z "$symbolic" ]] && _git_validate_oid "$oid" || return 1
+  done
+  REPLY="${oid:-absent}"
+  return 0
+}
+
+# Remote deletion is already complete. Local tracking housekeeping is optional:
+# ordinary uncertainty warns with status 0, while a stopped producer keeps its
+# status. Only an observed matching direct ref is offered to the no-deref lease.
+_git_clean_remove_tracking() {
+  local tracking_ref="$1" reviewed_oid="$2" REPLY=""
+  local -i state_rc=0 delete_rc=0
+  _git_clean_tracking_state "$tracking_ref" || state_rc=$?
+  if (( state_rc == 0 )) && [[ "$REPLY" == "$reviewed_oid" ]]; then
+    command git update-ref --no-deref -d "$tracking_ref" "$reviewed_oid" \
+      2>/dev/null || delete_rc=$?
+    if (( delete_rc == 124 || delete_rc == 130 || delete_rc == 143 )); then
+      _git_warn \
+        "Remote-tracking cleanup for $(_git_display_escape "$tracking_ref") stopped; its state is unknown."
+      return $delete_rc
+    fi
+    state_rc=0
+    _git_clean_tracking_state "$tracking_ref" || state_rc=$?
+  fi
+  if (( state_rc == 124 || state_rc == 130 || state_rc == 143 )); then
+    _git_warn \
+      "Remote-tracking ref $(_git_display_escape "$tracking_ref") could not be inspected; its state is unknown."
+    return $state_rc
+  elif (( state_rc != 0 )); then
+    _git_warn \
+      "Remote-tracking ref $(_git_display_escape "$tracking_ref") could not be inspected; its state is unknown. Run fetch --prune to refresh it."
+  elif [[ "$REPLY" != absent ]]; then
+    _git_warn \
+      "Remote-tracking ref $(_git_display_escape "$tracking_ref") was kept; fetch --prune to refresh it."
+  fi
+  return 0
 }
 
 _git_clean_revalidate_base() {
@@ -857,7 +1006,7 @@ clean-branches() {
     "$default_ref" "$default_oid" "$current_ref" "${checked_refs[@]}" \
     || return $?
   candidates=("${reply[@]}")
-  if (( ${#candidates[@]} == 0 )); then
+  if (( ${#candidates[@]} == 0 && ${#_git_clean_opt_targets[@]} == 0 )); then
     _git_success "No eligible merged local branches were found."
     return 0
   fi
@@ -911,27 +1060,44 @@ clean-branches() {
   current_default=$(_git_get_default_branch "$cleanup_remote") || default_rc=$?
   if (( default_rc == 124 )); then
     _git_remote_probe_error "Remote default branch revalidation" "$default_rc"
+    _git_clean_report_not_run "" "" "default-branch inspection timed out" "${plan[@]}"
     return $default_rc
   fi
-  (( default_rc == 130 || default_rc == 143 )) && return $default_rc
+  if (( default_rc == 130 || default_rc == 143 )); then
+    _git_clean_report_not_run "" "" "default-branch inspection interrupted" "${plan[@]}"
+    return $default_rc
+  fi
   if (( default_rc != 0 )) || [[ "$current_default" != "$default_name" ]]; then
     _git_error "The default branch binding changed after planning; retry."
     return 1
   fi
 
-  local -i deleted=0 failed=0
+  local -i deleted=0 failed=0 config_warnings=0
   local record ref oid actual_oid
   for record in "${plan[@]}"; do
     ref="${${record#*$'\t'}%%$'\t'*}"
     oid="${record##*$'\t'}"
 
+    local -i inspection_rc=0
     actual_oid=$(command git rev-parse --verify "${ref}^{commit}" \
-      2>/dev/null) || actual_oid=""
-    if [[ "$actual_oid" != "$oid" ]] \
-      || ! GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
-        2>/dev/null; then
+      2>/dev/null) || inspection_rc=$?
+    if (( inspection_rc == 0 )) && [[ "$actual_oid" == "$oid" ]]; then
+      GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
+        2>/dev/null || inspection_rc=$?
+    fi
+    if (( inspection_rc == 124 || inspection_rc == 130 || inspection_rc == 143 )); then
+      local inspection_outcome=interrupted
+      (( inspection_rc == 124 )) && inspection_outcome=timed-out
+      _git_outcome_line "$ref" "$inspection_outcome" \
+        "branch identity or ancestry inspection stopped; mutation not run"
+      _git_clean_report_not_run "$record" "" "branch inspection stopped" "${plan[@]}"
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Local cleanup stopped: $REPLY deleted before branch inspection stopped."
+      return $inspection_rc
+    fi
+    if (( inspection_rc != 0 )) || [[ "$actual_oid" != "$oid" ]]; then
       _git_outcome_line "$(_git_display_escape "$ref")" blocked \
-        "changed or no longer merged"
+        "changed or identity and ancestry could not be confirmed; mutation not run"
       failed=$(( failed + 1 ))
       continue
     fi
@@ -941,7 +1107,19 @@ clean-branches() {
     REPLY=""
     reply=()
     reply_refs=()
-    if ! _git_clean_worktree_snapshot; then
+    local -i worktree_rc=0
+    _git_clean_worktree_snapshot || worktree_rc=$?
+    if (( worktree_rc == 124 || worktree_rc == 130 || worktree_rc == 143 )); then
+      local worktree_outcome=interrupted
+      (( worktree_rc == 124 )) && worktree_outcome=timed-out
+      _git_outcome_line "$ref" "$worktree_outcome" \
+        "linked worktree inspection stopped; mutation not run"
+      _git_clean_report_not_run "$record" "" "linked worktree inspection stopped" "${plan[@]}"
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Local cleanup stopped: $REPLY deleted before linked worktree inspection stopped."
+      return $worktree_rc
+    elif (( worktree_rc != 0 )); then
+      _git_outcome_line "$ref" blocked "linked worktrees could not be inspected; mutation not run"
       failed=$(( failed + 1 ))
       continue
     fi
@@ -961,22 +1139,21 @@ clean-branches() {
     _git_clean_collect_local_candidates \
       "$default_ref" "$default_oid" "$current_ref" "${current_checked_refs[@]}" \
       || eligibility_rc=$?
-    if (( eligibility_rc == 130 || eligibility_rc == 143 )); then
-      _git_outcome_line "$(_git_display_escape "$ref")" interrupted \
-        "not run after interruption"
+    if (( eligibility_rc == 124 || eligibility_rc == 130 || eligibility_rc == 143 )); then
+      local eligibility_outcome=interrupted eligibility_detail="mutation not run after interruption"
+      (( eligibility_rc == 124 )) && {
+        eligibility_outcome=timed-out
+        eligibility_detail="eligibility inspection timed out; mutation not run"
+      }
+      _git_outcome_line "$ref" "$eligibility_outcome" "$eligibility_detail"
       _git_count_noun "$deleted" branch branches
-      _git_warn "Local cleanup interrupted: $REPLY deleted before the interruption."
-      local -i passed_current=0
-      local pending_record="" pending_ref=""
-      for pending_record in "${plan[@]}"; do
-        if (( ! passed_current )); then
-          [[ "$pending_record" == "$record" ]] && passed_current=1
-          continue
-        fi
-        pending_ref="${${pending_record#*$'\t'}%%$'\t'*}"
-        _git_outcome_line "$(_git_display_escape "$pending_ref")" skipped \
-          "not run after interruption"
-      done
+      if (( eligibility_rc == 124 )); then
+        _git_warn "Local cleanup stopped: $REPLY deleted before eligibility inspection timed out."
+        _git_clean_report_not_run "$record" "" "eligibility inspection timed out" "${plan[@]}"
+      else
+        _git_warn "Local cleanup interrupted: $REPLY deleted before the interruption."
+        _git_clean_report_not_run "$record" "" "not run after interruption" "${plan[@]}"
+      fi
       return $eligibility_rc
     fi
     if (( eligibility_rc != 0 || ! ${reply[(Ie)$record]} )); then
@@ -991,10 +1168,29 @@ clean-branches() {
     if command git update-ref --no-deref -d "$ref" "$oid" 2>/dev/null; then
       # Match git branch -d: a recreated branch must not inherit stale upstream
       # or merge configuration. A missing section is not an error.
-      command git config --local --remove-section "branch.${ref#refs/heads/}" \
-        >/dev/null 2>&1
-      _git_outcome_line "$(_git_display_escape "$ref")" done "deleted at $oid"
       deleted=$(( deleted + 1 ))
+      local section="branch.${ref#refs/heads/}" config_state="absent"
+      local -i config_rc=0
+      command git config --local --remove-section "$section" \
+        >/dev/null 2>&1 || config_rc=$?
+      if (( config_rc != 0 && config_rc != 124 && config_rc != 130 && config_rc != 143 )); then
+        config_rc=0
+        _git_clean_branch_config_state "$section" || config_rc=$?
+        config_state="$REPLY"
+      fi
+      if (( config_rc == 124 || config_rc == 130 || config_rc == 143 )); then
+        _git_outcome_line "$ref" done "deleted at $oid; configuration cleanup stopped"
+        _git_clean_report_not_run "$record" "" "configuration cleanup stopped" "${plan[@]}"
+        _git_count_noun "$deleted" branch branches
+        _git_warn "Local cleanup stopped: $REPLY deleted before configuration cleanup stopped."
+        return $config_rc
+      elif [[ "$config_state" != absent ]]; then
+        config_warnings=$(( config_warnings + 1 ))
+        _git_outcome_line "$ref" done \
+          "deleted at $oid; configuration $config_state (warning)"
+      else
+        _git_outcome_line "$ref" done "deleted at $oid"
+      fi
     else
       local -i delete_rc=$?
       _git_outcome_line "$(_git_display_escape "$ref")" failed \
@@ -1019,7 +1215,7 @@ clean-branches() {
     fi
   done
 
-  _git_clean_verdict "Local cleanup" "$deleted" "$failed"
+  _git_clean_verdict "Local cleanup" "$deleted" "$failed" "$config_warnings"
 }
 
 # --- Remote merged branch cleanup -------------------------------------------
@@ -1140,7 +1336,7 @@ clean-remote-merged() {
     direct_candidates+=("$candidate")
   done
   candidates=("${direct_candidates[@]}")
-  if (( ${#candidates[@]} == 0 )); then
+  if (( ${#candidates[@]} == 0 && ${#_git_clean_opt_targets[@]} == 0 )); then
     _git_success "No eligible merged remote branches were found."
     return 0
   fi
@@ -1197,7 +1393,14 @@ clean-remote-merged() {
     return 1
   }
   local -a current_remote_snapshot=()
-  _git_clean_remote_snapshot "$remote" "$push_url" || return $?
+  local -i snapshot_rc=0
+  _git_clean_remote_snapshot "$remote" "$push_url" || snapshot_rc=$?
+  if (( snapshot_rc != 0 )); then
+    if (( snapshot_rc == 124 || snapshot_rc == 130 || snapshot_rc == 143 )); then
+      _git_clean_report_not_run "" "$remote" "remote inspection stopped" "${plan[@]}"
+    fi
+    return $snapshot_rc
+  fi
   current_remote_snapshot=("${reply[@]}")
   _git_clean_remote_find_oid "$default_ref" "${current_remote_snapshot[@]}"
   [[ "$REPLY" == "$default_oid" ]] || {
@@ -1216,19 +1419,45 @@ clean-remote-merged() {
 
     _git_clean_remote_find_oid "$branch_ref" "${current_remote_snapshot[@]}"
     actual_oid="$REPLY"
-    if [[ "$actual_oid" != "$oid" ]] \
-      || ! GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
-        2>/dev/null; then
+    local target_label="$remote/$(_git_display_escape "${branch_ref#refs/heads/}")"
+    local -i inspection_rc=0
+    if [[ "$actual_oid" == "$oid" ]]; then
+      GIT_GRAFT_FILE=/dev/null command git --no-replace-objects merge-base --is-ancestor "$oid" "$default_oid" \
+        2>/dev/null || inspection_rc=$?
+    fi
+    if (( inspection_rc == 124 || inspection_rc == 130 || inspection_rc == 143 )); then
+      local inspection_outcome=interrupted
+      (( inspection_rc == 124 )) && inspection_outcome=timed-out
+      _git_outcome_line "$target_label" "$inspection_outcome" \
+        "branch ancestry inspection stopped; mutation not run"
+      _git_clean_report_not_run "$record" "$remote" "branch ancestry inspection stopped" "${plan[@]}"
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Remote cleanup stopped: $REPLY deleted before branch ancestry inspection stopped."
+      return $inspection_rc
+    fi
+    if (( inspection_rc != 0 )) || [[ "$actual_oid" != "$oid" ]]; then
       _git_outcome_line "$remote/$(_git_display_escape "${branch_ref#refs/heads/}")" \
-        blocked "changed or no longer merged"
+        blocked "changed or ancestry could not be confirmed; mutation not run"
       failed=$(( failed + 1 ))
       continue
     fi
 
-    _git_remote_push_url "$remote" || {
+    local -i destination_rc=0
+    _git_remote_push_url "$remote" || destination_rc=$?
+    if (( destination_rc == 124 || destination_rc == 130 || destination_rc == 143 )); then
+      local destination_outcome=interrupted
+      (( destination_rc == 124 )) && destination_outcome=timed-out
+      _git_outcome_line "$target_label" "$destination_outcome" \
+        "push URL inspection stopped; mutation not run"
+      _git_clean_report_not_run "$record" "$remote" "push URL inspection stopped" "${plan[@]}"
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Remote cleanup stopped: $REPLY deleted before push URL inspection stopped."
+      return $destination_rc
+    elif (( destination_rc != 0 )); then
+      _git_outcome_line "$target_label" blocked "push URL could not be inspected; mutation not run"
       failed=$(( failed + 1 ))
       continue
-    }
+    fi
     current_push_url="$REPLY"
     if [[ "$current_push_url" != "$push_url" ]]; then
       _git_outcome_line "$remote/$(_git_display_escape "${branch_ref#refs/heads/}")" \
@@ -1240,17 +1469,20 @@ clean-remote-merged() {
     # Just before this push: the server would delete the target of a
     # symbolic branch, and Git updates the tracking refs of a URL push through
     # symbolic ones. Any doubt blocks the target; an interrupt stops the run.
-    local target_label="$remote/$(_git_display_escape "${branch_ref#refs/heads/}")"
     local -a target_symbolic=()
     local -i probe_rc=0
     _git_remote_symbolic_refs "$push_url" "$branch_ref" || probe_rc=$?
     if (( probe_rc == 124 )); then
-      _git_outcome_line "$target_label" blocked "remote symbolic-ref query timed out"
+      _git_outcome_line "$target_label" timed-out \
+        "remote symbolic-ref query timed out; mutation not run"
+      _git_clean_report_not_run "$record" "$remote" "remote inspection timed out" "${plan[@]}"
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup stopped after a query timed out: $REPLY deleted."
       return "$probe_rc"
     elif (( probe_rc == 130 || probe_rc == 143 )); then
-      _git_outcome_line "$target_label" interrupted
+      _git_outcome_line "$target_label" interrupted \
+        "remote symbolic-ref inspection interrupted; mutation not run"
+      _git_clean_report_not_run "$record" "$remote" "not run after interruption" "${plan[@]}"
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
       return "$probe_rc"
@@ -1276,10 +1508,18 @@ clean-remote-merged() {
     local -i tracking_direct_rc=0
     _git_tracking_refs_direct "$remote" "$branch_ref" "$tracking_ref" \
       || tracking_direct_rc=$?
-    if (( tracking_direct_rc == 130 || tracking_direct_rc == 143 )); then
-      _git_outcome_line "$target_label" interrupted
+    if (( tracking_direct_rc == 124 || tracking_direct_rc == 130 || tracking_direct_rc == 143 )); then
+      local tracking_outcome=interrupted
+      (( tracking_direct_rc == 124 )) && tracking_outcome=timed-out
+      _git_outcome_line "$target_label" "$tracking_outcome" \
+        "tracking-ref inspection stopped; mutation not run"
+      _git_clean_report_not_run "$record" "$remote" "tracking-ref inspection stopped" "${plan[@]}"
       _git_count_noun "$deleted" branch branches
-      _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
+      if (( tracking_direct_rc == 124 )); then
+        _git_warn "Remote cleanup stopped: $REPLY deleted before tracking-ref inspection stopped."
+      else
+        _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
+      fi
       return "$tracking_direct_rc"
     elif (( tracking_direct_rc == 1 )); then
       _git_outcome_line "$target_label" \
@@ -1301,10 +1541,17 @@ clean-remote-merged() {
     local -i default_binding_rc=0
     _git_clean_remote_default_ref "$remote" "$push_url" || default_binding_rc=$?
     if (( default_binding_rc != 0 )) || [[ "$REPLY" != "$default_ref" ]]; then
-      _git_outcome_line "$target_label" blocked \
-        "the remote default branch binding changed or could not be inspected"
+      local binding_outcome=blocked
+      if (( default_binding_rc == 124 )); then
+        binding_outcome=timed-out
+      elif (( default_binding_rc == 130 || default_binding_rc == 143 )); then
+        binding_outcome=interrupted
+      fi
+      _git_outcome_line "$target_label" "$binding_outcome" \
+        "the remote default branch binding changed or could not be inspected; mutation not run"
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup stopped: $REPLY deleted before the default branch became uncertain."
+      _git_clean_report_not_run "$record" "$remote" "the default branch became uncertain" "${plan[@]}"
       (( default_binding_rc == 124 || default_binding_rc == 130 || default_binding_rc == 143 )) \
         && return $default_binding_rc
       return 1
@@ -1314,21 +1561,14 @@ clean-remote-merged() {
     _git_clean_collect_remote_candidates \
       "$remote" "$default_tracking_ref" "$default_oid" "$current_ref" \
       || eligibility_rc=$?
-    if (( eligibility_rc == 130 || eligibility_rc == 143 )); then
-      _git_outcome_line "$target_label" interrupted "not run after interruption"
+    if (( eligibility_rc == 124 || eligibility_rc == 130 || eligibility_rc == 143 )); then
+      local eligibility_outcome=interrupted
+      (( eligibility_rc == 124 )) && eligibility_outcome=timed-out
+      _git_outcome_line "$target_label" "$eligibility_outcome" \
+        "eligibility inspection stopped; mutation not run"
       _git_count_noun "$deleted" branch branches
-      _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
-      local -i passed_current=0
-      local pending_record="" pending_ref=""
-      for pending_record in "${plan[@]}"; do
-        if (( ! passed_current )); then
-          [[ "$pending_record" == "$record" ]] && passed_current=1
-          continue
-        fi
-        pending_ref="${${pending_record#*$'\t'}%%$'\t'*}"
-        _git_outcome_line "$remote/$(_git_display_escape "${pending_ref#refs/heads/}")" \
-          skipped "not run after interruption"
-      done
+      _git_warn "Remote cleanup stopped: $REPLY deleted before eligibility inspection stopped."
+      _git_clean_report_not_run "$record" "$remote" "eligibility inspection stopped" "${plan[@]}"
       return $eligibility_rc
     fi
     if (( eligibility_rc != 0 || ! ${reply[(Ie)$record]} )); then
@@ -1353,16 +1593,21 @@ clean-remote-merged() {
       "${push_cmd[@]}" || push_rc=$?
     local branch_label="$remote/$(_git_display_escape "${branch_ref#refs/heads/}")"
     if (( push_rc == 0 )); then
-      # Pushing to the reviewed URL bypasses the remote's fetch refspec, so drop
-      # the matching remote-tracking ref only while it still names this commit.
-      # --no-deref removes that ref itself, never the target of a symbolic ref.
-      command git update-ref --no-deref -d "$tracking_ref" "$oid" 2>/dev/null ||
-        _git_warn \
-          "Remote-tracking ref $(_git_display_escape "$tracking_ref") was kept; fetch --prune to refresh it."
       _git_outcome_line "$branch_label" done "deleted at $oid"
       deleted=$(( deleted + 1 ))
+      # Git may already have removed this tracking ref through the fetch
+      # mapping. Observe its actual post-state before optional leased cleanup.
+      local -i housekeeping_rc=0
+      _git_clean_remove_tracking "$tracking_ref" "$oid" || housekeeping_rc=$?
+      if (( housekeeping_rc != 0 )); then
+        _git_clean_report_not_run "$record" "$remote" "tracking-ref cleanup stopped" "${plan[@]}"
+        _git_count_noun "$deleted" branch branches
+        _git_warn "Remote cleanup stopped: $REPLY deleted before tracking-ref cleanup stopped."
+        return $housekeeping_rc
+      fi
     elif (( push_rc == 130 || push_rc == 143 )); then
       _git_outcome_line "$branch_label" interrupted
+      _git_clean_report_not_run "$record" "$remote" "not run after interruption" "${plan[@]}"
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
       return "$push_rc"

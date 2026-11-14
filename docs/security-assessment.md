@@ -676,6 +676,20 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   Final check-to-mutation races remain, and an uncomputable historical
   conversion may require a manual merge or rebase after preserving local data.
 
+- Git fetch-prune and exact fetch run leased temporary-ref cleanup through
+  `always` after native interruption. Missing explicit targets cannot turn an
+  empty inventory into successful authorization, and stopped remote batches
+  name unrun refs without performing later writes. Post-deletion tracking
+  reports distinguish observed absence, retained or changed refs, and unknown
+  state; URL-push side effects are Git-version dependent. Optional branch
+  configuration cleanup warns on ordinary failure while preserving the
+  completed deletion. Selected-file discard excludes modified submodule
+  checkouts, and both Git JSON emitters publish only a successfully completed
+  jq document. `git_sync_results.bats`, `git_cleanup_results.bats`, and
+  `git_output_results.bats` cover these boundaries with confined repositories,
+  positive controls and failed producers. These observations do not remove
+  the final ref-check-to-write race or replace native transport acceptance.
+
 - System runtime cleanup requires a complete recursive nvm alias inventory,
   retains versions on failed observations and renews protection before every
   removal. Both HOME spellings enforce inner-link refusal. Homebrew cleanup

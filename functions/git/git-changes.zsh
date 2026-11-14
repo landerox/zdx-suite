@@ -340,13 +340,15 @@ _git_changes_show_paths() {
   local heading="$1"
   shift
   local -a file_names=("$@")
-  local file_name=""
+  local -a plan_rows=()
+  local -i item_index=0
 
-  _git_header "$heading"
-  _git_info "Exact targets: ${#file_names[@]}"
-  for file_name in "${file_names[@]}"; do
-    _git_dim "${(V)file_name}"
+  _git_count_noun "${#file_names[@]}" file
+  _git_label "$heading" "$REPLY"
+  for (( item_index = 1; item_index <= ${#file_names[@]}; item_index++ )); do
+    plan_rows+=("$item_index"$'\t'"${(V)file_names[item_index]}")
   done
+  _git_table $'#\tPath' "${plan_rows[@]}"
 }
 
 # Lists paths that block a plan, without a second heading.
@@ -790,7 +792,8 @@ _git_discard_interactive() {
   local -a staged_files=()
   local -a unstaged_files=()
   local -a untracked_files=()
-  _git_capture_nul diff --name-only --no-renames -z --diff-filter=ACDMRTUXB -- || {
+  _git_capture_nul diff --name-only --no-renames -z \
+    --ignore-submodules=all --diff-filter=ACDMRTUXB -- || {
     _git_error "Unable to build the discard inventory."
     return 1
   }
@@ -1897,13 +1900,20 @@ git-undo-commit() {
   fi
 
   _git_header "Undo commit plan"
-  _git_info "Branch: $head_label"
-  _git_info "Current HEAD: $head_oid"
-  _git_info "Reset target: $parent_oid"
-  _git_info "Mode: $reset_mode"
+  _git_label "Branch" "$head_label"
+  _git_label "Current HEAD" "$head_oid"
+  _git_label "Reset target" "$parent_oid"
+  _git_label "Mode" "$reset_mode"
+  local planned=""
   if (( ${#affected_files[@]} > 0 )); then
     _git_changes_show_paths "Affected paths" "${affected_files[@]}" || return 1
+    _git_count_noun "${#affected_files[@]}" file
+    planned="$REPLY"
   else
+    _git_table $'#\tCommit\tAction' \
+      "1"$'\t'"${head_oid[1,12]}"$'\t'"Reset HEAD to ${parent_oid[1,12]}"
+    _git_count_noun 1 commit
+    planned="$REPLY"
     _git_info "No worktree paths will be replaced by this mode."
   fi
   [[ "$reset_mode" == "hard" ]] &&
@@ -1917,14 +1927,14 @@ git-undo-commit() {
   fi
 
   if [[ "$dry_run" == "yes" ]]; then
-    _git_info "Dry run complete; HEAD, index, and worktree were not changed."
+    _git_info "Dry run: $planned planned; nothing was reset."
     return 0
   fi
 
   _git_confirm_plan \
     "$assume_yes" \
-    "Reset ${head_label} from ${head_oid[1,12]} to ${parent_oid[1,12]} using --${reset_mode}?" \
-    "Cancelled." ||
+    "Reset $planned on ${head_label} from ${head_oid[1,12]} to ${parent_oid[1,12]} using --${reset_mode}?" \
+    "Cancelled: nothing was reset." ||
     return 1
   [[ "$REPLY" == "cancelled" ]] && return 0
 

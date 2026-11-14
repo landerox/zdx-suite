@@ -754,7 +754,8 @@ git-pr-create() {
       || print -r -- "derive from commits")"
   _git_label "Draft:" "$(( draft ? 1 : 0 ))"
   (( dry_run )) && {
-    _git_info "Dry run complete; no branch or pull request was changed."
+    _git_count_noun 1 "pull request"
+    _git_info "Dry run: $REPLY planned; nothing was created."
     return 0
   }
   local -i authorize_rc=0

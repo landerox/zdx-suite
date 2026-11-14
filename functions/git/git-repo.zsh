@@ -116,7 +116,8 @@ _git_status_json() {
     identity="${reply[2]}"
   fi
 
-  command jq -n -c -M \
+  local json_document=""
+  json_document=$(command jq -n -c -M \
     --arg schema "zdx.git-status.v1" \
     --arg repository "${repo_root:A}" \
     --arg branch "$branch_name" \
@@ -154,10 +155,11 @@ _git_status_json() {
        stashes: $stashes,
        workspace: (if $platform == "" then null
          else {platform: $platform, identity: $identity} end)
-     }' || {
+     }') || {
     _git_error "Unable to write the JSON status document."
     return 1
   }
+  print -r -- "$json_document"
 }
 
 git-status() {
@@ -245,7 +247,8 @@ git-status() {
 
   _git_header "Repository Status"
   _git_label "Repository:" "${root:t}"
-  _git_label "Path:" "$root"
+  _git_path_display "$root"
+  _git_label "Path:" "$REPLY"
   _git_label "Branch:" "$branch"
   _git_label "HEAD:" \
     "$([[ "$head" == "unborn" ]] && print -r -- unborn \
