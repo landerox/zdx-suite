@@ -4,6 +4,38 @@ local context state state_descr line
 typeset -A opt_args
 
 # Value discovery reads only local Git metadata and caps every candidate list.
+_git_menu_complete_git() {
+  local git_path="" developer_dir="" xcode_path="" timeout_path="" candidate=""
+  git_path=$(whence -p -- git 2>/dev/null) || return 1
+  [[ "$git_path" == /* && -f "$git_path" && -x "$git_path" ]] || return 1
+
+  # Completion can run before the suite loads. Qualify Apple's shim without
+  # sourcing a suite or risking its interactive installation dialog.
+  if [[ "${OSTYPE:-}" == darwin* && "$git_path" == /usr/bin/git ]]; then
+    xcode_path=$(whence -p -- xcode-select 2>/dev/null) || return 1
+    [[ "$xcode_path" == /* && -f "$xcode_path" && -x "$xcode_path" ]] || return 1
+    if (( ${+functions[_zdx_run_with_timeout]} )); then
+      developer_dir=$(_zdx_run_with_timeout 3 "$xcode_path" -p </dev/null 2>/dev/null) \
+        || return 1
+    elif (( ${+functions[_git_run_with_timeout]} )); then
+      developer_dir=$(_git_run_with_timeout 3 "$xcode_path" -p </dev/null 2>/dev/null) \
+        || return 1
+    else
+      for candidate in timeout gtimeout; do
+        timeout_path=$(whence -p -- "$candidate" 2>/dev/null) || timeout_path=""
+        [[ "$timeout_path" == /* && -f "$timeout_path" && -x "$timeout_path" ]] && break
+        timeout_path=""
+      done
+      [[ -n "$timeout_path" ]] || return 1
+      developer_dir=$(command "$timeout_path" -k 2s 3s "$xcode_path" -p </dev/null 2>/dev/null) \
+        || return 1
+    fi
+    [[ "$developer_dir" == /* && -d "$developer_dir" \
+      && "$developer_dir" != *$'\n'* && "$developer_dir" != *$'\r'* ]] || return 1
+  fi
+  command "$git_path" "$@" </dev/null
+}
+
 _git_menu_complete_identity_profile() {
   local -a profile_names=()
   if [[ "${(t)ZDX_GIT_IDENTITIES}" == *association* ]]; then
@@ -22,7 +54,7 @@ _git_menu_complete_local_branches() {
   local branch_output=""
   local -aU branch_names=()
 
-  branch_output=$(command git for-each-ref \
+  branch_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/heads 2>/dev/null) || branch_output=""
   local branch_ref
@@ -39,25 +71,53 @@ _git_menu_complete_local_branches() {
 }
 
 _git_menu_complete_switch_branches() {
-  local branch_output=""
+  local branch_output="" remote_output=""
   local -aU branch_names=()
+  local -a branch_records=() remote_names=() remote_candidates=()
+  local -A remote_counts=()
+  local -i remote_complete=1
 
-  branch_output=$(command git for-each-ref \
-    --count=500 --sort=refname \
+  # One lookahead record detects truncation: a partial inventory cannot prove
+  # that a bare remote branch name is unique.
+  branch_output=$(_git_menu_complete_git for-each-ref \
+    --count=501 --sort=refname \
     --format='%(refname)' refs/heads refs/remotes 2>/dev/null) \
     || branch_output=""
-  local branch_ref remote_branch
-  for branch_ref in "${(@f)branch_output}"; do
+  branch_records=("${(@f)branch_output}")
+  if (( ${#branch_records[@]} > 500 )); then
+    remote_complete=0
+    branch_records=("${(@)branch_records[1,500]}")
+  fi
+  remote_output=$(_git_menu_complete_git remote 2>/dev/null) || remote_complete=0
+  remote_names=("${(@f)remote_output}")
+  (( ${#remote_names[@]} > 500 )) && remote_complete=0
+  local branch_ref remote_branch remote_name matched_remote branch_name
+  for branch_ref in "${branch_records[@]}"; do
     case "$branch_ref" in
       refs/heads/*)
         branch_names+=("${branch_ref#refs/heads/}")
         ;;
       refs/remotes/*)
+        (( remote_complete )) || continue
         [[ "$branch_ref" == refs/remotes/*/HEAD ]] && continue
         remote_branch="${branch_ref#refs/remotes/}"
-        branch_names+=("${remote_branch#*/}")
+        matched_remote=""
+        for remote_name in "${remote_names[@]}"; do
+          if [[ "$remote_branch" == "$remote_name/"* \
+            && ${#remote_name} -gt ${#matched_remote} ]]; then
+            matched_remote="$remote_name"
+          fi
+        done
+        [[ -n "$matched_remote" ]] || continue
+        branch_name="${remote_branch#"$matched_remote/"}"
+        [[ -n "$branch_name" ]] || continue
+        remote_candidates+=("$branch_name")
+        remote_counts[$branch_name]=$(( ${remote_counts[$branch_name]:-0} + 1 ))
         ;;
     esac
+  done
+  for branch_name in "${remote_candidates[@]}"; do
+    (( ${remote_counts[$branch_name]} == 1 )) && branch_names+=("$branch_name")
   done
 
   if (( ${#branch_names[@]} )); then
@@ -72,7 +132,7 @@ _git_menu_complete_remote_branches() {
   local branch_output=""
   local -aU branch_names=()
 
-  branch_output=$(command git for-each-ref \
+  branch_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/remotes 2>/dev/null) || branch_output=""
   local branch_ref remote_branch
@@ -95,7 +155,7 @@ _git_menu_complete_revisions() {
   local ref_output=""
   local -aU revision_names=(HEAD)
 
-  ref_output=$(command git for-each-ref \
+  ref_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null) \
     || ref_output=""
@@ -122,7 +182,7 @@ _git_menu_complete_full_branch_refs() {
   local ref_output=""
   local -aU branch_refs=()
 
-  ref_output=$(command git for-each-ref \
+  ref_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/heads refs/remotes 2>/dev/null) \
     || ref_output=""
@@ -152,7 +212,7 @@ _git_menu_complete_tags() {
   local tag_output=""
   local -aU tag_names=()
 
-  tag_output=$(command git for-each-ref \
+  tag_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/tags 2>/dev/null) || tag_output=""
   local tag_ref
@@ -172,7 +232,7 @@ _git_menu_complete_stashes() {
   local stash_output=""
   local -aU stash_targets=()
 
-  stash_output=$(command git stash list --max-count=500 \
+  stash_output=$(_git_menu_complete_git stash list --max-count=500 \
     --format='%gd%x09%H' 2>/dev/null) || stash_output=""
   local stash_record stash_selector stash_oid
   for stash_record in "${(@f)stash_output}"; do
@@ -196,7 +256,7 @@ _git_menu_complete_remotes() {
   local remote_output=""
   local -aU remote_names=()
 
-  remote_output=$(command git remote 2>/dev/null) || remote_output=""
+  remote_output=$(_git_menu_complete_git remote 2>/dev/null) || remote_output=""
   [[ -n "$remote_output" ]] && remote_names=("${(@f)remote_output}")
   (( ${#remote_names[@]} > 500 )) \
     && remote_names=("${remote_names[1,500]}")
@@ -212,7 +272,7 @@ _git_menu_complete_pr_number() {
   local -aU pr_numbers=()
   local -i completion_rc=1
 
-  pr_output=$(command git for-each-ref \
+  pr_output=$(_git_menu_complete_git for-each-ref \
     --count=500 --sort=refname \
     --format='%(refname)' refs/pull 2>/dev/null) || pr_output=""
   local pr_ref pr_number

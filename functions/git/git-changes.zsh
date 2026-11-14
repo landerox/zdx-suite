@@ -435,12 +435,7 @@ _git_unstage_usage() {
 git-unstage() {
   emulate -L zsh
   local REPLY=""
-  # Git lists root-relative paths but resolves pathspecs from the current
-  # directory; run from the repository root so both always agree.
-  if _git_path_command_needs_root; then
-    ( builtin cd -q -- "$REPLY" || exit 1; git-unstage "$@" )
-    return $?
-  fi
+  local -a original_args=("$@")
 
   local unstage_all="no"
   local dry_run="no"
@@ -470,6 +465,12 @@ git-unstage() {
     _git_error "--dry-run and --yes cannot be combined."
     return 2
   }
+
+  # Parse before Git probes; keep root-relative inventories and pathspecs aligned.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-unstage "${original_args[@]}" )
+    return $?
+  fi
 
   if [[ "$unstage_all" == "yes" ]]; then
     _git_require_repo || return 1
@@ -721,12 +722,7 @@ _git_discard_usage() {
 git-discard() {
   emulate -L zsh
   local REPLY=""
-  # Git lists root-relative paths but resolves pathspecs from the current
-  # directory; run from the repository root so both always agree.
-  if _git_path_command_needs_root; then
-    ( builtin cd -q -- "$REPLY" || exit 1; git-discard "$@" )
-    return $?
-  fi
+  local -a original_args=("$@")
 
   local discard_all="no"
   local include_untracked="no"
@@ -764,6 +760,12 @@ git-discard() {
     _git_error "--include-untracked requires --all."
     return 2
   }
+
+  # Parse before Git probes; keep root-relative inventories and pathspecs aligned.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-discard "${original_args[@]}" )
+    return $?
+  fi
 
   if [[ "$discard_all" == "yes" ]]; then
     _git_require_repo || return 1
@@ -1748,12 +1750,7 @@ _git_undo_commit_usage() {
 git-undo-commit() {
   emulate -L zsh
   local REPLY=""
-  # Git lists root-relative paths but resolves pathspecs from the current
-  # directory; run from the repository root so both always agree.
-  if _git_path_command_needs_root; then
-    ( builtin cd -q -- "$REPLY" || exit 1; git-undo-commit "$@" )
-    return $?
-  fi
+  local -a original_args=("$@")
 
   local reset_mode=""
   local dry_run="no"
@@ -1791,6 +1788,11 @@ git-undo-commit() {
     _git_error "--dry-run and --yes cannot be combined."
     return 2
   }
+  # Parse before Git probes; keep root-relative inventories and pathspecs aligned.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-undo-commit "${original_args[@]}" )
+    return $?
+  fi
   _git_require_repo || return 1
 
   if [[ -z "$reset_mode" ]]; then

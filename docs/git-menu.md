@@ -260,6 +260,12 @@ Its invalid scope, missing name, extra arguments, and unknown options return
 `2`. Every remaining public interface is documented by its direct `--help`
 output and rejects invalid combinations before runtime probes.
 
+Path commands validate the complete argument grammar before re-entering at the
+repository root; the re-entry preserves the original argument array. An explicit
+empty operand to `git-auth`, `git-tag-verify` or `git-identity-switcher` returns
+`2` with a diagnostic on stderr, even outside a repository. The private dispatcher
+isolates its owned shell options with `emulate -L zsh`.
+
 Selection-first workflows are intentionally interactive when no exact
 target grammar is documented. `git-discard` and `git-unstage` select their
 files, or a first all-changes row, in a picker unless `--all` is given;
@@ -640,6 +646,17 @@ Dependencies are enforced at the narrowest useful boundary:
 - Git transport credentials and a configured remote are checked only by the
   remote action that needs them.
 
+Each read-only remote-ref, GitHub repository, pull-request, or authentication
+query has a fixed 30-second deadline through the suite timeout service. These
+queries use a resolved external executable, closed stdin, disabled Git/GitHub
+prompts, and no askpass helper. A timeout returns `124`; interrupted probes
+preserve `130` or `143`, and failed output is never treated as a successful
+observation. Branch and tag batches stop after a timed out or interrupted
+revalidation. The budget applies to each query, not the complete command.
+Fetches, pushes, and pull-request creation after authorization retain their
+foreground transaction lifetime. Without the core, bounded queries require
+`timeout` or `gtimeout` and fail closed without either.
+
 `clean-remote-merged` uses Git transport rather than the GitHub API, so it does
 not require `gh`. Moving it to an API operation would be a public change that
 updates the inventory's capability metadata.
@@ -788,6 +805,7 @@ mixed into data.
 | `0` | Success, deliberate cancellation, or a documented no-op |
 | `1` | Operational failure, unmet precondition, refused unsafe request, or partial failure |
 | `2` | Invalid arguments, unknown option, or unknown dispatch token |
+| `124` | A bounded remote or GitHub query exceeded its 30-second deadline |
 
 An invoked tool's distinct status may be preserved when callers need it, but a
 success or logging helper must never mask a failure. A failed Git mutation,
@@ -903,6 +921,18 @@ Git state, request authentication, or evaluate repository data as shell code.
 Local discovery is capped at 500 records per source. After `--help`, an
 exclusive mode, or a complete positional target, unrelated suggestions are
 suppressed.
+
+Git-backed completion resolves the executable before use. On macOS,
+`/usr/bin/git` is used only after a resolved, bounded `xcode-select -p` query
+establishes an existing developer directory. Missing, failed or interrupted
+qualification suppresses Git-backed suggestions, including when the suite and
+core have not loaded; no installation dialog is started.
+
+Switch completion associates cached refs with the longest configured remote
+prefix, including remote names containing `/`. It offers a bare remote branch
+only when that name occurs once, while local branches remain available. One
+lookahead record detects an inventory above 500 refs; that incomplete inventory
+supplies local suggestions only, because it cannot establish remote uniqueness.
 
 At minimum, the contextual grammar must distinguish:
 

@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- Git: bound remote and GitHub observations to 30 seconds, preserve timeout
+  and interruption statuses, and parse invalid arguments before repository
+  probes. Completion skips the macOS Git placeholder and ambiguous remote
+  branch names; dispatch isolates inherited shell options.
+
 - Workspace: enforce the documented ASCII name/URL/SSH grammar independently
   of locale and suppress configured Git filesystem-monitor hooks in read-only
   status, metadata and fixed-preview probes.

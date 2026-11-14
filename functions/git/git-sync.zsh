@@ -115,11 +115,11 @@ _git_sync_remote_snapshot() {
 
   local output=""
   local -i remote_rc=0
-  output=$(command git ls-remote --refs -- "$remote" "$pattern" 2>/dev/null) \
+  output=$(_git_remote_probe git ls-remote --refs -- "$remote" "$pattern" 2>/dev/null) \
     || remote_rc=$?
   if (( remote_rc != 0 )); then
-    _git_error \
-      "Unable to inspect remote '$(_git_redact_remote_url "$remote")' (exit $remote_rc)."
+    _git_remote_probe_error \
+      "Inspection of remote '$(_git_redact_remote_url "$remote")'" "$remote_rc"
     return $remote_rc
   fi
   [[ -z "$output" ]] && return 0
@@ -1243,7 +1243,10 @@ _git_push_apply_plan() {
     fi
 
     _git_sync_remote_snapshot "$push_url" "$remote_ref" || {
+      local -i probe_rc=$?
       failed=$(( failed + 1 ))
+      (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
+        && return $probe_rc
       continue
     }
     remote_records=("${reply[@]}")
@@ -1327,7 +1330,11 @@ _git_push_apply_plan() {
     local -i remote_alias_rc=0
     _git_require_direct_remote_branch "$push_url" "$remote_ref" \
       || remote_alias_rc=$?
-    if (( remote_alias_rc == 130 || remote_alias_rc == 143 )); then
+    if (( remote_alias_rc == 124 )); then
+      _git_count_noun "$pushed" "ref update"
+      _git_warn "Push stopped after a remote query timed out: $REPLY completed."
+      return $remote_alias_rc
+    elif (( remote_alias_rc == 130 || remote_alias_rc == 143 )); then
       _git_count_noun "$pushed" "ref update"
       _git_warn "Push interrupted: $REPLY completed before the interruption."
       return $remote_alias_rc
@@ -1362,9 +1369,10 @@ _git_push_apply_plan() {
           return 1
         fi
         _git_sync_remote_snapshot "$push_url" "$remote_ref" || {
+          local -i probe_rc=$?
           _git_error \
             "Remote push succeeded, but its exact result could not be verified."
-          return 1
+          return $probe_rc
         }
         remote_records=("${reply[@]}")
         _git_sync_find_remote_oid "$remote_ref" "${remote_records[@]}"

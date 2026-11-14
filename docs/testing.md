@@ -402,6 +402,18 @@ core-package and optional-tool success/failure/not-run totals.
 
 ### Git coverage
 
+`git_probe_cli.bats` covers probe-free help and invalid input, empty-argument
+diagnostics, dispatcher option isolation, fixed 30-second remote and GitHub
+probe deadlines and producer statuses, and completion with ambiguous branches,
+slash-containing remote names and the macOS Git placeholder. These are isolated
+recorders and capability models, not live transport or macOS acceptance.
+
+`git_completion_safety.bats` covers conservative remote suggestions when the
+inventory is truncated, explicit successful Command Line Tools qualification,
+failed and interrupted qualification, and the bounded standalone fallback.
+`git_probe_status.bats` covers public authentication failures, stopped batch
+revalidation, frozen probe binaries, closed stdin and disabled prompts.
+
 `git_remote_proofs.bats` covers replacement-ref and legacy-graft ancestry, explicit force-lease
 integration through the local branch's reflog, expired proof after review,
 stacked rebase refs, PR head argument boundaries, server-side branch aliases,

@@ -690,8 +690,8 @@ _git_ls_remote_ref_matches() {
 
 _git_path_command_needs_root() {
   REPLY=""
-  # This runs before argument parsing; the macOS placeholder would open an
-  # installation dialog, so leave it to the command's own Git check.
+  # Parsing is complete, but the command's Git check has not run yet. Avoid
+  # opening an installation dialog through the macOS placeholder here.
   _git_clt_placeholder "${commands[git]-}" && return 1
   local repo_root=""
   repo_root=$(command git rev-parse --path-format=absolute --show-toplevel \
@@ -1216,6 +1216,28 @@ _git_path_collisions() {
 
 # --- Dependencies ------------------------------------------------------------
 
+# Remote observations have one fixed budget each; mutations keep their own
+# foreground lifetime. The timeout service freezes the external program path.
+_git_remote_probe() (
+  emulate -L zsh
+  export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="" SSH_ASKPASS=""
+  export GCM_INTERACTIVE=never GH_PROMPT_DISABLED=1
+  _git_run_with_timeout 30 "$@" </dev/null
+)
+
+_git_remote_probe_error() {
+  emulate -L zsh
+  local operation="$1"
+  local -i probe_rc="$2"
+  if (( probe_rc == 124 )); then
+    _git_error "$operation did not finish within 30s (exit 124)."
+  elif (( probe_rc == 130 || probe_rc == 143 )); then
+    _git_error "$operation was interrupted (exit $probe_rc)."
+  else
+    _git_error "$operation failed (exit $probe_rc)."
+  fi
+}
+
 _git_check_cmd() {
   command -v "$1" &>/dev/null
 }
@@ -1226,11 +1248,15 @@ _git_check_gh() {
     _git_info "Install gh with your platform package manager."
     return 1
   }
-  command gh auth status &>/dev/null || {
+  local -i auth_rc=0
+  _git_remote_probe gh auth status &>/dev/null || auth_rc=$?
+  if (( auth_rc == 1 )); then
     _git_error "GitHub CLI is not authenticated."
     _git_info "Run 'gh auth login' explicitly, then retry."
-    return 1
-  }
+  elif (( auth_rc != 0 )); then
+    _git_remote_probe_error "GitHub CLI authentication query" "$auth_rc"
+  fi
+  return $auth_rc
 }
 
 _git_cmd_deps() {
@@ -2149,11 +2175,18 @@ _git_auth_collect() {
   git_name=$(command git config --get user.name 2>/dev/null)
   git_email=$(command git config --get user.email 2>/dev/null)
   if _git_check_cmd gh; then
-    if [[ "$hostname" != "unknown" ]] \
-      && command gh auth status --hostname "$hostname" &>/dev/null; then
-      gh_state="authenticated"
-    else
-      gh_state="not authenticated"
+    if [[ "$hostname" != "unknown" ]]; then
+      local -i auth_rc=0
+      _git_remote_probe gh auth status --hostname "$hostname" &>/dev/null \
+        || auth_rc=$?
+      if (( auth_rc == 0 )); then
+        gh_state="authenticated"
+      elif (( auth_rc == 1 )); then
+        gh_state="not authenticated"
+      else
+        _git_remote_probe_error "GitHub CLI authentication query" "$auth_rc"
+        return $auth_rc
+      fi
     fi
   fi
 
@@ -2188,7 +2221,10 @@ git-auth() {
 
   case "${1:-}" in
     "")
-      (( $# == 0 )) || return 2
+      (( $# == 0 )) || {
+        _git_error "Empty argument for git-auth."
+        return 2
+      }
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -2204,7 +2240,7 @@ git-auth() {
       ;;
   esac
 
-  _git_auth_collect || return 1
+  _git_auth_collect || return $?
   _git_header "Repository Authentication"
   _git_label "Repository:" "${_GIT_AUTH[repo]}"
   _git_label "Remote:" "${_GIT_AUTH[remote]:-(none)}"
@@ -2386,6 +2422,7 @@ _git_menu_entry() {
 # --- Dispatch ---------------------------------------------------------------
 
 _git_dispatch() {
+  emulate -L zsh
   local command_name="${1:-}"
   shift 2>/dev/null || true
   case "$command_name" in
