@@ -192,6 +192,21 @@ MOCK
 
 @test "git completion: standalone helpers never run the macOS placeholder when CLT is unavailable" {
   export COMPLETION_FILE="$TEST_SUITE_ROOT/completions/_git-menu"
+  # Exercise failed qualification even on hosts with working CLT or without
+  # a timeout backend; neither host capability determines this fixture.
+  cat >"$TEST_MOCK_BIN/xcode-select" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$MOCK_CLT_TEST_HELPER" >>"$HOME/qualification.calls"
+exit 2
+MOCK
+  cat >"$TEST_MOCK_BIN/timeout" <<'MOCK'
+#!/usr/bin/env bash
+[[ $# == 5 && "$1" == -k && "$2" == 2s && "$3" == 3s \
+  && "$4" == "$TEST_MOCK_BIN/xcode-select" && "$5" == -p ]] || exit 91
+shift 3
+exec "$@"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/xcode-select" "$TEST_MOCK_BIN/timeout"
   run run_zsh '
     local -a words=(git-switch "")
     local CURRENT=2
@@ -211,10 +226,15 @@ MOCK
     }
     local helper
     for helper in local_branches switch_branches remote_branches revisions full_branch_refs tags stashes remotes pr_number; do
+      export MOCK_CLT_TEST_HELPER="$helper"
       "_git_menu_complete_$helper" >"$HOME/$helper.stdout" 2>"$HOME/$helper.stderr"
     done
     return 0
   '
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/git.calls" ]
+  local helper
+  for helper in local_branches switch_branches remote_branches revisions full_branch_refs tags stashes remotes pr_number; do
+    grep -Fxq "$helper" "$HOME/qualification.calls"
+  done
 }
