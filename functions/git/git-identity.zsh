@@ -713,7 +713,10 @@ git-identity-switcher() {
 
   case "${1:-}" in
     "")
-      (( $# == 0 )) || return 2
+      (( $# == 0 )) || {
+        _git_error "Empty argument for git-identity-switcher."
+        return 2
+      }
       _git_identity_menu
       ;;
     -h|--help)

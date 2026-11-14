@@ -1717,12 +1717,7 @@ _git_stash_interactive() {
 git-stash() {
   emulate -L zsh
   local REPLY=""
-  # Git lists root-relative paths but resolves pathspecs from the current
-  # directory; run from the repository root so both always agree.
-  if _git_path_command_needs_root; then
-    ( builtin cd -q -- "$REPLY" || exit 1; git-stash "$@" )
-    return $?
-  fi
+  local -a original_args=("$@")
 
   if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
     _git_stash_usage
@@ -1834,6 +1829,11 @@ git-stash() {
       _git_error "Save options require the explicit 'save' action."
       return 2
     fi
+    # Parse before Git probes; re-enter with the literal invocation arguments.
+    if _git_path_command_needs_root; then
+      ( builtin cd -q -- "$REPLY" || exit 1; git-stash "${original_args[@]}" )
+      return $?
+    fi
     _git_require_repo || return 1
     _git_stash_interactive "$dry_run" "$assume_yes"
     return $?
@@ -1882,6 +1882,11 @@ git-stash() {
       ;;
   esac
 
+  # Git inventories and pathspecs must share the repository-root directory.
+  if _git_path_command_needs_root; then
+    ( builtin cd -q -- "$REPLY" || exit 1; git-stash "${original_args[@]}" )
+    return $?
+  fi
   _git_require_repo || return 1
 
   local -a selected_fields=()

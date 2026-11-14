@@ -188,12 +188,11 @@ _git_clean_remote_snapshot() {
 
   local output=""
   local -i remote_rc=0
-  output=$(command git ls-remote \
+  output=$(_git_remote_probe git ls-remote \
     --refs --heads -- "$push_url" 2>/dev/null) \
     || remote_rc=$?
   if (( remote_rc != 0 )); then
-    _git_error \
-      "Unable to inspect branches on '$remote_name' (exit $remote_rc)."
+    _git_remote_probe_error "Branch inspection on '$remote_name'" "$remote_rc"
     return $remote_rc
   fi
   [[ -z "$output" ]] && return 0
@@ -821,6 +820,10 @@ clean-branches() {
   local default_name
   local -i default_rc=0
   default_name=$(_git_get_default_branch "$cleanup_remote") || default_rc=$?
+  if (( default_rc == 124 )); then
+    _git_remote_probe_error "Remote default branch query" "$default_rc"
+    return $default_rc
+  fi
   (( default_rc == 130 || default_rc == 143 )) && return $default_rc
   if (( default_rc != 0 )); then
     _git_error "Unable to determine the default branch."
@@ -906,6 +909,10 @@ clean-branches() {
   _git_clean_selected_remote "$current_ref" || return $?
   cleanup_remote="$REPLY"
   current_default=$(_git_get_default_branch "$cleanup_remote") || default_rc=$?
+  if (( default_rc == 124 )); then
+    _git_remote_probe_error "Remote default branch revalidation" "$default_rc"
+    return $default_rc
+  fi
   (( default_rc == 130 || default_rc == 143 )) && return $default_rc
   if (( default_rc != 0 )) || [[ "$current_default" != "$default_name" ]]; then
     _git_error "The default branch binding changed after planning; retry."
@@ -1237,7 +1244,12 @@ clean-remote-merged() {
     local -a target_symbolic=()
     local -i probe_rc=0
     _git_remote_symbolic_refs "$push_url" "$branch_ref" || probe_rc=$?
-    if (( probe_rc == 130 || probe_rc == 143 )); then
+    if (( probe_rc == 124 )); then
+      _git_outcome_line "$target_label" blocked "remote symbolic-ref query timed out"
+      _git_count_noun "$deleted" branch branches
+      _git_warn "Remote cleanup stopped after a query timed out: $REPLY deleted."
+      return "$probe_rc"
+    elif (( probe_rc == 130 || probe_rc == 143 )); then
       _git_outcome_line "$target_label" interrupted
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup interrupted: $REPLY deleted before the interruption."
@@ -1293,7 +1305,7 @@ clean-remote-merged() {
         "the remote default branch binding changed or could not be inspected"
       _git_count_noun "$deleted" branch branches
       _git_warn "Remote cleanup stopped: $REPLY deleted before the default branch became uncertain."
-      (( default_binding_rc == 130 || default_binding_rc == 143 )) \
+      (( default_binding_rc == 124 || default_binding_rc == 130 || default_binding_rc == 143 )) \
         && return $default_binding_rc
       return 1
     fi

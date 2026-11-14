@@ -294,11 +294,11 @@ _git_tag_remote_snapshot() {
 
   local output=""
   local -i remote_rc=0
-  output=$(command git ls-remote --refs -- "$remote" "$pattern" 2>/dev/null) \
+  output=$(_git_remote_probe git ls-remote --refs -- "$remote" "$pattern" 2>/dev/null) \
     || remote_rc=$?
   if (( remote_rc != 0 )); then
-    _git_error \
-      "Unable to inspect tags on '$(_git_redact_remote_url "$remote")' (exit $remote_rc)."
+    _git_remote_probe_error \
+      "Tag inspection on '$(_git_redact_remote_url "$remote")'" "$remote_rc"
     return $remote_rc
   fi
   [[ -z "$output" ]] && return 0
@@ -400,6 +400,7 @@ _git_tag_create_usage() {
 
 # Sets dynamically scoped _git_tag_create_opt_* variables.
 _git_tag_create_parse() {
+  emulate -L zsh
   _git_tag_create_opt_name=""
   _git_tag_create_opt_target="HEAD"
   _git_tag_create_opt_message=""
@@ -495,6 +496,16 @@ _git_tag_create_parse() {
     _git_error "Choose only one tag type."
     return 2
   }
+  if [[ "$_git_tag_create_opt_type" == (annotated|signed) \
+    && -z "$_git_tag_create_opt_message" ]]; then
+    _git_error "Annotated and signed tags require --message TEXT."
+    return 2
+  fi
+  if [[ "$_git_tag_create_opt_type" == "lightweight" \
+    && -n "$_git_tag_create_opt_message" ]]; then
+    _git_error "--message cannot be combined with --lightweight."
+    return 2
+  fi
   if (( _git_tag_create_opt_explicit )) \
     && [[ -z "$_git_tag_create_opt_name" ]]; then
     _git_error "Direct mode requires --name TAG."
@@ -750,8 +761,9 @@ git-tag-create() {
     return 1
   }
   _git_tag_remote_snapshot "$remote_url" "$tag_ref" || {
+    local -i probe_rc=$?
     _git_error "The local tag remains available at $created_oid."
-    return 1
+    return $probe_rc
   }
   local -a before_push_records=("${reply[@]}")
   _git_tag_find_remote_oid "$tag_ref" "${before_push_records[@]}"
@@ -802,7 +814,10 @@ git-tag-verify() {
   local requested=""
   case "${1:-}" in
     "")
-      (( $# == 0 )) || return 2
+      (( $# == 0 )) || {
+        _git_error "Empty argument for git-tag-verify."
+        return 2
+      }
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -1119,7 +1134,10 @@ git-tag-push() {
       continue
     }
     _git_tag_remote_snapshot "$remote_url" "$ref" || {
+      local -i probe_rc=$?
       failed=$(( failed + 1 ))
+      (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
+        && return $probe_rc
       continue
     }
     current_remote_records=("${reply[@]}")
@@ -1479,7 +1497,12 @@ git-tag-delete() {
         current_remote_records=("${reply[@]}")
         _git_remote_symbolic_refs "$remote_url" "$ref" || probe_rc=$?
       fi
-      if (( probe_rc == 130 || probe_rc == 143 )); then
+      if (( probe_rc == 124 )); then
+        _git_count_noun "$deleted" tag
+        _git_warn \
+          "Tag deletion stopped after a query timed out: $REPLY deleted; local $ref retained."
+        return "$probe_rc"
+      elif (( probe_rc == 130 || probe_rc == 143 )); then
         _git_count_noun "$deleted" tag
         _git_warn \
           "Tag deletion interrupted: $REPLY deleted; local $ref retained."

@@ -46,15 +46,16 @@ _git_gh_help_requested() {
 
 _git_gh_repo_context() {
   _git_require_repo || return 1
-  _git_check_gh || return 1
+  _git_check_gh || return $?
 
   local repo_output repo_id name_with_owner repo_url host remainder
-  repo_output=$(command gh repo view \
+  repo_output=$(_git_remote_probe gh repo view \
     --json id,nameWithOwner,url \
     --template '{{.id}}{{"\t"}}{{.nameWithOwner}}{{"\t"}}{{.url}}' \
     2>/dev/null) || {
-    _git_error "Unable to resolve the GitHub repository."
-    return 1
+    local -i probe_rc=$?
+    _git_remote_probe_error "GitHub repository query" "$probe_rc"
+    return $probe_rc
   }
   repo_id="${repo_output%%$'\t'*}"
   remainder="${repo_output#*$'\t'}"
@@ -87,12 +88,13 @@ _git_gh_repo_context() {
 
 _git_gh_require_same_repo() {
   local current_id
-  current_id=$(command gh repo view \
+  current_id=$(_git_remote_probe gh repo view \
     --repo "${_GIT_GH_REPO[target]}" \
     --json id \
     --template '{{.id}}' 2>/dev/null) || {
-    _git_error "Unable to revalidate the GitHub repository."
-    return 1
+    local -i probe_rc=$?
+    _git_remote_probe_error "GitHub repository revalidation" "$probe_rc"
+    return $probe_rc
   }
   [[ "$current_id" == "${_GIT_GH_REPO[id]}" ]] || {
     _git_error "The GitHub repository identity changed; retry."
@@ -103,7 +105,7 @@ _git_gh_require_same_repo() {
 _git_gh_pick_pr() {
   local state="$1"
   local pr_output
-  pr_output=$(command gh pr list \
+  pr_output=$(_git_remote_probe gh pr list \
     --repo "${_GIT_GH_REPO[target]}" \
     --state "$state" \
     --limit 100 \
@@ -111,8 +113,11 @@ _git_gh_pick_pr() {
     --template \
       '{{range .}}{{.id}}{{"\t"}}{{.number}}{{"\t"}}{{.state}}{{"\t"}}{{.url}}{{"\t"}}{{.headRefOid}}{{"\t"}}{{.headRefName}}{{"\t"}}{{.title}}{{"\n"}}{{end}}' \
     2>/dev/null) || {
-    _git_error "Unable to list pull requests."
-    return 1
+    local -i probe_rc=$?
+    _git_remote_probe_error "Pull request listing" "$probe_rc"
+    # Status 3 belongs to this adapter's deliberate-cancellation protocol.
+    (( probe_rc == 3 )) && return 1
+    return $probe_rc
   }
   [[ -n "$pr_output" ]] || {
     _git_info "No $state pull requests were found."
@@ -197,11 +202,15 @@ _git_gh_pick_pr() {
 _git_gh_pr_current() {
   local number="$1"
   local output pr_id state head_oid remainder
-  output=$(command gh pr view "$number" \
+  output=$(_git_remote_probe gh pr view "$number" \
     --repo "${_GIT_GH_REPO[target]}" \
     --json id,state,headRefOid \
     --template '{{.id}}{{"\t"}}{{.state}}{{"\t"}}{{.headRefOid}}' \
-    2>/dev/null) || return 1
+    2>/dev/null) || {
+    local -i probe_rc=$?
+    _git_remote_probe_error "Pull request query" "$probe_rc"
+    return $probe_rc
+  }
   pr_id="${output%%$'\t'*}"
   remainder="${output#*$'\t'}"
   state="${remainder%%$'\t'*}"
@@ -459,13 +468,16 @@ _git_gh_remote_head_oid() {
   local branch="$2"
   local output=""
   local -i ls_rc=0
-  output=$(command git ls-remote --exit-code --heads -- \
+  output=$(_git_remote_probe git ls-remote --exit-code --heads -- \
     "$remote_url" "refs/heads/$branch" 2>/dev/null) || ls_rc=$?
   if (( ls_rc == 2 )); then
     REPLY=""
     return 0
   fi
-  (( ls_rc == 0 )) || return 1
+  if (( ls_rc != 0 )); then
+    _git_remote_probe_error "Remote head query" "$ls_rc"
+    return $ls_rc
+  fi
 
   # ls-remote also returns tail matches such as refs/heads/x/refs/heads/<b>.
   local line="" oid="" ref="" found_oid=""
@@ -484,12 +496,16 @@ _git_gh_created_pr_current() {
   local number="$1"
   local output remainder pr_id state pr_url head_branch head_oid
   local base_branch base_oid
-  output=$(command gh pr view "$number" \
+  output=$(_git_remote_probe gh pr view "$number" \
     --repo "${_GIT_GH_REPO[target]}" \
     --json id,state,url,headRefName,headRefOid,baseRefName,baseRefOid \
     --template \
       '{{.id}}{{"\t"}}{{.state}}{{"\t"}}{{.url}}{{"\t"}}{{.headRefName}}{{"\t"}}{{.headRefOid}}{{"\t"}}{{.baseRefName}}{{"\t"}}{{.baseRefOid}}' \
-    2>/dev/null) || return 1
+    2>/dev/null) || {
+    local -i probe_rc=$?
+    _git_remote_probe_error "Created pull request query" "$probe_rc"
+    return $probe_rc
+  }
 
   pr_id="${output%%$'\t'*}"
   remainder="${output#*$'\t'}"
@@ -528,13 +544,17 @@ _git_gh_base_oid() {
   local query
   query='query($owner:String!,$repo:String!,$expression:String!){repository(owner:$owner,name:$repo){object(expression:$expression){... on Commit{oid}}}}'
   local oid
-  oid=$(command gh api graphql \
+  oid=$(_git_remote_probe gh api graphql \
     --hostname "${_GIT_GH_REPO[host]}" \
     -f query="$query" \
     -f owner="$owner" \
     -f repo="$repo" \
     -f expression="refs/heads/$branch" \
-    --jq '.data.repository.object.oid' 2>/dev/null) || return 1
+    --jq '.data.repository.object.oid' 2>/dev/null) || {
+    local -i probe_rc=$?
+    _git_remote_probe_error "GitHub base commit query" "$probe_rc"
+    return $probe_rc
+  }
   _git_validate_oid "$oid" || return 1
   REPLY="$oid"
 }
@@ -623,7 +643,7 @@ git-pr-create() {
     _git_require_interactive || return 1
   fi
 
-  _git_gh_repo_context || return 1
+  _git_gh_repo_context || return $?
   _git_context_refresh || return 1
 
   local branch="${_GIT_CONTEXT[branch]}"
@@ -660,12 +680,13 @@ git-pr-create() {
   }
 
   local default_branch
-  default_branch=$(command gh repo view \
+  default_branch=$(_git_remote_probe gh repo view \
     --repo "${_GIT_GH_REPO[target]}" \
     --json defaultBranchRef \
     --template '{{.defaultBranchRef.name}}' 2>/dev/null) || {
-    _git_error "Unable to resolve the default branch."
-    return 1
+    local -i probe_rc=$?
+    _git_remote_probe_error "Default branch query" "$probe_rc"
+    return $probe_rc
   }
   _git_validate_branch_name "$default_branch" || {
     _git_error "GitHub returned an invalid default branch."
@@ -687,14 +708,16 @@ git-pr-create() {
     return 2
   }
   _git_gh_base_oid "$base" || {
+    local -i probe_rc=$?
     _git_error "Unable to resolve base branch '$base' on GitHub."
-    return 1
+    return $probe_rc
   }
   local base_oid="$REPLY"
 
   _git_gh_remote_head_oid "$remote_url" "$remote_branch" || {
+    local -i probe_rc=$?
     _git_error "Unable to resolve the remote head branch."
-    return 1
+    return $probe_rc
   }
   local remote_head_oid="$REPLY"
   local -i needs_push=0
@@ -749,10 +772,11 @@ git-pr-create() {
     _git_error "The attached branch changed after review; retry."
     return 1
   }
-  _git_gh_require_same_repo || return 1
+  _git_gh_require_same_repo || return $?
   _git_gh_base_oid "$base" || {
+    local -i probe_rc=$?
     _git_error "The GitHub base branch is no longer available."
-    return 1
+    return $probe_rc
   }
   [[ "$REPLY" == "$base_oid" ]] || {
     _git_error "The GitHub base branch changed; review the plan again."
@@ -766,7 +790,7 @@ git-pr-create() {
     _git_error "The push remote identity changed; retry."
     return 1
   }
-  _git_gh_remote_head_oid "$remote_url" "$remote_branch" || return 1
+  _git_gh_remote_head_oid "$remote_url" "$remote_branch" || return $?
   [[ "$REPLY" == "$remote_head_oid" ]] || {
     _git_error "The remote head changed after review; retry."
     return 1
@@ -789,27 +813,30 @@ git-pr-create() {
       _git_error "Unable to publish the exact head (exit $push_rc)."
       return $push_rc
     }
-    _git_gh_remote_head_oid "$remote_url" "$remote_branch" \
-      && [[ "$REPLY" == "$expected_head" ]] || {
+    local -i probe_rc=0
+    _git_gh_remote_head_oid "$remote_url" "$remote_branch" || probe_rc=$?
+    if (( probe_rc != 0 )) || [[ "$REPLY" != "$expected_head" ]]; then
       _git_error \
         "Push returned success, but the published head could not be verified."
-      return 1
-    }
+      return $(( probe_rc == 0 ? 1 : probe_rc ))
+    fi
     published_now=1
   fi
   _git_gh_require_same_repo || {
+    local -i probe_rc=$?
     _git_error "The GitHub repository changed before PR creation."
     (( published_now )) && _git_warn \
       "Partial result: the reviewed head remains published at $remote_branch."
-    return 1
+    return $probe_rc
   }
-  _git_gh_base_oid "$base" \
-    && [[ "$REPLY" == "$base_oid" ]] || {
+  local -i probe_rc=0
+  _git_gh_base_oid "$base" || probe_rc=$?
+  if (( probe_rc != 0 )) || [[ "$REPLY" != "$base_oid" ]]; then
     _git_error "The GitHub base branch changed before PR creation."
     (( published_now )) && _git_warn \
       "Partial result: the reviewed head remains published at $remote_branch."
-    return 1
-  }
+    return $(( probe_rc == 0 ? 1 : probe_rc ))
+  fi
 
   local -a create_args=(
     pr create
@@ -849,21 +876,23 @@ git-pr-create() {
   fi
 
   _git_gh_require_same_repo || {
+    local -i probe_rc=$?
     _git_error "The GitHub repository changed after PR creation."
     _git_warn \
       "Partial result: PR #$created_number may exist but was not verified."
     (( published_now )) && _git_warn \
       "The reviewed head remains published at $remote_branch."
-    return 1
+    return $probe_rc
   }
   local -a created_pr=()
   _git_gh_created_pr_current "$created_number" || {
+    local -i probe_rc=$?
     _git_error "Unable to verify the pull request after creation."
     _git_warn \
       "Partial result: PR #$created_number may exist at $created_url."
     (( published_now )) && _git_warn \
       "The reviewed head remains published at $remote_branch."
-    return 1
+    return $probe_rc
   }
   created_pr=("${reply[@]}")
   [[ "${created_pr[2]}" == "open" \
@@ -977,7 +1006,7 @@ git-pr-checkout() {
       return 2
     }
   fi
-  _git_gh_repo_context || return 1
+  _git_gh_repo_context || return $?
   _git_context_refresh || return 1
 
   local number="${1:-}"
@@ -996,7 +1025,7 @@ git-pr-checkout() {
     _git_gh_pick_pr open || picker_rc=$?
     if (( picker_rc != 0 )); then
       (( picker_rc == 3 )) && return 0
-      return 1
+      return $picker_rc
     fi
     number="${reply[2]}"
   fi
@@ -1007,8 +1036,9 @@ git-pr-checkout() {
 
   local -a reply=()
   _git_gh_pr_current "$number" || {
+    local -i probe_rc=$?
     _git_error "Pull request #$number is not open or cannot be resolved."
-    return 1
+    return $probe_rc
   }
   local pr_id="${reply[1]}"
   local pr_state="${reply[2]}"
@@ -1019,10 +1049,11 @@ git-pr-checkout() {
   }
   _git_require_same_context \
     "$expected_root" "$expected_head" "$expected_fingerprint" || return 1
-  _git_gh_require_same_repo || return 1
+  _git_gh_require_same_repo || return $?
   _git_gh_pr_current "$number" || {
+    local -i probe_rc=$?
     _git_error "Pull request #$number changed before checkout."
-    return 1
+    return $probe_rc
   }
   [[ "${reply[1]}" == "$pr_id" \
     && "${reply[2]}" == "open" \

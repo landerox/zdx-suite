@@ -610,6 +610,13 @@ fields.
 
 The Git suite helps you manage local changes, branches, repositories, pull requests, and Git identities.
 
+Remote and GitHub observations used to prepare a plan have a fixed 30-second
+deadline. A timeout returns `124`; interrupted observations retain `130` or
+`143`. A started mutation follows its own execution policy. Help and invalid
+arguments are handled before repository probes. Git completion offers local or
+uniquely cached remote branch names and avoids Apple's Git placeholder when
+Command Line Tools cannot be established.
+
 ### 👤 Identities & Routing
 
 ZDX allows you to define multiple git profiles (e.g., Personal vs. Work) with different email addresses, GPG signing keys, and SSH keys.

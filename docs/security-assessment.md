@@ -2675,6 +2675,15 @@ memory or CPU during inspection.
   caller `FORCE_FLOAT`, while the command keeps its inherited option state
   under the documented process policy.
 - System process, port, and service collectors use bounded local probes.
+- Git remote and GitHub observations before planning use a fixed 30-second
+  timeout through the suite timeout service, with closed stdin and disabled
+  credential prompts. Failed producers are checked before their output is
+  consumed; timeout and interruption statuses remain distinct. Argument errors
+  are rejected before repository probes, and completion refuses the macOS Git
+  placeholder when Command Line Tools cannot be established. Isolated tests in
+  `git_probe_cli.bats` cover these controls. Deadlines apply per observation,
+  not to a whole workflow or an already-started mutation; transport and native
+  terminal behavior remain separate acceptance boundaries.
 - `git-recover --deep` bounds its `git fsck` search to 60 seconds; when the
   Git suite is sourced without the core, the bound needs `timeout` or
   `gtimeout` and the search fails closed without either.
@@ -3189,4 +3198,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-08.
+Last reviewed: 2026-11-14.
