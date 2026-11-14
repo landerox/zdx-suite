@@ -210,6 +210,12 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Git: clean temporary fetch refs after interruption, report exact unrun
+  targets and observed cleanup state, and distinguish current remote refs
+  from upstream-only configuration. Plans use shared headings, exact counts
+  and partial results; selected-file discard preserves submodule checkouts,
+  and failed JSON producers publish no partial document.
+
 - Git safety coverage now exercises actual pull-request publication and
   partial failure through a strict GitHub recorder, exact forced-push leases,
   and merge and rebase application against disposable local remotes.

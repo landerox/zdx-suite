@@ -719,7 +719,8 @@ you manage with `git-menu`:
   Add Staged Changes, or Reset Author.
 - `git-discard [--all [--include-untracked]]` — Discard the unstaged changes of
   chosen files, or every uncommitted change with `--all`; untracked files are
-  deleted only with `--include-untracked`, and ignored files never.
+  deleted only with `--include-untracked`, and ignored files never. Submodule
+  checkout changes stay outside the selectable file rows and are preserved.
 - `git-pull` — Choose pull with merge, rebase, or fast-forward, fetch the
   upstream branch, or fetch all branches and prune; each mode shows its plan
   before asking. Rebase keeps other local branches at their existing refs,
@@ -730,7 +731,9 @@ you manage with `git-menu`:
   it before retrying. Branch publication, including a required PR head push,
   needs protocol-v2 observations that report no alias. A server that does
   not accept `GIT_PROTOCOL` must enable that capability, or publication must
-  be reviewed and performed manually on the server.
+  be reviewed and performed manually on the server. Equal local and remote
+  commits are already current and require no push. `--set-upstream` can still
+  plan local upstream configuration without claiming a remote ref update.
 - `git-pr-checkout [NUMBER]` — Check out the reviewed head of a pull request in
   detached mode; the suite fetches it from a configured remote for the
   repository, with that remote's Git credentials, and refuses a head that
@@ -757,15 +760,19 @@ you manage with `git-menu`:
 - `clean-branches` — Preview and remove merged local branches while protecting
   the current and resolved default branches, existing configured defaults,
   `main`, `master`, and branches tracking the selected remote default. Unknown
-  defaults fail closed with `git remote set-head <remote> -a` guidance.
+  defaults fail closed with `git remote set-head <remote> -a` guidance. A
+  successful branch deletion with an ordinary configuration-cleanup failure
+  returns success and warns on that target and in the final verdict.
 - `clean-remote-merged` — Preview and remove merged remote branches with exact
   leases.
 
 If pull cannot prove a file/directory conflict's side-file paths, preserve
 ignored and untracked files and perform the merge or rebase manually.
 
-Interrupting a discard, stash drop, or local branch or tag deletion stops before the remaining targets,
-keeps the interruption status, and lists the targets that were not run.
+Interrupting a discard, stash drop, branch or tag deletion, or multi-target
+publication stops before the remaining targets, keeps the interruption
+status, and lists the targets that were not run. Fetch and fetch-prune clean
+their invocation-owned temporary refs after interruption.
 
 ---
 

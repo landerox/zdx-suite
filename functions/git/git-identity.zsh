@@ -963,7 +963,8 @@ _git_identity_compare() {
 _git_identity_check_json() {
   emulate -L zsh
 
-  command jq -n -c -M \
+  local json_document=""
+  json_document=$(command jq -n -c -M \
     --arg schema "zdx.git-identity-check.v1" \
     --argjson applicable "$1" \
     --arg reason "$2" \
@@ -990,10 +991,11 @@ _git_identity_check_json() {
          ],
          fix_command: ($fix_command | text)
        }' \
-    --args "${@:9}" || {
+    --args "${@:9}") || {
     _git_error "Unable to write the JSON identity document."
     return 1
   }
+  print -r -- "$json_document"
 }
 
 git-identity-check() {

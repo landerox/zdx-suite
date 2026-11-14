@@ -34,11 +34,7 @@ _git_color_enabled() {
 }
 
 _git_header() {
-  if _git_color_enabled; then
-    printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
-  else
-    printf '\n════ %s ════\n\n' "${(V)1}" >&2
-  fi
+  _git_ui_heading "$@"
 }
 
 _git_success() {
@@ -92,6 +88,27 @@ _git_blank() {
 
 _git_display_escape() {
   print -r -- "${(V)1}"
+}
+
+# REPLY: a display path with an exact HOME prefix shown as ~. The caller
+# escapes it for presentation; this does not quote a shell argument.
+# Usage: _git_path_display <path>
+_git_path_display() {
+  emulate -L zsh
+
+  REPLY=""
+  (( $# == 1 )) || return 2
+  local display_path="$1" display_home="${HOME-}"
+  if [[ -n "$display_home" && "$display_home" != / \
+    && "$display_path" == "$display_home" ]]; then
+    REPLY="~"
+  elif [[ -n "$display_home" && "$display_home" != / \
+    && "$display_path" == "$display_home"/* ]]; then
+    REPLY="~/${display_path#"$display_home"/}"
+  else
+    REPLY="$display_path"
+  fi
+  return 0
 }
 
 # Command-menu records use `|`; external values are display-only and must not
@@ -194,7 +211,11 @@ _git_ui_heading() {
     _zdx_ui_heading "$@"
     return
   fi
-  _git_header "$1"
+  if _git_color_enabled; then
+    printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
+  else
+    printf '\n════ %s ════\n\n' "${(V)1}" >&2
+  fi
 }
 
 # One key-value line with the shared 18-column key. Usage: _git_ui_label <key> <value>
@@ -1549,7 +1570,10 @@ _git_remote_push_url() {
   }
   local output=""
   output=$(command git remote get-url --push --all "$remote" 2>/dev/null) || {
-    _git_error "Unable to resolve the push URL for '$(_git_display_escape "$remote")'."
+    local -i producer_rc=$?
+    _git_error "Unable to resolve the push URL for '$(_git_display_escape "$remote")' (exit $producer_rc)."
+    (( producer_rc == 124 || producer_rc == 130 || producer_rc == 143 )) \
+      && return $producer_rc
     return 1
   }
   local -a urls=()

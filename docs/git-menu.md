@@ -427,8 +427,9 @@ Without `--all`, `git-discard` opens a picker whose first rows are
 `Discard all changes` and, when untracked files exist, `Discard all changes
 and delete untracked files`. The remaining rows are files with unstaged
 changes; marking files restores only their unstaged changes from the index
-and keeps staged changes. The preview shows what each row would discard, and
-a marked all-changes row covers every file row.
+and keeps staged changes. Submodule checkout changes are excluded from the
+file rows and are left in place. The preview shows what each row would
+discard, and a marked all-changes row covers every file row.
 
 `--all` plans every staged and unstaged tracked change back to HEAD: a path in
 HEAD is restored in the index and working tree, and a staged new file is
@@ -607,9 +608,11 @@ through `git-menu --help` and discards the usage text.
 ## Structured data
 
 `git-status --json` and `git-identity-check --json` write exactly one JSON
-object and a newline to stdout, built with `jq -n` from `--arg` and
-`--argjson` values; jq is checked after the arguments are parsed, and its
-absence returns `1` with an error. JSON mode never opens fzf or prompts,
+object and a newline to stdout, built with `jq -n -c -M` from `--arg` and
+`--argjson` values. The complete document is captured before publication; a
+failed jq producer returns `1` without publishing a partial prefix. jq is
+checked after the arguments are parsed; its absence returns `1` with an
+error. JSON mode never opens fzf or prompts,
 keeps warnings and errors on stderr, has the same exit status as text mode,
 and never contains key material. Keys are snake_case, an unknown or
 unavailable value is `null`, and the first key names the schema.
@@ -959,6 +962,10 @@ selected remote when deletion includes it. Interrupted local tag and branch
 deletions preserve status 130 or 143, stop before later targets, and list those
 targets as not run.
 
+An explicit tag or cleanup target that does not exist or is not eligible
+returns `1`, including when the complete candidate inventory is empty.
+An unnamed empty inventory remains a successful no-op and opens no picker.
+
 A computed rebase file/directory conflict can invent a side-file label that
 differs from the one `merge-tree` exposes. The suite refuses that unprovable
 write before ref promotion or worktree mutation. When merge-tree computation
@@ -1094,6 +1101,11 @@ ref. This server-operator trust limit remains alongside the final-query-to-push
 race; protocol-v2 observation cannot prove that every absent ref is direct.
 Normal pushes also use frozen source OIDs and exact OID-or-absence leases, and
 must prove a fast-forward before execution. Raw `--force` is unsupported.
+An equal local and remote OID is already current: ordinary, force-with-lease,
+and all-branch pushes do not plan or perform a remote ref update for it.
+`--set-upstream` can still require local tracking-ref and upstream
+configuration; its plan and result identify that local work separately from
+remote ref updates and retain the same identity and lease checks.
 Push planning rejects multiple push URLs and uses the one frozen URL for
 snapshot, execution, and postcondition checks.
 Tag publication and deletion, including no-op detection, use that same single
@@ -1102,11 +1114,22 @@ remote branch cleanup also rejects multiple push URLs before mutation.
 Every push passes `--no-follow-tags --recurse-submodules=no`, so
 `push.followTags` and `push.recurseSubmodules` cannot add refs that the plan
 never listed. The `git-pr-create` publication is an exact lease on the
-reviewed remote head (or its absence) after proving a fast-forward. Because a
-push to the frozen URL bypasses the remote's fetch refspec,
-`clean-remote-merged` deletes the matching remote-tracking ref with an exact
-OID lease, and `clean-branches` removes the deleted branch's configuration
-section as `git branch -d` does. Upstreams are configured from full
+reviewed remote head (or its absence) after proving a fast-forward. A push to
+the frozen URL can already update or remove the matching local tracking ref,
+depending on Git's version and the configured fetch refspec. After a remote
+deletion, `clean-remote-merged` removes a remaining matching direct tracking
+ref with `--no-deref` and an exact OID lease. It reports the observed state:
+proven absence needs no retention warning, a retained or changed ref is named,
+and a failed observation is unknown. A symbolic ref, including a dangling
+alias, is not proof of absence. Ordinary housekeeping failures warn without
+changing a completed remote deletion's status `0`; timeout and interruption
+statuses remain distinct.
+
+`clean-branches` removes the deleted branch's configuration section as
+`git branch -d` does. If this optional cleanup fails ordinarily, the branch
+deletion remains successful (`0`), but the target result and final verdict
+warn about retained or unverified configuration. Proven section absence is
+quiet; a failed read cannot establish absence. Upstreams use full
 `refs/remotes/<remote>/<branch>` names. `git ls-remote` matches patterns
 against the tail of each ref, so remote snapshots keep only refs that match
 the requested exact ref or literal prefix.
@@ -1124,8 +1147,9 @@ temporary namespace with implicit ref mappings, tags, pruning, submodules,
 `FETCH_HEAD`, commit-graph writes, and maintenance disabled. Fetched OIDs must
 match the frozen remote snapshot before canonical tracking refs are promoted
 with compare-and-swap updates. Temporary refs are removed with exact OID
-leases, and the exact fetch of `git-pull` removes its temporary ref on every
-exit, an interruption included, which keeps its status (`130` or `143`).
+leases. Both the exact fetch and fetch-prune paths register `always` cleanup
+before fetching, run leased cleanup of owned temporary refs on every exit,
+and preserve interruption status (`130` or `143`).
 Before a merge, rebase, or fast-forward changes any ref or file, `git-pull`
 refuses and lists the untracked or ignored paths that the fetched commit
 would overwrite or remove; a rebase also checks the paths that its replayed
@@ -1167,7 +1191,10 @@ Discard of selected files or all changes, stash deletion, multi-ref pushes,
 tag publication, tag deletion, and remote branch cleanup stop before later
 targets on interruption (`130` or `143`), preserve that status, list the
 targets that were not run, and report completed work. Ordinary target
-failures still allow independent selected targets to run.
+failures still allow independent selected targets to run. A stopped
+per-target observation lists the current unattempted target as well as later
+targets; a stopped mutation distinguishes the interrupted target from later
+unattempted targets. Mixed successful and failed results mark partial timing.
 
 GitHub writes re-fetch the repository, pull request, or branch state after
 confirmation. Multi-target writes run sequentially unless concurrency is

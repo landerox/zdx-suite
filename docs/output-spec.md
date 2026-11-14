@@ -14,14 +14,12 @@ the reference implementations. The VPN suite is the reference
 for [report sections](#report-sections) and
 [exact-target plans](#exact-target-plans).
 
-System, Developer, Python, VPN, File, Workspace, and the dependency doctor
+System, Developer, Python, VPN, File, Workspace, Git, and the dependency doctor
 print headings and key-value lines through the core services when available,
 with plain standalone fallbacks. Plugin listings use the shared table service.
 The remaining gaps are:
 
-- Git and Environment print most headings with their own `_git_header` and
-  `_env_header`; Git's `_git_ui_heading` and `_git_label` already delegate to
-  the core.
+- Environment still prints most headings with its own `_env_header`.
 - The master `zdx` menu prints its own `ℹ [info]` and `✘ [error]` message
   forms instead of the glyphs below.
 

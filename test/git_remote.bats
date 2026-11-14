@@ -370,9 +370,16 @@ init_diverged_pull_worktree() {
 # that run after it use $REAL_GIT.
 install_symref_swap_before_delete() {
   export SWAP_TARGET="$1" REAL_GIT
+  export SWAP_TRACKING_REF="${2:-}" SWAP_TRACKING_OID="${3:-}"
   REAL_GIT=$(command -v git)
   cat >"$TEST_MOCK_BIN/git" <<'MOCK'
 #!/usr/bin/env bash
+if [[ "${1:-}" == push && -n "$SWAP_TRACKING_REF" ]]; then
+  "$REAL_GIT" "$@" || exit "$?"
+  "$REAL_GIT" update-ref --no-deref "$SWAP_TRACKING_REF" "$SWAP_TRACKING_OID" || exit 97
+  : >"$HOME/.tracking-post-push.done"
+  exit 0
+fi
 if [[ "${1:-}" == update-ref && ! -e "$HOME/.symref-swap.done" ]]; then
   previous=""
   for argument in "$@"; do
@@ -1737,9 +1744,13 @@ MOCK
   git -C "$SEED_REPO" push -q \
     origin refs/heads/merged-remote:refs/heads/merged-remote
   git -C "$WORK_REPO" fetch -q origin
-  export TRACKING_SWAP_MAIN_OID
+  export TRACKING_SWAP_MAIN_OID TRACKING_SWAP_REVIEWED_OID
   TRACKING_SWAP_MAIN_OID=$(git -C "$WORK_REPO" rev-parse refs/heads/main)
-  install_symref_swap_before_delete refs/heads/main
+  TRACKING_SWAP_REVIEWED_OID=$(git -C "$WORK_REPO" rev-parse refs/remotes/origin/merged-remote)
+  # Make optional housekeeping reachable regardless of the host Git version's
+  # tracking-ref side effect of a URL push, then race its leased local delete.
+  install_symref_swap_before_delete refs/heads/main \
+    refs/remotes/origin/merged-remote "$TRACKING_SWAP_REVIEWED_OID"
 
   run run_zsh '
     cd "$WORK_REPO" || return 90
@@ -1753,6 +1764,7 @@ MOCK
   fi
   [ "$status" -eq 0 ]
   [ ! -s "$HOME/swap.stdout" ]
+  [ -e "$HOME/.tracking-post-push.done" ]
   [ -e "$HOME/.symref-swap.done" ]
   [ "$("$REAL_GIT" -C "$WORK_REPO" rev-parse --verify --quiet \
     refs/heads/main)" = "$TRACKING_SWAP_MAIN_OID" ]
@@ -2447,7 +2459,7 @@ MOCK
     "$HOME/plan.stderr"
   grep -Fq "Remote-tracking ref 'origin-tags/release' is a symbolic ref" \
     "$HOME/late.stderr"
-  grep -Fq "Tag deletion incomplete: 0 deleted, 1 failed." "$HOME/late.stderr"
+  grep -Fq "Tag deletion failed: 1 of 1 tag deletion failed." "$HOME/late.stderr"
   git --git-dir="$REMOTE_REPO" show-ref --verify --quiet refs/tags/release
   [ "$(git -C "$WORK_REPO" rev-parse refs/tags/release)" = "$TAGMAP_TAG_OID" ]
   [ "$(git -C "$WORK_REPO" rev-parse refs/heads/main)" = "$TAGMAP_MAIN_OID" ]
@@ -2560,7 +2572,7 @@ MOCK
     "$HOME/plan.stderr"
   grep -Fq "The fetch refspec of 'origin' maps refs/tags/release to refs/heads/main, which is not a remote-tracking ref" \
     "$HOME/late.stderr"
-  grep -Fq "Tag deletion incomplete: 0 deleted, 1 failed." "$HOME/late.stderr"
+  grep -Fq "Tag deletion failed: 1 of 1 tag deletion failed." "$HOME/late.stderr"
   git --git-dir="$REMOTE_REPO" show-ref --verify --quiet refs/tags/release
   git -C "$WORK_REPO" show-ref --verify --quiet refs/tags/release
   [ "$(git -C "$WORK_REPO" rev-parse refs/heads/main)" = "$OUTSIDE_TAG_MAIN_OID" ]
@@ -2668,7 +2680,7 @@ MOCK
     "$HOME/plan.stderr"
   grep -Fq "Remote-tracking ref 'origin-tags/release' is a symbolic ref" \
     "$HOME/late.stderr"
-  grep -Fq "Tag push incomplete: 0 succeeded, 1 failed." "$HOME/late.stderr"
+  grep -Fq "Tag push failed: 1 of 1 tag push failed." "$HOME/late.stderr"
   run git --git-dir="$REMOTE_REPO" show-ref --verify --quiet refs/tags/release
   [ "$status" -eq 1 ]
   [ "$(git -C "$WORK_REPO" rev-parse refs/heads/main)" = "$TAGPUSH_MAIN_OID" ]

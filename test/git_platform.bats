@@ -408,7 +408,7 @@ MOCK
   [ "$output" = "github.com github.com github-work" ]
   grep -Fq "targets github-work/example/repository" "$HOME/default.stderr"
   ! grep -Fq "targets github-work" "$HOME/config.stderr" || false
-  grep -Fq "Dry run complete" "$HOME/config.stderr"
+  grep -Fq 'Dry run: 1 pull request planned; nothing was created.' "$HOME/config.stderr"
   grep -Fxq "ssh.exe -o BatchMode=yes -G -- github-work" "$HOME/ssh-calls"
   grep -Fxq "ssh-env -G -- github-work" "$HOME/ssh-calls"
   grep -Fxq "ssh-program -G -- github-work" "$HOME/ssh-calls"

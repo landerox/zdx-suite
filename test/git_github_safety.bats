@@ -465,7 +465,7 @@ MOCKGH
   [ ! -s "$HOME/dry.stdout" ]
   [ ! -s "$HOME/nonterminal.stdout" ]
   [ ! -s "$HOME/cancel.stdout" ]
-  grep -Fq 'Dry run complete; no branch or pull request was changed.' "$HOME/dry.stderr"
+  grep -Fq 'Dry run: 1 pull request planned; nothing was created.' "$HOME/dry.stderr"
   grep -Fq 'Interactive confirmation requires a terminal' "$HOME/nonterminal.stderr"
   grep -Fq 'Cancelled. No changes were made.' "$HOME/cancel.stderr"
   assert_github_no_unexpected_calls
