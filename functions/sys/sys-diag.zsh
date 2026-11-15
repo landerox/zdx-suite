@@ -320,17 +320,8 @@ _sys_diag_format_uptime() {
   }
   uptime_seconds="$REPLY"
 
-  local -i days=$(( uptime_seconds / 86400 ))
-  local -i hours=$(( (uptime_seconds % 86400) / 3600 ))
-  local -i minutes=$(( (uptime_seconds % 3600) / 60 ))
-
-  if (( days > 0 )); then
-    printf '%dd %dh %dm' "$days" "$hours" "$minutes"
-  elif (( hours > 0 )); then
-    printf '%dh %dm' "$hours" "$minutes"
-  else
-    printf '%dm' "$minutes"
-  fi
+  _sys_duration_label "$uptime_seconds" || return $?
+  print -r -- "$REPLY"
 }
 
 _sys_diag_tool_version() {
@@ -801,9 +792,11 @@ sys-info() {
   local cpu_record core_count cpu_model
   cpu_record=$(_sys_diag_cpu_record 2>/dev/null) || cpu_record=""
   IFS=$'\t' read -r core_count cpu_model <<< "$cpu_record"
-  if [[ "$core_count" =~ '^[0-9]+$' ]]; then
+  local REPLY=""
+  if [[ "$core_count" =~ '^[0-9]+$' ]] \
+    && _sys_count_noun "$core_count" "logical core"; then
     _sys_label "CPU:" \
-      "$core_count logical cores — $(_sys_display_escape "${cpu_model:-Unknown}")"
+      "$REPLY — $(_sys_display_escape "${cpu_model:-Unknown}")"
   elif [[ -n "$cpu_model" && "$cpu_model" != Unknown ]]; then
     _sys_label "CPU:" "logical cores unavailable — $(_sys_display_escape "$cpu_model")"
   else
@@ -820,8 +813,10 @@ sys-info() {
   runtime_record=$(_sys_diag_runtime_record 2>/dev/null) || runtime_record=""
   IFS=$'\t' read -r uptime_seconds load_one load_five load_fifteen \
     <<< "$runtime_record"
-  if [[ "$uptime_seconds" =~ '^[0-9]+$' ]]; then
-    _sys_label "Uptime:" "$(_sys_diag_format_uptime "$uptime_seconds")"
+  local uptime_display=""
+  if [[ "$uptime_seconds" =~ '^[0-9]+$' ]] \
+    && uptime_display=$(_sys_diag_format_uptime "$uptime_seconds"); then
+    _sys_label "Uptime:" "$uptime_display"
   else
     _sys_label "Uptime:" "unavailable"
   fi
@@ -1147,10 +1142,10 @@ sys-health() {
 
   _sys_blank
   if (( issues == 0 )); then
-    _sys_success "System health: all available checks passed"
+    _sys_success "System health: all available checks passed."
   else
     _sys_count_noun "$issues" issue
-    _sys_warn "System health: $REPLY found"
+    _sys_warn "System health: $REPLY found — review the output above."
   fi
   return 0
 }

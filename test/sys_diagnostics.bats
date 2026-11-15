@@ -235,7 +235,7 @@ EOF
       "CPU:" "8 logical cores — Test CPU" \
       "Disk (/):" "48.8 MiB used of 97.7 MiB (50%)" \
       "Disk (HOME):" "48.8 MiB used of 97.7 MiB (50%)" \
-      "Uptime:" "1d 1h 1m" \
+      "Uptime:" "1d 01h" \
       "Load:" "1.00 2.50 3 (1m 5m 15m)"
     printf '\n\n'
     printf '  %-19s%s\n' "Git:" "2.45.0"

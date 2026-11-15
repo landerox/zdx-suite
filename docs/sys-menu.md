@@ -239,6 +239,15 @@ dashes, whitespace and slashes are rejected before selecting or probing a
 service manager. Other identifiers still undergo the existing backend-specific
 validation.
 
+Human CPU counts use the shared counted-noun service, and uptime uses the
+shared duration service, including its day unit. If duration rendering is
+refused, text displays `unavailable` while numeric JSON seconds are unchanged.
+Missing observations retain their usual unavailable/null mapping.
+Health ends with one complete counted
+diagnosis verdict, without changing its findings-versus-failure statuses.
+The startup benchmark retains integer milliseconds for its measurements and
+thresholds; its ordinary timing footer follows the shared duration format.
+
 ### JSON output
 
 `sys-info --json` and `sys-wsl --json` follow the repository JSON output
@@ -252,9 +261,11 @@ commands accept `--json`, and with it a command never opens fzf or prompts:
 - keys are snake_case; an unknown or unavailable value is `null`, never an
   empty string or `unknown`; booleans are JSON booleans; counts and sizes in
   bytes are numbers;
-- the document is built only by `jq -n` from `--arg` values; lists travel to
+- the document is built only by `jq -cMn` from `--arg` values; lists travel to
   jq as rows whose fields are proven free of control characters, never as
   concatenated JSON text;
+- every document is captured before publication, so a failed jq producer
+  cannot publish partial stdout;
 - without a usable `jq`, the command names the missing capability on stderr
   and returns `1` before any host probe;
 - the exit status equals the text mode's. A `sys-wsl` that does not apply
@@ -463,12 +474,20 @@ Telemetry dashboard and browser paths:
 - refuse files larger than `SYS_TELEMETRY_MAX_READ_BYTES`, which defaults to
   5 MiB;
 - parse only the five documented fields and validate their character and
-  numeric domains;
+  numeric domains, including complete integer tokens rather than numeric
+  prefixes;
 - reject implausible durations above one year and skip malformed or unsafe
-  records, including a partial final record;
+  records, including a final object without its terminating LF;
 - send derived TSV fields to fzf instead of raw JSON;
 - never display arguments, paths, environment values, output, or unknown JSON
   fields.
+
+Size validation and the checked complete-line count are separate reads;
+they do not provide an atomic snapshot against concurrent replacement or
+append. Human dashboard values, browser labels and the fixed preview use
+the shared duration format. A precomputed display field leaves all five
+machine fields unchanged, including integer milliseconds. An aggregate
+outside the display helper's accepted range is shown as `unavailable`.
 
 These reader controls are complemented by the owner-only writer, bounded
 retention, atomic replacement, and hardened clear operation described under

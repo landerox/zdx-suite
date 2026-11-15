@@ -483,14 +483,20 @@ snippet and executes unintended code.
 - Many external calls quote targets and use arrays for complex commands.
 - `zsh -n` parses tracked Zsh files.
 - System telemetry browsing derives fzf rows from validated fields and never
-  sends raw persisted JSON to a preview.
+  sends raw persisted JSON to a preview. Its fixed preview receives a
+  precomputed duration label while retaining the numeric machine fields and
+  exact offered-row membership.
+- Checkout diagnostics abbreviate HOME only at its path boundary and leave
+  actual paths, authorization identities and command arguments unchanged;
+  the logger escapes control bytes once.
 - `sys-wsl` parses `/etc/wsl.conf` and `.wslconfig` as data with a fixed INI
   grammar into TAB-separated records whose fields cannot contain control
   characters. Values reach only escaped UI and jq `--arg` values: nothing is
   sourced, expanded, evaluated, or executed, and the `[boot]` command is split
   into words only to recognize an `ip link set … mtu` pin. The `--json`
-  documents of `sys-info` and `sys-wsl` are built by jq, never by
-  concatenating text.
+  documents of `sys-info` and `sys-wsl` are built by compact, monochrome jq,
+  never by concatenating text, and are captured before publication so a
+  failed producer cannot emit partial public stdout.
 - System resource collectors emit typed TSV, preserve opaque identifiers, and
   revalidate the selected process, listener, or service state before mutation.
 - Every System picker, including the nested telemetry, process, listener, and
@@ -2162,9 +2168,12 @@ unintended targets.
 - System telemetry readers refuse symlinks, non-regular files, files not owned
   by the current user, unreadable files, and files above a configurable 5 MiB
   default limit.
-- Readers validate the five-field telemetry schema, skip malformed records,
-  cap a single duration at one year, and tolerate a partial final record
-  without evaluating it.
+- Readers validate the five-field telemetry schema and complete integer
+  tokens, cap a single duration at one year, and admit only LF-complete
+  records without evaluating their contents. Size and line-count checks are
+  separate reads, retaining the concurrent replacement/append check-use
+  limitation. Display failures become unavailable rather than a fabricated
+  zero; the accepted persisted duration domain is unchanged.
 - The opt-in core writer validates the same five fields and canonical label,
   checks the canonical directory's ancestors before creating state or
   narrowing an already safe directory's mode, and refuses unsafe ancestors

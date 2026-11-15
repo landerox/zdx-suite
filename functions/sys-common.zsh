@@ -866,7 +866,7 @@ _sys_json_require() {
 # Runs jq without input and prints one compact JSON value.
 # Usage: _sys_jq <jq arguments...> <program>
 _sys_jq() {
-  command jq -cn "$@"
+  command jq -cMn "$@"
 }
 
 # REPLY: the validated SYS_COMMAND_CAPTURE_MAX_BYTES limit.

@@ -219,6 +219,12 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- System: use shared duration and counted-noun presentation, preserve compact
+  monochrome JSON, and abbreviate HOME in checkout diagnostics. Telemetry
+  rejects truncated integer tokens and incomplete final lines; its dashboard,
+  browser and preview share duration units while startup benchmarks retain
+  millisecond precision.
+
 - System: preserve unavailable diagnostic facts instead of inventing zeroes,
   recognize custom WSL2 kernels, count installed dpkg records and completed OOM
   victims, handle empty npm trees, and parse GNU/BSD disk rows containing spaces.
