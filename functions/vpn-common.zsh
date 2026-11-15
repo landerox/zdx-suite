@@ -1792,17 +1792,22 @@ _vpn_ensure_profile_dir() {
       zstat -LH parent_before -- "$creation_parent" 2>/dev/null || return 1
       local parent_identity="${parent_before[device]}:${parent_before[inode]}:${parent_before[uid]}:${parent_before[gid]}:${parent_before[mode]}"
 
-      local outcome
-      outcome=$(_vpn_confirm_outcome "Create ${dir} now?")
-      case "$outcome" in
-        confirmed) ;;
-        unavailable)
+      local -i confirm_status=0
+      _vpn_confirm "Create ${dir} now?" || confirm_status=$?
+      case "$confirm_status" in
+        0) ;;
+        1)
+          _vpn_info "Cancelled."
+          return 3
+          ;;
+        2)
           _vpn_error \
-            "Creating $dir needs confirmation; pass --yes in a non-interactive shell."
+            "Creating $dir needs confirmation; run this command from a terminal or create the directory first."
           return 1
           ;;
+        130|143) return "$confirm_status" ;;
         *)
-          _vpn_info "Cancelled."
+          _vpn_error "Could not confirm creation of the profile directory."
           return 1
           ;;
       esac
@@ -2472,9 +2477,280 @@ _vpn_fzf() {
     SHELL=/bin/sh fzf "${options[@]}" "$@" "${terminal_options[@]}"
 }
 
-# Single-column picker for profile and interface selection. It shares the suite
-# theme instead of building a bare fzf call per call site.
+# Adapt the existing stdout-based temporary-root resolver to the capture
+# callback's REPLY protocol without changing VPN's root selection policy.
+_vpn_picker_temp_root() {
+  REPLY=""
+  local resolved=""
+  resolved=$(_vpn_temp_root) || return $?
+  REPLY="$resolved"
+}
+
+# Runs one foreground picker. REPLY holds its captured selection; the core
+# implementation or the generated standalone copy owns resource cleanup.
+_vpn_fzf_capture() {
+  local -a zpc_options=(
+    --tag vpn --noun VPN --error _vpn_error
+    --picker _vpn_fzf --temp-root _vpn_picker_temp_root
+  )
+  if (( ${+functions[_zdx_picker_capture]} )); then
+    _zdx_picker_capture "${zpc_options[@]}" -- "$@"
+  else
+    _vpn_picker_capture "${zpc_options[@]}" -- "$@"
+  fi
+}
+
+# >>> zdx-primitive picker-capture
+# Runs one picker synchronously in the terminal foreground and captures only
+# its selection stdout. The result file lives in a private mode-700
+# directory below the validated temporary root, is opened without following
+# links, and must keep its identity (device, inode, mode, owner, and one
+# link) and stay within the byte limit. REPLY is the selection and the
+# status is the picker's own. Status 125 means the capture failed or was
+# refused: a private directory or file could not be created or verified, the
+# result changed or grew past the limit, it could not be read, cleanup could
+# not prove it removed only its own files, or a failed picker returned data.
+# The one exception is the --expect key line that fzf prints when nothing
+# matches (status 1): it carries no selection, so REPLY stays empty and the
+# status stays 1. --write-limit also caps the file while the picker writes:
+# the picker then runs in a synchronous foreground subshell whose soft and
+# hard file-size limits are lowered to the byte limit, and a picker stopped
+# by SIGXFSZ keeps that exact status with an empty REPLY. Generated copies in
+# the suite common files keep a suite working without the core;
+# `just sync-primitives` writes them.
+# Usage: _vpn_picker_capture [--max-bytes N] [--write-limit] --tag TAG \
+#          --noun TEXT --error FUNCTION --picker FUNCTION \
+#          --temp-root FUNCTION -- [picker-argument...]
+_vpn_picker_capture() {
+  emulate -L zsh
+  unsetopt force_float
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  REPLY=""
+  local zpc_tag="" zpc_noun="" zpc_error_function="" zpc_picker_function=""
+  local zpc_temp_root_function=""
+  local -i zpc_max_bytes=65536 zpc_write_limit=0
+  while (( $# > 0 )); do
+    case "$1" in
+      --write-limit) zpc_write_limit=1; shift ;;
+      --max-bytes)
+        [[ "${2-}" == <1-16777216> ]] || return 2
+        zpc_max_bytes="$2"
+        shift 2
+        ;;
+      --tag) zpc_tag="${2-}"; shift 2 ;;
+      --noun) zpc_noun="${2-}"; shift 2 ;;
+      --error) zpc_error_function="${2-}"; shift 2 ;;
+      --picker) zpc_picker_function="${2-}"; shift 2 ;;
+      --temp-root) zpc_temp_root_function="${2-}"; shift 2 ;;
+      --) shift; break ;;
+      *) return 2 ;;
+    esac
+  done
+  [[ "$zpc_tag" =~ '^[a-z0-9]+(-[a-z0-9]+)*$' \
+    && -n "$zpc_noun" && "$zpc_noun" != *[[:cntrl:]]* \
+    && "$zpc_error_function" =~ '^_[a-z0-9_]+$' \
+    && "$zpc_picker_function" =~ '^_[a-z0-9_]+$' \
+    && "$zpc_temp_root_function" =~ '^_[a-z0-9_]+$' ]] \
+    && (( ${+functions[$zpc_error_function]} && ${+functions[$zpc_picker_function]} \
+      && ${+functions[$zpc_temp_root_function]} )) || return 2
+
+  local -i zpc_expect_key=0
+  local zpc_picker_argument=""
+  for zpc_picker_argument in "$@"; do
+    [[ "$zpc_picker_argument" == (--expect|--expect=*) ]] && zpc_expect_key=1
+  done
+
+  { zmodload -F zsh/stat b:zstat && zmodload zsh/system; } 2>/dev/null || {
+    "$zpc_error_function" "Zsh file-descriptor support is required for $zpc_noun pickers."
+    return 125
+  }
+  "$zpc_temp_root_function" "${TMPDIR:-/tmp}" 2>/dev/null || {
+    "$zpc_error_function" "Refusing an unsafe temporary root for $zpc_noun pickers."
+    return 125
+  }
+  local zpc_temp_root="${REPLY%/}"
+  REPLY=""
+  [[ -n "$zpc_temp_root" && "$zpc_temp_root" == /* ]] || {
+    "$zpc_error_function" "Refusing an unsafe temporary root for $zpc_noun pickers."
+    return 125
+  }
+
+  local zpc_capture_dir="" zpc_capture_file="" zpc_selection="" zpc_chunk=""
+  local zpc_directory_identity="" zpc_file_identity=""
+  local -i zpc_write_fd=-1 zpc_read_fd=-1 zpc_picker_rc=125 zpc_operation_rc=125
+  local -i zpc_read_rc=0 zpc_read_bytes=0 zpc_chunk_bytes=0 zpc_cleanup_failed=0
+  local -A zpc_directory_state=() zpc_file_state=()
+
+  zpc_capture_dir=$(umask 077; command mktemp -d \
+    "$zpc_temp_root/zdx-${zpc_tag}-fzf.XXXXXX" 2>/dev/null) || {
+    "$zpc_error_function" "Could not create a private $zpc_noun picker directory."
+    return 125
+  }
+  {
+    if [[ "$zpc_capture_dir" != "${zpc_capture_dir:a}" \
+      || "$zpc_capture_dir" != "${zpc_capture_dir:A}" \
+      || "${zpc_capture_dir:h}" != "$zpc_temp_root" \
+      || "${zpc_capture_dir:t}" != zdx-${zpc_tag}-fzf.?????? \
+      || ! -d "$zpc_capture_dir" || -L "$zpc_capture_dir" ]] \
+      || ! zstat -LH zpc_directory_state -- "$zpc_capture_dir" 2>/dev/null \
+      || (( (zpc_directory_state[mode] & 8#170000) != 8#040000 \
+        || zpc_directory_state[uid] != EUID \
+        || (zpc_directory_state[mode] & 8#777) != 8#700 )); then
+      "$zpc_error_function" "Refusing an unsafe $zpc_noun picker directory."
+      return 125
+    fi
+    zpc_directory_identity="${zpc_directory_state[device]}:${zpc_directory_state[inode]}:"\
+"${zpc_directory_state[mode]}:${zpc_directory_state[uid]}"
+
+    zpc_capture_file=$(umask 077; command mktemp \
+      "$zpc_capture_dir/result.XXXXXX" 2>/dev/null) || {
+      "$zpc_error_function" "Could not create a private $zpc_noun picker result."
+      return 125
+    }
+    if [[ "$zpc_capture_file" != "${zpc_capture_file:a}" \
+      || "$zpc_capture_file" != "${zpc_capture_file:A}" \
+      || "${zpc_capture_file:h}" != "$zpc_capture_dir" \
+      || "${zpc_capture_file:t}" != result.?????? \
+      || ! -f "$zpc_capture_file" || -L "$zpc_capture_file" ]] \
+      || ! zstat -LH zpc_file_state -- "$zpc_capture_file" 2>/dev/null \
+      || (( (zpc_file_state[mode] & 8#170000) != 8#100000 \
+        || zpc_file_state[uid] != EUID || zpc_file_state[nlink] != 1 \
+        || (zpc_file_state[mode] & 8#777) != 8#600 || zpc_file_state[size] != 0 )); then
+      "$zpc_error_function" "Refusing an unsafe $zpc_noun picker result."
+      return 125
+    fi
+    zpc_file_identity="${zpc_file_state[device]}:${zpc_file_state[inode]}:"\
+"${zpc_file_state[mode]}:${zpc_file_state[uid]}:${zpc_file_state[nlink]}"
+
+    if ! sysopen -w -o nofollow,cloexec -u zpc_write_fd \
+      -- "$zpc_capture_file" 2>/dev/null; then
+      "$zpc_error_function" "Could not open the $zpc_noun picker result safely."
+      return 125
+    fi
+    if (( zpc_write_limit )); then
+      (
+        limit -s filesize "$(( (zpc_max_bytes + 1023) / 1024 ))k" || exit 125
+        limit -hs filesize "$(( (zpc_max_bytes + 1023) / 1024 ))k" || exit 125
+        "$zpc_picker_function" "$@"
+      ) 1>&$(( zpc_write_fd ))
+    else
+      "$zpc_picker_function" "$@" 1>&$(( zpc_write_fd ))
+    fi
+    zpc_picker_rc=$?
+    exec {zpc_write_fd}>&-
+    zpc_write_fd=-1
+
+    zpc_directory_state=()
+    zpc_file_state=()
+    if ! zstat -LH zpc_directory_state -- "$zpc_capture_dir" 2>/dev/null \
+      || [[ "${zpc_directory_state[device]}:${zpc_directory_state[inode]}:"\
+"${zpc_directory_state[mode]}:${zpc_directory_state[uid]}" != "$zpc_directory_identity" ]] \
+      || ! zstat -LH zpc_file_state -- "$zpc_capture_file" 2>/dev/null \
+      || [[ "${zpc_file_state[device]}:${zpc_file_state[inode]}:${zpc_file_state[mode]}:"\
+"${zpc_file_state[uid]}:${zpc_file_state[nlink]}" != "$zpc_file_identity" ]] \
+      || (( zpc_file_state[size] < 0 || zpc_file_state[size] > zpc_max_bytes )); then
+      "$zpc_error_function" "The $zpc_noun picker result changed or exceeded its limit."
+      return 125
+    fi
+    if ! sysopen -r -o nofollow,cloexec -u zpc_read_fd \
+      -- "$zpc_capture_file" 2>/dev/null; then
+      "$zpc_error_function" "Could not read the $zpc_noun picker result safely."
+      return 125
+    fi
+    # The sysread builtin reads the result: $(<&fd) would run the host's
+    # external cat, and not every cat reports a failed read. Status 5 marks
+    # the end of the file. No read asks for more than one byte past the size
+    # checked above, and a result of any other size counts as a failed read.
+    while (( zpc_read_rc == 0 )); do
+      zpc_chunk=""
+      zpc_chunk_bytes=0
+      sysread -c zpc_chunk_bytes -i "$zpc_read_fd" \
+        -s "$(( zpc_file_state[size] - zpc_read_bytes + 1 ))" \
+        zpc_chunk 2>/dev/null || zpc_read_rc=$?
+      if (( zpc_read_rc == 0 )); then
+        zpc_read_bytes+=zpc_chunk_bytes
+        zpc_selection+="$zpc_chunk"
+        (( zpc_chunk_bytes > 0 && zpc_read_bytes <= zpc_file_state[size] )) \
+          || zpc_read_rc=1
+      fi
+    done
+    (( zpc_read_rc == 5 && zpc_read_bytes == zpc_file_state[size] )) && zpc_read_rc=0
+    exec {zpc_read_fd}>&-
+    zpc_read_fd=-1
+    if (( zpc_read_rc == 0 )); then
+      # Remove every trailing newline, as command substitution does.
+      () {
+        setopt LOCAL_OPTIONS EXTENDED_GLOB NO_MULTIBYTE
+        local -a match=() mbegin=() mend=()
+        if [[ "$zpc_selection" == (#b)(*[^$'\n'])$'\n'# ]]; then
+          zpc_selection="${match[1]}"
+        else
+          zpc_selection=""
+        fi
+      }
+    fi
+    if (( zpc_read_rc != 0 )); then
+      "$zpc_error_function" "Could not read the $zpc_noun picker result."
+      zpc_selection=""
+    elif (( zpc_write_limit && zpc_picker_rc == 128 + $(kill -l XFSZ) )); then
+      "$zpc_error_function" "The $zpc_noun picker output exceeded $zpc_max_bytes bytes."
+      zpc_selection=""
+      zpc_operation_rc=$zpc_picker_rc
+    elif (( zpc_picker_rc == 1 && zpc_expect_key \
+      && zpc_file_state[size] > 0 )) && [[ "$zpc_selection" != *$'\n'* ]]; then
+      zpc_selection=""
+      zpc_operation_rc=1
+    elif (( zpc_picker_rc != 0 && zpc_file_state[size] > 0 )); then
+      "$zpc_error_function" "A failed $zpc_noun picker returned unexpected data."
+      zpc_selection=""
+    else
+      zpc_operation_rc=$zpc_picker_rc
+    fi
+  } always {
+    (( zpc_write_fd >= 0 )) && exec {zpc_write_fd}>&-
+    (( zpc_read_fd >= 0 )) && exec {zpc_read_fd}>&-
+    if [[ -n "$zpc_file_identity" ]]; then
+      zpc_file_state=()
+      if [[ -f "$zpc_capture_file" && ! -L "$zpc_capture_file" ]] \
+        && zstat -LH zpc_file_state -- "$zpc_capture_file" 2>/dev/null \
+        && [[ "${zpc_file_state[device]}:${zpc_file_state[inode]}:${zpc_file_state[mode]}:"\
+"${zpc_file_state[uid]}:${zpc_file_state[nlink]}" == "$zpc_file_identity" ]]; then
+        command rm -f -- "$zpc_capture_file" 2>/dev/null || zpc_cleanup_failed=1
+      else
+        zpc_cleanup_failed=1
+      fi
+    elif [[ -n "$zpc_capture_file" ]]; then
+      zpc_cleanup_failed=1
+    fi
+    if [[ -n "$zpc_directory_identity" ]]; then
+      zpc_directory_state=()
+      if [[ -d "$zpc_capture_dir" && ! -L "$zpc_capture_dir" ]] \
+        && zstat -LH zpc_directory_state -- "$zpc_capture_dir" 2>/dev/null \
+        && [[ "${zpc_directory_state[device]}:${zpc_directory_state[inode]}:"\
+"${zpc_directory_state[mode]}:${zpc_directory_state[uid]}" == "$zpc_directory_identity" ]]; then
+        command rmdir -- "$zpc_capture_dir" 2>/dev/null || zpc_cleanup_failed=1
+      else
+        zpc_cleanup_failed=1
+      fi
+    else
+      zpc_cleanup_failed=1
+    fi
+    (( zpc_cleanup_failed == 0 )) || zpc_operation_rc=125
+  }
+
+  REPLY="$zpc_selection"
+  return $zpc_operation_rc
+}
+# <<< zdx-primitive picker-capture
+
+# REPLY: one complete offered profile/interface row. Canonical capture removes
+# trailing newlines; no VPN whitespace or CR normalization precedes membership.
+# Status 3 is cancellation (empty success or fzf 1/130); other picker or capture
+# failures return 1. Authentication stops are handled by _vpn_pick_profile.
 _vpn_pick_from_list() {
+  emulate -L zsh
+  REPLY=""
   local prompt="$1"
   shift
   local -a items=("$@")
@@ -2485,12 +2761,16 @@ _vpn_pick_from_list() {
     return 1
   }
 
-  local selected
+  local selected="" snapshot_row=""
+  local -i snapshot_match=0
   local -i fzf_status=0
-  selected=$(printf "%s\n" "${items[@]}" | _vpn_fzf \
+  _vpn_fzf_capture \
     --height=40% \
     --prompt="${prompt} > " \
-    --header='Up/Down navigate | Enter select | Esc cancel') || fzf_status=$?
+    --header='Up/Down navigate | Enter select | Esc cancel' \
+    < <(printf "%s\n" "${items[@]}") || fzf_status=$?
+  selected="$REPLY"
+  REPLY=""
 
   if (( fzf_status != 0 )); then
     (( fzf_status == 1 || fzf_status == 130 )) && return 3
@@ -2498,16 +2778,34 @@ _vpn_pick_from_list() {
   fi
 
   [[ -n "$selected" ]] || return 3
-  print -r -- "$selected"
+  for snapshot_row in "${items[@]}"; do
+    if [[ "$selected" == "$snapshot_row" ]]; then
+      snapshot_match=1
+      break
+    fi
+  done
+  (( snapshot_match )) || {
+    _vpn_error "The selected profile was not in the picker snapshot."
+    return 1
+  }
+  REPLY="$selected"
 }
 
 # Resolves the profile a command should act on. Returns 3 when the user
 # cancels, so callers can treat cancellation as success without mutating,
 # and preserves 130/143 when authentication is interrupted.
 _vpn_pick_profile() {
+  emulate -L zsh
+  REPLY=""
   local prompt="${1:-Select VPN profile}"
 
-  _vpn_ensure_profile_access || return $?
+  local -i access_status=0
+  _vpn_ensure_profile_access || access_status=$?
+  if (( access_status != 0 )); then
+    REPLY=""
+    return "$access_status"
+  fi
+  REPLY=""
 
   local configs_raw
   configs_raw=$(_vpn_get_configs 2>/dev/null) || return 1
@@ -2522,13 +2820,15 @@ _vpn_pick_profile() {
   fi
 
   if (( ${#configs[@]} == 1 )); then
-    print -r -- "${configs[1]}"
+    REPLY="${configs[1]}"
     return 0
   fi
 
-  local picked
-  picked=$(_vpn_pick_from_list "$prompt" "${configs[@]}") || return $?
-  _vpn_sanitize_iface_capture "$picked"
+  _vpn_pick_from_list "$prompt" "${configs[@]}" || return $?
+  local picked="$REPLY" normalized=""
+  REPLY=""
+  normalized=$(_vpn_sanitize_iface_capture "$picked") || return 1
+  REPLY="$normalized"
 }
 
 # --- WSL hardening validation -----------------------------------------------

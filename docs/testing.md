@@ -654,6 +654,16 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_cli_picker_contract.bats` covers directory decline versus confirmation
+failure, nonterminal advice, canonical profile capture and complete snapshot
+membership through seven public owners, unsafe temporary-root refusal and
+owned-capture cleanup, argument rejection before runtime or sudo, exact
+privilege metadata, optional authentication, and all three editor paths.
+It uses disposable profiles and recording tools, with the existing isolated
+zsh/zpty foreground procedure. Returned interruption codes and modeled
+access states do not establish physical signals or owner-host VPN acceptance.
+The shared primitive all-copy controls also include the generated VPN copy.
+
 `vpn_report_state_safety.bats` covers report-name lookalikes, full-length and
 dotted hostnames, same-second publication, candidate replacement, protected
 publication and retention-off controls. Default clearing covers interrupted,

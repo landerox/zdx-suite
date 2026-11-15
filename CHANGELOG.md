@@ -223,6 +223,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- VPN: capture profile selections privately and validate the offered snapshot,
+  reject empty and surplus operands before probes, keep editor output on
+  stderr, distinguish declined directory creation from confirmation failure,
+  and align default-profile privilege metadata with existing authentication.
+
 - System: use shared duration and counted-noun presentation, preserve compact
   monochrome JSON, and abbreviate HOME in checkout diagnostics. Telemetry
   rejects truncated integer tokens and incomplete final lines; its dashboard,

@@ -137,7 +137,7 @@ builtin_read_fixture() {
     emulate -R zsh
     source "$1/functions.zsh" 2>/dev/null || exit 90
     local suite=""
-    for suite in git sys dev py ws env file zdx; do
+    for suite in git sys dev py ws env file vpn zdx; do
       source "$1/functions/$suite-common.zsh" 2>/dev/null || exit 91
     done
     command mkdir -m 700 "$HOME/picker-root" || exit 92
@@ -164,7 +164,7 @@ builtin_read_fixture() {
     local -a leftovers=()
     for capture in _zdx_picker_capture _git_picker_capture _sys_picker_capture \
       _dev_picker_capture _py_picker_capture _ws_picker_capture \
-      _env_picker_capture _file_picker_capture _zdx_menu_picker_capture; do
+      _env_picker_capture _file_picker_capture _vpn_picker_capture _zdx_menu_picker_capture; do
       (( ${+functions[$capture]} )) || exit 93
       kept=0
       for index in {1..${#payloads}}; do
@@ -213,7 +213,7 @@ MOCK
   local capture expected=""
   for capture in _zdx_picker_capture _git_picker_capture _sys_picker_capture \
     _dev_picker_capture _py_picker_capture _ws_picker_capture \
-    _env_picker_capture _file_picker_capture _zdx_menu_picker_capture; do
+    _env_picker_capture _file_picker_capture _vpn_picker_capture _zdx_menu_picker_capture; do
     expected+="$capture: kept=11/11 failed-read=125 [] Could not read the Fixture picker result. leftovers=0"$'\n'
   done
   [ "$output" = "${expected%$'\n'}" ]

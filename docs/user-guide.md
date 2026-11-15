@@ -275,6 +275,11 @@ skeleton profile with empty `[Interface]` and `[Peer]` sections as a root-owned
 mode-600 file; it prompts for the name when you omit it and refuses an
 existing profile. Fill it in with `vpn-config-edit`.
 
+If the profile directory is missing, create and import ask before creating it.
+Declining returns `0` and creates nothing. Without a terminal, create the
+directory first or rerun from a terminal to confirm; these commands do not
+accept `--yes`.
+
 The source must be a regular, owner-only file owned by you, with a link count of
 one, no symlink indirection, and a maximum size of 1 MiB. It must contain
 exactly one `[Interface]` and at least one `[Peer]` section, in any letter
@@ -345,7 +350,7 @@ partially compatible profile.
 it, runs your editor as your own user, and reinstalls the result as root. Your
 editor never runs with root privileges, so a shell escape such as `:!sh` does
 not give a root shell. `sudoedit` honors `SUDO_EDITOR`, then `VISUAL`, then
-`EDITOR`.
+`EDITOR`. Editor messages go to stderr.
 
 If sudoers forbids `sudoedit`, the command says so and changes nothing. There is
 deliberately no fallback to `sudo $EDITOR`.
@@ -364,6 +369,10 @@ atomically only if the profile did not change meanwhile.
 - `vpn-reconnect-last` — bounce the profile you used last.
 - `vpn-off-all [--dry-run] [--yes]` — preview or bring everything down after
   one confirmation.
+
+Setting the default may request sudo authentication when profiles are
+protected. Readable profiles or an existing sudo cache need no new
+authentication.
 
 Connecting and disconnecting use the exact profile file in `VPN_CONFIG_DIR`.
 If a running interface has no safe matching profile there, disconnect reports

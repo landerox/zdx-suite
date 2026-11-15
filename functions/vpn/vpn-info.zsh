@@ -84,6 +84,10 @@ _vpn_rpt_code_block() {
 #   Status:    0 on success, 1 when the platform or WireGuard is unavailable.
 vpn-summary() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-summary accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-summary"
@@ -301,6 +305,10 @@ _vpn_details_sections() {
 #              130 or 143 when authentication is interrupted.
 vpn-details() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-details accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-details"
@@ -323,6 +331,10 @@ vpn-details() {
 #   Status:    0 after a best-effort diagnostic, 2 on bad arguments.
 vpn-ip-info() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-ip-info accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-ip-info"
@@ -565,6 +577,10 @@ _vpn_dns_leak_hint() {
 #   Status:    0 on success, 1 on failure.
 vpn-report() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-report accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-report"

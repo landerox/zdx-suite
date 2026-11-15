@@ -35,7 +35,7 @@ typeset -A canonical_functions=(
   confirm-prompt _zdx_confirm_prompt
 )
 typeset -A primitive_targets=(
-  picker-capture "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/zdx-common.zsh:_zdx_menu"
+  picker-capture "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/vpn-common.zsh:_vpn functions/zdx-common.zsh:_zdx_menu"
   confirm-prompt "functions/git-common.zsh:_git functions/sys-common.zsh:_sys functions/dev-common.zsh:_dev functions/py-common.zsh:_py functions/ws-common.zsh:_ws functions/env-common.zsh:_env functions/file-common.zsh:_file functions/vpn-common.zsh:_vpn functions/zdx-doctor.zsh:_zdx_doctor"
 )
 

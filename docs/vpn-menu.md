@@ -242,6 +242,18 @@ Each command completes the same arguments whether it is typed directly, as in
 
 22 commands are frozen.
 
+The privilege column in the fixture means that a command may initiate
+interactive sudo authentication. In particular, `vpn-default-set` is
+`privileged` because reading protected profiles can require authentication;
+readable profiles and warm-cache access need no new authentication.
+
+The access commands, `vpn-summary`, `vpn-details`, `vpn-ip-info`, `vpn-report`,
+`vpn-config-dir`, `vpn-reconnect-last`, and `vpn-default-connect` accept zero
+arguments or one help flag. An explicit empty argument, extra operands, or
+help with extra arguments returns `2` before runtime probes. `vpn-on`,
+`vpn-off`, and `vpn-default-set` retain omitted-profile selection but reject
+an explicitly empty profile, including after `--`, and require help alone.
+
 `vpn-menu` and its 22 commands are registered as cold-shell lazy stubs, so
 each of them works in a new shell and the first call loads the suite.
 `ZDX_DIRECT_COMMANDS=0` registers only `vpn-menu` at startup, and the direct
@@ -440,6 +452,22 @@ directory, active tunnels, profile access, sudo, and the platform. Missing
 command-specific tools mark only the affected rows; they never prevent the
 rest of the menu opening.
 
+### Profile and interface selection
+
+Single-column profile and interface pickers use `_vpn_fzf_capture`, which
+delegates to the core `_zdx_picker_capture` or its generated VPN copy when
+the core is absent. The owning commands invoke this chain in the foreground
+and consume `REPLY`, with selection stdout captured in a private validated
+file below the existing trusted temporary root.
+
+Canonical capture removes trailing newlines. The complete returned row must
+exactly match the invocation's offered snapshot before VPN name normalization.
+Forged, multiline, leading-blank, CR and space variants are refused. A successful
+empty selection or fzf `1`/`130` without output is cancellation; other picker
+failures, including `143` and refused capture data, are operational failures. Profile
+access interruptions retain their separate `130`/`143` protocol. Failed or
+cancelled selections clear `REPLY` before returning.
+
 ## Privilege model
 
 Least privilege is enforced by four primitives in `vpn-common.zsh`:
@@ -464,6 +492,12 @@ Before creating a missing profile directory, the plan freezes every missing
 component and the nearest existing parent's identity. After authentication,
 each missing component must remain absent and the parent must match before
 the exact mapped install operation runs.
+
+Declining missing-directory creation stops create/import with public status
+`0` and no staging or installation. An unavailable terminal returns `1` and
+asks the user to run from a terminal or create the directory first. Neither
+command accepts `--yes`. Only a genuine decline is cancellation; confirmation
+errors fail and returned `130`/`143` remain interruptions.
 
 Rename and removal disclose their frozen platform-mapped operation arrays,
 including selected backups and conditional rollback, before credentials are
@@ -823,6 +857,7 @@ not establish native WireGuard, DNS or privileged-host acceptance.
 
 | File | Covered boundary |
 | --- | --- |
+| `vpn_cli_picker_contract.bats` | Directory decisions and valid nonterminal advice, canonical profile capture and exact snapshot membership through all seven owners, unsafe temporary-root refusal, grammar before runtime and sudo, privilege metadata and optional authentication, separate editor streams, and the existing isolated PTY foreground procedure |
 | `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, DNS hook idempotency, and hardening of the lower-case and indented headers import accepts |
 | `vpn_contract.bats` | The frozen 22-command fixture, six-way parity including exact dispatcher arms and direct completion bindings, a host-independent command set, dispatcher coverage, cancellation, timing label, argument forwarding, invalid-argument statuses |
 | `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity, `emulate -L zsh` on every entry point with safe paths and a clean import that behave alike from default, hostile-option, and `emulate sh` callers, the header context block, canonical unavailable marks, and em-dash profile notes |

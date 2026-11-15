@@ -6,12 +6,8 @@ safety, stream, and architecture rules are defined in
 dispatches it is defined in [`output-spec.md`](output-spec.md).
 
 The top-level menus of all eight built-in suites, the core plugin manager,
-and the master `zdx` catalog
-follow this specification, with these known gaps:
-
-- The VPN profile and interface picker (`_vpn_pick_from_list`) still reads
-  its selection through command substitution instead of a foreground capture
-  helper (see [Selection and cancellation](#selection-and-cancellation)).
+the master `zdx` catalog, and the VPN profile and interface pickers follow
+this specification.
 
 The comparison, rejected alternatives, and suite-wide presentation decision
 are recorded in [`menu-design.md`](menu-design.md).
