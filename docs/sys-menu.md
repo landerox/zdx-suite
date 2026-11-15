@@ -231,6 +231,14 @@ operational failures. They return `1` only when the command cannot establish
 its required runtime state; `sys-wsl` on a host that is not WSL follows the
 [not-applicable contract](#not-applicable-contract).
 
+An explicitly empty operand is invalid for `sys-info` and `sys-health`, just
+like any other unsupported positional argument. Help and invalid arguments
+are resolved before capability refresh or command-specific probes, through
+direct, nested and lazy routes. Empty or overlong service identifiers, leading
+dashes, whitespace and slashes are rejected before selecting or probing a
+service manager. Other identifiers still undergo the existing backend-specific
+validation.
+
 ### JSON output
 
 `sys-info --json` and `sys-wsl --json` follow the repository JSON output
@@ -397,6 +405,21 @@ implementation exists. Startup
 samples use a 15-second deadline. The ten samples and isolated profile pass
 execute startup files in eleven subprocesses; those files may still perform
 their usual external side effects.
+
+Diagnostic observations execute the vetted absolute external selected from
+`PATH`, including when the timeout fallback runs in Zsh; a same-named shell
+function does not supply a tool version or package count. Native bootstrap
+observations resolve their programs without recursively refreshing the
+capability registry. These native probes close stdin, and failed producers
+do not supply partial successful facts. Intentionally qualified WSL
+interoperability programs retain their separate platform policy.
+
+The watchdog's visible-tree signaling is not a descendant-extinction
+guarantee. A descendant that ignores TERM may survive when its direct parent
+exits on TERM. Completing an already-begun pass does not establish a later
+KILL pass after that parent exits. This existing mixed-lifetime residual
+remains documented in the security assessment; no stronger process-ownership
+mechanism is implied.
 
 Timeouts bound observation, download, and archive-inspection work. A command
 that has begun a package, cache, service, process, or other
@@ -579,6 +602,21 @@ steps. A Snap preview error or deadline is a visible failed step, never a
 successful "no pending updates" result. Direct update commands that do not
 advertise `--dry-run` retain their narrower command-specific interface; the
 aggregate flags must not be inferred to exist on every updater.
+
+Gcloud, uv, fnm and fzf ownership observations use bounded, closed-input
+external probes. A complete successful inventory may prove membership or
+absence; a failed read never proves absence. Homebrew formula checks parse
+the complete formula inventory, and APT ownership reads the package installation
+status. An executable inside the fixed APT SDK root requires positive package
+evidence before delegation; missing evidence cannot authorize its self-updater.
+An existing manager rejected for a relative executable path or control
+characters is an indeterminate observation, rather than proven absence.
+Indeterminate gcloud or uv ownership aborts aggregate planning before
+authorization. A planning timeout or interruption retains `124`, `130`, or
+`143`, respectively. These failed ownership reads cannot select another updater;
+AWS CLI and Starship also stop their fallback paths after a bounded owner
+timeout. The aggregate still attempts independent execution entries under its
+default policy.
 
 An entry returning `130` or `143` stops all subsequent System updates
 regardless of `--fail-fast`. The summary reports the interruption and

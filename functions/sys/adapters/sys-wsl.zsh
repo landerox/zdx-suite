@@ -135,7 +135,7 @@ _sys_wsl_diag_pending_reboot() {
 _sys_wsl_diag_release() {
   local kernel_release
   kernel_release=$(
-    _sys_run_bounded_probe 3 65536 uname -r 2>/dev/null
+    _sys_run_native_probe 3 65536 uname -r 2>/dev/null
   ) || kernel_release=""
   if [[ "${kernel_release:l}" == *"wsl2"* \
     || "${kernel_release:l}" == *"microsoft-standard"* ]]; then
@@ -227,7 +227,7 @@ _sys_wsl_read_config_text() {
     return 1
   }
   content=$(
-    _sys_run_bounded_probe 3 "$max_bytes" cat -- "$file_path" 2>/dev/null
+    _sys_run_native_probe 3 "$max_bytes" cat -- "$file_path" 2>/dev/null
   ) || {
     reply=("the bounded read failed or timed out")
     return 1

@@ -38,13 +38,18 @@ _sys_linux_service_manager() {
 }
 
 _sys_linux_process_backend() {
-  if command -v ps &>/dev/null \
-    && _sys_run_with_timeout 3 \
-      env LC_ALL=C ps -eo pid=,uid=,pcpu=,pmem=,comm= \
-      --sort=-pcpu >/dev/null 2>&1 \
-    && _sys_run_with_timeout 3 \
-      env LC_ALL=C ps -p "$$" -o uid= -o lstart= -o comm= \
-      >/dev/null 2>&1; then
+  local REPLY="" process_program=""
+  _sys_bootstrap_program ps || {
+    print -r -- "unavailable"
+    return 0
+  }
+  process_program="$REPLY"
+  if LC_ALL=C _sys_run_with_timeout 3 \
+      "$process_program" -eo pid=,uid=,pcpu=,pmem=,comm= \
+      --sort=-pcpu </dev/null >/dev/null 2>&1 \
+    && LC_ALL=C _sys_run_with_timeout 3 \
+      "$process_program" -p "$$" -o uid= -o lstart= -o comm= \
+      </dev/null >/dev/null 2>&1; then
     print -r -- "procps"
   else
     print -r -- "unavailable"
@@ -85,7 +90,7 @@ _sys_linux_diag_os_name() {
 
   if [[ -z "$release_name" ]] && command -v lsb_release &>/dev/null; then
     release_name=$(
-      _sys_run_bounded_probe 3 65536 lsb_release -ds 2>/dev/null
+      _sys_run_native_probe 3 65536 lsb_release -ds 2>/dev/null
     )
   fi
 
@@ -127,12 +132,12 @@ _sys_linux_diag_cpu_record() {
 
   if command -v getconf &>/dev/null; then
     core_count=$(
-      _sys_run_bounded_probe 3 65536 getconf _NPROCESSORS_ONLN 2>/dev/null
+      _sys_run_native_probe 3 65536 getconf _NPROCESSORS_ONLN 2>/dev/null
     )
   fi
   if [[ ! "$core_count" =~ '^[0-9]+$' ]] \
     && command -v nproc &>/dev/null; then
-    core_count=$(_sys_run_bounded_probe 3 65536 nproc 2>/dev/null)
+    core_count=$(_sys_run_native_probe 3 65536 nproc 2>/dev/null)
   fi
   if [[ ! "$core_count" =~ '^[0-9]+$' ]] && [[ -r /proc/cpuinfo ]]; then
     core_count=$(command awk -F: '$1 ~ /^processor[[:space:]]*$/ { count++ }
@@ -181,7 +186,7 @@ _sys_linux_diag_package_records() {
   case "$package_manager" in
     apt)
       package_output=$(
-        _sys_run_bounded_probe 5 1048576 \
+        _sys_run_native_probe 5 1048576 \
           dpkg-query -W -f='${binary:Package}\n' 2>/dev/null
       ) || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
@@ -189,21 +194,21 @@ _sys_linux_diag_package_records() {
       ;;
     dnf|zypper)
       package_output=$(
-        _sys_run_bounded_probe 5 1048576 rpm -qa 2>/dev/null
+        _sys_run_native_probe 5 1048576 rpm -qa 2>/dev/null
       ) || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
       printf 'RPM packages\t%d\n' "${#package_lines}"
       ;;
     pacman)
       package_output=$(
-        _sys_run_bounded_probe 5 1048576 pacman -Qq 2>/dev/null
+        _sys_run_native_probe 5 1048576 pacman -Qq 2>/dev/null
       ) || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
       printf 'Pacman packages\t%d\n' "${#package_lines}"
       ;;
     apk)
       package_output=$(
-        _sys_run_bounded_probe 5 1048576 apk info 2>/dev/null
+        _sys_run_native_probe 5 1048576 apk info 2>/dev/null
       ) || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
       printf 'APK packages\t%d\n' "${#package_lines}"
@@ -212,16 +217,16 @@ _sys_linux_diag_package_records() {
       local formula_output cask_output
       local -a formula_lines=() cask_lines=()
       formula_output=$(
-        _sys_run_bounded_probe 5 1048576 \
-          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
-          HOMEBREW_NO_ENV_HINTS=1 \
+        HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+          _sys_run_native_probe 5 1048576 \
           brew list --formula 2>/dev/null
       ) \
         || return 1
       cask_output=$(
-        _sys_run_bounded_probe 5 1048576 \
-          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
-          HOMEBREW_NO_ENV_HINTS=1 \
+        HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+          _sys_run_native_probe 5 1048576 \
           brew list --cask 2>/dev/null
       ) \
         || cask_output=""
@@ -242,7 +247,7 @@ _sys_linux_diag_package_records() {
     local snap_output
     local -a snap_lines=()
     snap_output=$(
-      _sys_run_bounded_probe 3 1048576 snap list 2>/dev/null
+      _sys_run_native_probe 3 1048576 snap list 2>/dev/null
     ) || return 0
     [[ -n "$snap_output" ]] && snap_lines=("${(@f)snap_output}")
     (( ${#snap_lines} > 0 )) && snap_lines=("${snap_lines[@]:1}")
@@ -253,7 +258,7 @@ _sys_linux_diag_package_records() {
 # stdout TSV records: zombie PID, command name.
 _sys_linux_diag_zombie_records() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_bounded_probe 5 1048576 \
+  _sys_run_native_probe 5 1048576 \
     ps -eo pid=,stat=,comm= 2>/dev/null | command awk '
     $2 ~ /^Z/ {
       pid = $1
@@ -269,7 +274,7 @@ _sys_linux_diag_zombie_records() {
 # stdout TSV records: failed systemd unit, state and description.
 _sys_linux_diag_failed_service_records() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_bounded_probe 5 1048576 \
+  _sys_run_native_probe 5 1048576 \
     systemctl --failed --no-legend --no-pager --plain 2>/dev/null \
     | command awk '
       NF >= 4 {
@@ -286,7 +291,7 @@ _sys_linux_diag_failed_service_records() {
 # of dmesg; status 3 is reserved for platforms without a kernel OOM log.
 _sys_linux_diag_oom_event_count() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_bounded_probe 5 1048576 dmesg 2>/dev/null | command awk '
+  _sys_run_native_probe 5 1048576 dmesg 2>/dev/null | command awk '
     BEGIN { count = 0 }
     tolower($0) ~ /out of memory|oom-killer/ { count++ }
     END { print count }
@@ -296,7 +301,7 @@ _sys_linux_diag_oom_event_count() {
 # stdout: journal disk-usage value as reported by journalctl.
 _sys_linux_diag_journal_size() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_bounded_probe 5 65536 \
+  _sys_run_native_probe 5 65536 \
     journalctl --disk-usage 2>/dev/null | command awk '
     {
       for (i = 1; i <= NF; i++) {

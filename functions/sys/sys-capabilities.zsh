@@ -16,9 +16,14 @@ typeset -gA _SYS_CAPABILITIES=()
 typeset -gi _SYS_CAPABILITIES_READY=0
 
 _sys_detect_os() {
-  local kernel_name
+  local kernel_name REPLY="" program=""
+  _sys_bootstrap_program uname || {
+    print -r -- "unknown"
+    return 0
+  }
+  program="$REPLY"
   kernel_name=$(
-    _sys_run_bounded_probe 3 65536 uname -s 2>/dev/null
+    _sys_run_bounded_probe 3 65536 "$program" -s </dev/null 2>/dev/null
   ) || {
     print -r -- "unknown"
     return 0
@@ -32,9 +37,14 @@ _sys_detect_os() {
 }
 
 _sys_detect_architecture() {
-  local architecture
+  local architecture REPLY="" program=""
+  _sys_bootstrap_program uname || {
+    print -r -- "unknown"
+    return 0
+  }
+  program="$REPLY"
   architecture=$(
-    _sys_run_bounded_probe 3 65536 uname -m 2>/dev/null
+    _sys_run_bounded_probe 3 65536 "$program" -m </dev/null 2>/dev/null
   ) || architecture=""
   architecture="${architecture:l}"
   print -r -- "${architecture:-unknown}"

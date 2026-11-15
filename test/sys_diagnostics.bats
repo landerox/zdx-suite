@@ -187,6 +187,17 @@ SYS_INFO_HOST='
 '
 
 write_sys_info_tool_mocks() {
+  export SYS_DIAGNOSTICS_REAL_ZSH
+  SYS_DIAGNOSTICS_REAL_ZSH=$(type -P zsh)
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/zsh"
+  cat >> "$TEST_MOCK_BIN/zsh" <<'MOCK'
+if [[ "$*" == --version ]]; then
+  printf 'zsh 5.9 (fixture)\n'
+  exit 0
+fi
+exec "$SYS_DIAGNOSTICS_REAL_ZSH" "$@"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/zsh"
   cat > "$TEST_MOCK_BIN/uname" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -335,7 +346,7 @@ EOF
     | grep -Fx '  OpenTofu:          v1.10.6'
   [ "$(grep -c '^tofu --version$' "$TOFU_RUN_LOG")" -eq 2 ]
   [ "$(grep -c '^tofu ' "$TOFU_RUN_LOG")" -eq 2 ]
-  grep -Fxq '3 65536 tofu --version' "$HOME/probes"
+  grep -Fxq "3 65536 $TEST_MOCK_BIN/tofu --version" "$HOME/probes"
   [ "$(wc -l < "$HOME/info.json")" -eq 1 ]
   jq -e '
     .schema == "zdx.sys-info.v1"
@@ -1009,6 +1020,8 @@ MOCK
   chmod +x "$TEST_MOCK_BIN/brew"
 
   run run_zsh '
+    _SYS_CAPABILITIES=(os linux environment native)
+    _SYS_CAPABILITIES_READY=1
     _sys_linux_diag_package_records brew || exit 11
     _sys_macos_diag_package_records brew
   '

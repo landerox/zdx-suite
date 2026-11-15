@@ -941,18 +941,29 @@ update-fzf() {
 
   if (( ! active_git_owned )); then
     # Managed by Homebrew
-    if command -v brew &>/dev/null \
-      && _sys_brew list fzf &>/dev/null 2>&1; then
+    local -i owner_rc=0
+    _sys_update_brew_has_formula fzf || owner_rc=$?
+    if (( owner_rc == 0 )); then
       _sys_report_result delegated "Homebrew → sys-menu update-brew" \
         "Managed by Homebrew — use update-brew instead."
       return 0
+    elif (( owner_rc != 1 )); then
+      _sys_error "Could not inspect fzf's Homebrew ownership; no update was started."
+      (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+      return 1
     fi
 
     # Managed by APT
-    if command -v dpkg &>/dev/null && dpkg -s fzf &>/dev/null; then
+    owner_rc=0
+    _sys_update_package_installed fzf || owner_rc=$?
+    if (( owner_rc == 0 )); then
       _sys_report_result delegated "APT → sys-menu update-apt" \
         "Managed by APT — use update-apt instead."
       return 0
+    elif (( owner_rc != 1 )); then
+      _sys_error "Could not inspect fzf's APT ownership; no update was started."
+      (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+      return 1
     fi
   fi
 

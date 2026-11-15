@@ -2678,6 +2678,17 @@ memory or CPU during inspection.
 **Current controls.**
 
 - System diagnostic version, package, and startup probes use bounded execution.
+- System native diagnostic probes execute the vetted absolute program rather
+  than a same-named shell function. Bootstrap resolution avoids capability
+  refresh recursion. Gcloud, uv, fnm and fzf ownership observations use short
+  deadlines, closed stdin and complete captured data; unknown reads do not
+  establish absence or authorize an updater fallback. Indeterminate gcloud or
+  uv ownership stops aggregate planning before authorization. Existing bounded
+  AWS CLI and Starship owner deadlines also stop their fallback paths.
+  A present manager rejected for a relative executable path or control
+  characters remains indeterminate; a classification lookup does not execute
+  another candidate or retry a failed observation as successful.
+  Existing watchdog lifetime limits below remain.
 - Core and standalone System watchdog claims open the recorded private,
   singly linked regular marker through nofollow append/read descriptors and
   compare both descriptor identities with the recorded device, inode, mode,

@@ -11,6 +11,7 @@ setup() {
   export MAINT_SIGNAL_LOG="$TEST_TEMP_DIR/maintenance-signals.log"
   export MAINT_PLATFORM_LOG="$TEST_TEMP_DIR/maintenance-platform.log"
   export APT_ENV_LOG="$TEST_TEMP_DIR/apt-env.log"
+  export MAINT_OWNER_PACKAGES=''
   : > "$MAINT_PROBE_LOG"
   : > "$MAINT_MUTATION_LOG"
   : > "$MAINT_NETWORK_LOG"
@@ -242,6 +243,16 @@ if IFS= read -r unexpected_input; then
   printf 'dpkg-query-unexpected-stdin:%s\n' "$unexpected_input" \
     >> "$MAINT_MUTATION_LOG"
   exit 98
+fi
+# Ownership reads use their own finite package-state protocol; the separate
+# APT readiness query below retains its strict sanitized-environment controls.
+if [[ $# == 4 && "$1" == -W && "$2" == '-f=${db:Status-Status}\n' \
+  && "$3" == -- && ( "$4" == fzf || "$4" == google-cloud-cli ) ]]; then
+  printf '%s\n' "$*" >> "$TEST_TEMP_DIR/owner-query.calls"
+  case " ${MAINT_OWNER_PACKAGES:-} " in
+    *" $4 "*) printf 'installed\n'; exit 0 ;;
+    *) exit 1 ;;
+  esac
 fi
 if [[ -n "${APT_CONFIG+x}" \
   || -n "${http_proxy+x}" \
@@ -4039,6 +4050,8 @@ EOF
 }
 
 @test "sys maintenance: retry-controlled logged updates bypass an env function" {
+  export MAINT_UV_NONOWNER_PREFIX="$TEST_TEMP_DIR/unrelated-homebrew"
+  mkdir -m 700 "$MAINT_UV_NONOWNER_PREFIX"
   local controlled_tool
   for controlled_tool in uv pipx rustup; do
     cat <<'EOF' > "$TEST_MOCK_BIN/$controlled_tool"
@@ -4085,7 +4098,8 @@ EOF
   chmod +x "$TEST_MOCK_BIN/rustc"
   cat <<'EOF' > "$TEST_MOCK_BIN/brew"
 #!/usr/bin/env bash
-exit 1
+[[ "$*" == --prefix ]] || exit 97
+printf '%s\n' "$MAINT_UV_NONOWNER_PREFIX"
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
 
@@ -4224,7 +4238,7 @@ EOF
   run run_maintenance_zsh '
     PATH="$TEST_TEMP_DIR/usr-lib-sdk/bin:$TEST_MOCK_BIN:$PATH"
     _sys_gcloud_apt_root() { REPLY="$TEST_TEMP_DIR/usr-lib-sdk"; }
-    dpkg() { [[ "$*" == "-s google-cloud-cli" ]]; }
+    export MAINT_OWNER_PACKAGES=google-cloud-cli
     _sys_step_applies update-gcloud && return 96
     update-gcloud
   ' brew
@@ -4238,7 +4252,7 @@ EOF
   chmod +x "$HOME/google-cloud-sdk/bin/gcloud"
   run run_maintenance_zsh '
     PATH="$HOME/google-cloud-sdk/bin:$TEST_MOCK_BIN:$PATH"
-    dpkg() { [[ "$*" == "-s google-cloud-cli" ]]; }
+    export MAINT_OWNER_PACKAGES=google-cloud-cli
     _sys_step_applies update-gcloud || return 96
     update-gcloud
   ' brew
@@ -6278,7 +6292,7 @@ EOF_JOURNAL
 @test "sys maintenance: the active fzf executable decides Git versus APT ownership" {
   local fzf_repo="$HOME/.fzf"
   # A host Homebrew (as on a macOS runner) must not claim this fzf.
-  printf '#!/bin/sh\nexit 1\n' > "$TEST_MOCK_BIN/brew"
+  printf '#!/bin/sh\n[ "$*" = "list --formula" ] || exit 97\nexit 0\n' > "$TEST_MOCK_BIN/brew"
   chmod +x "$TEST_MOCK_BIN/brew"
   create_maintenance_git_repo "$fzf_repo" 'https://example.invalid/fzf.git'
   mkdir -p "$fzf_repo/bin"
@@ -6290,7 +6304,7 @@ EOF_JOURNAL
     # active-owner routing from the separate release publication transaction.
     _sys_update_fzf_verified_release() { return 0; }
     path=("$HOME/.fzf/bin" $path)
-    dpkg() { [[ "$1" == -s && "$2" == fzf ]]; }
+    export MAINT_OWNER_PACKAGES=fzf
     _sys_run_logged() {
       print -r -- "$*" >> "$MAINT_MUTATION_LOG"
       return 0
@@ -6307,7 +6321,7 @@ EOF_JOURNAL
 
   : > "$MAINT_MUTATION_LOG"
   run run_maintenance_zsh '
-    dpkg() { [[ "$1" == -s && "$2" == fzf ]]; }
+    export MAINT_OWNER_PACKAGES=fzf
     _sys_run_logged() {
       print -r -- "$*" >> "$MAINT_MUTATION_LOG"
       return 0

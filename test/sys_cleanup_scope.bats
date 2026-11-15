@@ -23,6 +23,9 @@ case "$name:$*" in
   'starship:--version') printf 'starship 1.0.0\n'; exit 0 ;;
   'brew:autoremove --dry-run'|'brew:cleanup --dry-run') exit 0 ;;
   'brew:--prefix') printf '%s\n' "$HOME/homebrew"; exit 0 ;;
+  'brew:list --formula')
+    [[ "$SCOPE_BACKEND" != brew ]] || printf 'awscli\nstarship\n'
+    exit 0 ;;
   'snap:list aws-cli') [[ "$SCOPE_BACKEND" == snap ]]; exit $? ;;
   'fnm:current') printf 'v24.22.0\n'; exit 0 ;;
   'uv:--version') printf 'uv 0.9.0\n'; exit 0 ;;

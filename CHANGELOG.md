@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- System: bound gcloud, uv, fnm and fzf ownership observations, preserve owner
+  timeouts, and execute vetted native diagnostic programs. Indeterminate gcloud
+  or uv ownership stops planning; malformed service identifiers and empty
+  diagnostic operands are rejected before capability checks.
+
 - Git: bound remote and GitHub observations to 30 seconds, preserve timeout
   and interruption statuses, and parse invalid arguments before repository
   probes. Completion skips the macOS Git placeholder and ambiguous remote

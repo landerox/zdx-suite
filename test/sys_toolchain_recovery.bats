@@ -7,10 +7,15 @@ setup() {
   export TMPDIR="$TEST_TEMP_DIR/tmp"
   export TOOLCHAIN_BREW_PREFIX="$TEST_TEMP_DIR/brew"
   mkdir -m 700 "$TMPDIR"
+  mkdir -m 700 "$TOOLCHAIN_BREW_PREFIX"
   : > "$TOOLCHAIN_LOG"
   cat > "$TEST_MOCK_BIN/brew" <<'EOF'
 #!/usr/bin/env zsh
-exit 1
+case "$*" in
+  --prefix) print -r -- "$TOOLCHAIN_BREW_PREFIX" ;;
+  'list --formula') ;;
+  *) exit 1 ;;
+esac
 EOF
   chmod +x "$TEST_MOCK_BIN/brew"
 }

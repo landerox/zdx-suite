@@ -734,7 +734,13 @@ EOF
         applicable_labels+=("$label")
         applicable_entries+=("$entry")
         ;;
-      130|143) return "$applicability_rc" ;;
+      # Only proved inapplicability may be omitted from the frozen plan.
+      1) ;;
+      124|130|143) return "$applicability_rc" ;;
+      *)
+        _sys_error "Could not determine whether $command_name applies; no update was started."
+        return 1
+        ;;
     esac
   done
   (( ${#applicable_labels[@]} > 0 )) || {
