@@ -131,17 +131,19 @@ _sys_wsl_diag_pending_reboot() {
   _sys_linux_diag_pending_reboot
 }
 
-# stdout: WSL1 or WSL2.
+# stdout: WSL1 or WSL2 after a successful nonblank single-line kernel read.
+# Failed or unusable observations provide no generation.
 _sys_wsl_diag_release() {
   local kernel_release
   kernel_release=$(
     _sys_run_native_probe 3 65536 uname -r 2>/dev/null
-  ) || kernel_release=""
-  if [[ "${kernel_release:l}" == *"wsl2"* \
-    || "${kernel_release:l}" == *"microsoft-standard"* ]]; then
-    print -r -- "WSL2"
-  else
+  ) || return $?
+  [[ "$kernel_release" == *[^[:space:]]* \
+    && "$kernel_release" != *[[:cntrl:]]* ]] || return 1
+  if [[ "$kernel_release" == *-Microsoft ]]; then
     print -r -- "WSL1"
+  else
+    print -r -- "WSL2"
   fi
 }
 

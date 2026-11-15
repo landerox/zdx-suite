@@ -187,38 +187,106 @@ _sys_diag_usage_percent() {
   printf '%.0f\n' "$used_percent"
 }
 
-# stdout TSV: filesystem, total-KiB, used-KiB, available-KiB, used-percent.
-_sys_diag_disk_record() {
-  local target_path="$1"
-  local disk_output
-  disk_output=$(
-    _sys_run_native_probe 5 65536 df -Pk "$target_path" 2>/dev/null
-  ) || return $?
-  print -r -- "$disk_output" | command awk '
-    NR == 2 {
-      percent = $(NF - 1)
-      gsub(/%/, "", percent)
-      printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, percent
-      exit
+# Parse one successful C-locale df observation. The complete numeric run must
+# have one interpretation; raw spans preserve filesystem/mount internal spaces.
+# stdout TSV: filesystem followed by the selected layout's numeric columns.
+_sys_diag_df_fields() {
+  emulate -L zsh
+  local -x LC_ALL=C
+  local kind="$1" observation="$2"
+  print -r -- "$observation" | command awk -v kind="$kind" '
+    function trim(value) {
+      sub(/^[ \t]+/, "", value); sub(/[ \t]+$/, "", value); return value
+    }
+    function uint(value) { return value ~ /^[0-9]+$/ }
+    function percent(value) { return value ~ /^[0-9]+%$/ }
+    NR == 1 {
+      header = trim($0); gsub(/[ \t]+/, " ", header)
+      if (kind == "blocks" && header ~ /^Filesystem (1024-blocks|1K-blocks) Used Available (Capacity|Use%) Mounted on$/)
+        width = 4
+      else if (kind == "inodes" && header == "Filesystem Inodes IUsed IFree IUse% Mounted on")
+        width = 4
+      else if (kind == "inodes" && header ~ /^Filesystem (1024-blocks|1K-blocks) Used Available (Capacity|Use%) iused ifree %iused Mounted on$/)
+        width = 7
+      else bad = 1
+      next
+    }
+    $0 !~ /^[ \t]*$/ { rows++; row = $0 }
+    END {
+      if (bad || rows != 1 || !width) exit 1
+      rest = row; offset = 0; count = 0
+      while (match(rest, /[^ \t]+/)) {
+        token[++count] = substr(rest, RSTART, RLENGTH)
+        start[count] = offset + RSTART
+        finish[count] = start[count] + RLENGTH - 1
+        offset = finish[count]; rest = substr(row, offset + 1)
+      }
+      matches = 0
+      for (i = 2; i + width <= count; i++) {
+        if (!uint(token[i]) || !uint(token[i+1]) || !uint(token[i+2]) || !percent(token[i+3])) continue
+        if (width == 7 && (!uint(token[i+4]) || !uint(token[i+5]) || !percent(token[i+6]))) continue
+        if (token[i+width] !~ /^\//) continue
+        filesystem = trim(substr(row, 1, start[i]-1))
+        mount = trim(substr(row, finish[i+width-1]+1))
+        if (filesystem == "" || mount !~ /^\// || filesystem ~ /[[:cntrl:]]/ || mount ~ /[[:cntrl:]]/) continue
+        if (++matches > 1) exit 1
+        result = filesystem
+        for (j = i; j < i + width; j++) {
+          value = token[j]; sub(/%$/, "", value)
+          result = result "\t" value
+        }
+      }
+      if (matches != 1) exit 1
+      printf "%s\n", result
     }
   '
 }
 
+# stdout TSV: filesystem, total-KiB, used-KiB, available-KiB, used-percent.
+_sys_diag_disk_record() {
+  emulate -L zsh
+  local -x LC_ALL=C
+  local target_path="$1" disk_output record REPLY
+  local -a fields=()
+  disk_output=$(
+    _sys_run_native_probe 5 65536 df -Pk "$target_path" 2>/dev/null
+  ) || return $?
+  record=$(_sys_diag_df_fields blocks "$disk_output") || return 1
+  IFS=$'\t' read -rA fields <<< "$record"
+  (( ${#fields} == 5 )) || return 1
+  local -i index
+  for index in 2 3 4; do
+    _sys_normalize_uint "${fields[index]}" "$_SYS_DIAG_MAX_KIB_FOR_BYTES" || return 1
+    fields[index]="$REPLY"
+  done
+  _sys_normalize_uint "${fields[5]}" 1000 || return 1
+  print -r -- "${fields[1]}"$'\t'"${fields[2]}"$'\t'"${fields[3]}"$'\t'"${fields[4]}"$'\t'"$REPLY"
+}
+
 # stdout: inode usage percentage without the percent sign.
 _sys_diag_inode_percent() {
-  local target_path="$1"
-  local inode_output
+  emulate -L zsh
+  local -x LC_ALL=C
+  local target_path="$1" inode_output record REPLY maximum
+  local -a fields=()
   inode_output=$(
     _sys_run_native_probe 5 65536 df -Pki "$target_path" 2>/dev/null
   ) || return $?
-  print -r -- "$inode_output" | command awk '
-    NR == 2 {
-      percent = $(NF - 1)
-      gsub(/%/, "", percent)
-      if (percent ~ /^[0-9]+$/) print percent
-      exit
-    }
-  '
+  record=$(_sys_diag_df_fields inodes "$inode_output") || return 1
+  IFS=$'\t' read -rA fields <<< "$record"
+  (( ${#fields} == 5 || ${#fields} == 8 )) || return 1
+  local -i index
+  for (( index = 2; index <= ${#fields}; index++ )); do
+    maximum="$_SYS_MAX_INTEGER"
+    if (( index == 5 || index == 8 )); then
+      maximum=1000
+    elif (( ${#fields} == 8 && index < 5 )); then
+      maximum="$_SYS_DIAG_MAX_KIB_FOR_BYTES"
+    fi
+    _sys_normalize_uint "${fields[index]}" "$maximum" || return 1
+    fields[index]="$REPLY"
+  done
+  print -r -- "${fields[-1]}"
 }
 
 _sys_diag_format_bytes() {
@@ -364,14 +432,14 @@ _sys_diag_render_package_records() {
   local -i count_rc=0
   tool_count=$(_sys_diag_npm_global_count) || count_rc=$?
   if (( count_rc != 3 )); then
-    (( count_rc == 0 )) || tool_count=0
+    (( count_rc == 0 )) || tool_count=unavailable
     _sys_label "NPM global:" "$tool_count"
   fi
 
   count_rc=0
   tool_count=$(_sys_diag_pipx_count) || count_rc=$?
   if (( count_rc != 3 )); then
-    (( count_rc == 0 )) || tool_count=0
+    (( count_rc == 0 )) || tool_count=unavailable
     _sys_label "pipx packages:" "$tool_count"
   fi
 }
@@ -389,6 +457,13 @@ _sys_diag_npm_global_count() {
     || return 1
   [[ -n "$npm_output" ]] && npm_lines=("${(@f)npm_output}")
   (( ${#npm_lines} > 0 )) && npm_lines=("${npm_lines[@]:1}")
+  if (( ${#npm_lines} == 1 )); then
+    local child="${npm_lines[1]}"
+    # npm uses this rendered child for an empty tree, never a package name.
+    case "$child" in
+      "(empty)"|"└── (empty)"|"\`-- (empty)"|"+-- (empty)") npm_lines=() ;;
+    esac
+  fi
   print -r -- "${#npm_lines}"
 }
 
@@ -696,7 +771,7 @@ sys-info() {
 
   if [[ "$environment_name" == "wsl" ]]; then
     local wsl_release windows_version
-    wsl_release=$(_sys_wsl_diag_release 2>/dev/null) || wsl_release="WSL"
+    wsl_release=$(_sys_wsl_diag_release 2>/dev/null) || wsl_release="unavailable"
     _sys_label "WSL:" "$wsl_release"
     windows_version=$(_sys_wsl_diag_windows_version 2>/dev/null) \
       || windows_version=""
@@ -729,6 +804,8 @@ sys-info() {
   if [[ "$core_count" =~ '^[0-9]+$' ]]; then
     _sys_label "CPU:" \
       "$core_count logical cores — $(_sys_display_escape "${cpu_model:-Unknown}")"
+  elif [[ -n "$cpu_model" && "$cpu_model" != Unknown ]]; then
+    _sys_label "CPU:" "logical cores unavailable — $(_sys_display_escape "$cpu_model")"
   else
     _sys_label "CPU:" "unavailable"
   fi

@@ -301,6 +301,29 @@ run on any platform. Darwin decision and parser behavior is protected with
 mocks, which the macOS workflow also runs on an Apple Silicon runner; the real
 Darwin collectors are not host-verified until a documented manual run exists.
 
+Optional numeric facts retain their own availability. A failed or malformed
+swap or logical-core observation does not become zero; known memory and CPU
+model data remain available. Unknown numeric fields become JSON `null` and
+unavailable human output. A successful zero-swap observation still means no
+swap is configured.
+
+Package counts consume complete successful inventories. Npm's rendered empty
+tree counts zero; a failed npm or pipx listing is unavailable in text and
+`null` in JSON, while an unusable manager retains its omitted row. APT counts
+records whose current dpkg state is exactly `installed`, independently of
+hold/removal selection or the separate error flag. Configuration-only and
+transitional current states do not contribute. A failed or malformed inventory
+never supplies a known zero, and the count is not a package-health verdict.
+
+Disk and inode readers recognize the C-locale GNU and BSD layouts, including
+BSD's separate block and inode capacities. They preserve ordinary internal
+spaces in filesystem and mount names through a unique complete row
+interpretation. Unsupported, ambiguous or unrepresentable rows are unavailable;
+whitespace output cannot recover every possible filename or padding boundary.
+Kernel OOM counts use completed killed-task records from the available log,
+including memory-cgroup kills, rather than invocation or context messages.
+Failed log reads supply no successful count.
+
 ### Data and UI boundary
 
 Adapter collectors emit one scalar or a documented TSV record. `sys-diag.zsh`,
@@ -326,11 +349,19 @@ sections:
 
 | Section | Facts |
 | --- | --- |
-| Distribution | WSL generation (WSL1 or WSL2), kernel release, `WSL_DISTRO_NAME`, OS name, and the command name of PID 1 |
+| Distribution | WSL generation (WSL1, WSL2, or unknown), kernel release, `WSL_DISTRO_NAME`, OS name, and the command name of PID 1 |
 | `/etc/wsl.conf` | The reviewed settings `[automount]` `enabled`, `root`, and `options`; `[boot]` `systemd` and `command`; `[network]` `generateResolvConf`, `generateHosts`, and `hostname`; `[interop]` `enabled` and `appendWindowsPath`; and `[user]` `default`, each with its source line, the WSL default where one is documented, or `not set`. Other keys are listed as written without interpretation, and malformed lines by number and reason |
 | Network | The IPv4 default-route interface from `/proc/net/route` and its MTU from `/sys/class/net`, an MTU pinned by a `[boot]` `command` of the form `ip link set [dev] <interface> mtu <value>`, whether WSL generated `/etc/resolv.conf`, the networking mode, and WireGuard (`DEVTYPE=wireguard`) and tun/tap interfaces |
 | Windows `.wslconfig` | The Windows user profile and `%UserProfile%\.wslconfig` with `[wsl2]` `memory`, `processors`, `swap`, `networkingMode`, `dnsTunneling`, `autoProxy`, `firewall`, and `sparseVhd`, and `[experimental]` `autoMemoryReclaim` and `sparseVhd` |
 | Virtual disk | The documented manual compaction steps for `ext4.vhdx`: `wsl.exe --shutdown`, locating the disk through the `Lxss` registry key, then `Optimize-VHD` or `diskpart` `compact vdisk`. Linux cannot read the disk's size reliably, so the size is not reported and the steps are never run |
+
+After WSL is established, a successful kernel release ending in the exact
+case-sensitive `-Microsoft` suffix identifies WSL1. Other successful releases,
+including custom kernels, identify WSL2. A failed, blank or malformed kernel
+observation leaves generation unknown. WSL2-specific default networking and
+findings require positive WSL2 evidence; unknown generation does not imply NAT
+or WSL2-only systemd findings. Native Linux and macOS do not become WSL through
+this generation classifier.
 
 Both configuration files are data. Each must be a readable regular file of at
 most 64 KiB that contains no NUL byte, so a UTF-16 file is reported as not

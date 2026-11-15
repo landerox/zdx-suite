@@ -329,6 +329,21 @@ before capability/backend probes across direct, nested and lazy routes, with
 valid service, help and no-operand controls. The standalone watchdog's documented
 mixed-lifetime residual remains outside these fixtures.
 
+`sys_platform_facts.bats` covers current installed-package state independently
+of selection, successful versus unavailable swap/core numbers with preserved
+TSV positions, case-sensitive WSL generation including custom kernels, and
+completed OOM victim counts with failed-producer controls. The maintained WSL
+fixture checks custom, legacy and unknown-generation text/JSON networking and
+findings without executing Windows operations.
+
+`sys_diagnostic_facts.bats` covers npm/pipx text and JSON availability parity,
+empty npm trees, complete inventories and real returned failures, GNU/BSD disk
+and inode rows with internal spaces, unique structural interpretation and
+malformed/ambiguous refusal. Exact native program/argv/producer receipts and
+single-object JSON assertions complement healthy controls. Finite returned
+statuses, modeled platforms and proc-file interception are separate from
+native host acceptance; no original hold is released.
+
 `sys_update_results.bats` covers Node.js version-evidence outcomes and failed
 default selection, fzf HEAD evidence and unsafe-owner blocking, separate Snap
 preview channels with finite byte/deadline/status controls, and all eight

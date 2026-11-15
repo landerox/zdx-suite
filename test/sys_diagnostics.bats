@@ -244,7 +244,7 @@ EOF
       "APT packages:" "42" \
       "Snap packages:" "3" \
       "NPM global:" "2" \
-      "pipx packages:" "0"
+      "pipx packages:" "unavailable"
   } > "$expected"
   # The shell line carries the host's own zsh version.
   grep -Eq '^  Shell: +/bin/zsh \(zsh [0-9]' "$HOME/err"

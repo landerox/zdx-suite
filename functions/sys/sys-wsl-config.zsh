@@ -277,7 +277,7 @@ _sys_wsl_review_collect() {
 
   # The networking mode is known only from a .wslconfig that could be read;
   # earlier WSL releases read it from [experimental].
-  if [[ "${wsl_facts[generation]}" != WSL1 \
+  if [[ "${wsl_facts[generation]}" == WSL2 \
     && "${wsl_facts[wslconfig_state]-}" == (present|absent) ]]; then
     value="${wsl_values[.wslconfig:wsl2.networkingmode]-}"
     [[ -n "$value" ]] \
@@ -398,7 +398,7 @@ _sys_wsl_review_findings() {
   fi
 
   local pid1="${wsl_facts[pid1]-}" services_text=""
-  if [[ "$generation" != WSL1 && -n "$pid1" && "$pid1" != systemd ]]; then
+  if [[ "$generation" == WSL2 && -n "$pid1" && "$pid1" != systemd ]]; then
     if (( ${#wsl_services} > 0 )); then
       _sys_count_noun "${#wsl_services}" "enabled service unit"
       if (( ${#wsl_services} > 3 )); then
@@ -567,6 +567,8 @@ _sys_wsl_review_render() {
   _sys_label "resolv.conf:" "$value"
   if [[ "${wsl_facts[generation]}" == WSL1 ]]; then
     value="not applicable on WSL 1"
+  elif [[ "${wsl_facts[generation]}" != WSL2 ]]; then
+    value="unavailable (WSL generation unknown)"
   else
     case "${wsl_facts[networking_mode_source]-}" in
       default)   value="NAT (default)" ;;

@@ -76,6 +76,7 @@ _sys_macos_diag_os_name() {
 }
 
 # stdout TSV: total-bytes, available-bytes, swap-total-bytes, swap-free-bytes.
+# Unavailable optional swap numbers use nonempty "unknown" fields.
 _sys_macos_diag_memory_record() {
   local total_bytes vm_output page_size available_pages
   local swap_output swap_record swap_total_bytes swap_free_bytes
@@ -130,53 +131,68 @@ _sys_macos_diag_memory_record() {
     available_bytes=$(( page_size * available_pages ))
   fi
   (( available_bytes <= total_bytes )) || return 1
-  swap_total_bytes=0
-  swap_free_bytes=0
+  # A failed optional swap read must not erase known memory fields or
+  # collapse numeric TSV positions into the fields that follow them.
+  swap_total_bytes=unknown
+  swap_free_bytes=unknown
   swap_output=$(
     _sys_run_native_probe 3 65536 sysctl -n vm.swapusage 2>/dev/null
-  ) \
-    || swap_output=""
+  ) || swap_output=""
   if [[ -n "$swap_output" ]]; then
     swap_record=$(print -r -- "$swap_output" | command awk '
       function to_bytes(value, suffix, number) {
+        if (value !~ /^[0-9]+([.][0-9]+)?[KMGT]?$/) return -1
         suffix = substr(value, length(value), 1)
-        number = substr(value, 1, length(value) - 1) + 0
+        if (suffix ~ /^[KMGT]$/) number = substr(value, 1, length(value) - 1) + 0
+        else return value + 0
         if (suffix == "T") return number * 1099511627776
         if (suffix == "G") return number * 1073741824
         if (suffix == "M") return number * 1048576
-        if (suffix == "K") return number * 1024
-        return value + 0
+        return number * 1024
       }
       {
-        for (i = 1; i <= NF; i++) {
-          if ($i == "total") total = $(i + 2)
-          if ($i == "free") free = $(i + 2)
+        for (i = 1; i + 2 <= NF; i++) {
+          if ($i == "total" && $(i + 1) == "=") { total = $(i + 2); totals++ }
+          if ($i == "free" && $(i + 1) == "=") { free = $(i + 2); frees++ }
         }
       }
-      END { printf "%.0f\t%.0f\n", to_bytes(total), to_bytes(free) }
-    ')
-    IFS=$'\t' read -r swap_total_bytes swap_free_bytes <<< "$swap_record"
-    _sys_normalize_uint "$swap_total_bytes" || return 1
-    swap_total_bytes="$REPLY"
-    _sys_normalize_uint "$swap_free_bytes" || return 1
-    swap_free_bytes="$REPLY"
-    (( swap_free_bytes <= swap_total_bytes )) || return 1
+      END {
+        if (totals != 1 || frees != 1) exit 1
+        total = to_bytes(total)
+        free = to_bytes(free)
+        if (total < 0 || free < 0) exit 1
+        printf "%.0f\t%.0f\n", total, free
+      }
+    ') || swap_record=""
+    local parsed_swap_total parsed_swap_free
+    IFS=$'\t' read -r parsed_swap_total parsed_swap_free <<< "$swap_record"
+    if _sys_normalize_uint "$parsed_swap_total"; then
+      parsed_swap_total="$REPLY"
+      if _sys_normalize_uint "$parsed_swap_free" \
+        && (( REPLY <= parsed_swap_total )); then
+        swap_total_bytes="$parsed_swap_total"
+        swap_free_bytes="$REPLY"
+      fi
+    fi
   fi
 
   printf '%s\t%s\t%s\t%s\n' \
     "$total_bytes" "$available_bytes" \
-    "${swap_total_bytes:-0}" "${swap_free_bytes:-0}"
+    "$swap_total_bytes" "$swap_free_bytes"
 }
 
-# stdout TSV: logical-core-count, CPU model.
+# stdout TSV: positive logical-core-count or "unknown", CPU model.
 _sys_macos_diag_cpu_record() {
   local core_count model_name
   core_count=$(
     _sys_run_native_probe 3 65536 sysctl -n hw.logicalcpu 2>/dev/null
-  ) || core_count=0
+  ) || core_count=unknown
   local REPLY
-  _sys_normalize_uint "$core_count" 1048576 || core_count=0
-  [[ "$core_count" == 0 ]] || core_count="$REPLY"
+  if _sys_normalize_uint "$core_count" 1048576 && (( REPLY > 0 )); then
+    core_count="$REPLY"
+  else
+    core_count=unknown
+  fi
   model_name=$(
     _sys_run_native_probe 3 65536 \
       sysctl -n machdep.cpu.brand_string 2>/dev/null

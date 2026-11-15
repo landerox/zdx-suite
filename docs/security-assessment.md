@@ -2694,6 +2694,16 @@ memory or CPU during inspection.
 **Current controls.**
 
 - System diagnostic version, package, and startup probes use bounded execution.
+- Complete successful observations supply numeric facts; failed reads never
+  imply zero swap, zero cores or an empty package population. Optional unknown
+  fields preserve independent memory/model data and remain null/unavailable
+  at presentation. WSL2-specific networking and findings require positive
+  generation evidence. Dpkg counts current installed state independently of
+  selection/error metadata. C-locale disk extraction recognizes complete
+  GNU/BSD layouts and accepts only a unique numeric boundary, preserving
+  internal spaces while refusing control-bearing or ambiguous fields. Finite
+  producer/argv and platform fixtures cover these controls; native host
+  acceptance and the existing watchdog lifetime residual remain separate.
 - System native diagnostic probes execute the vetted absolute program rather
   than a same-named shell function. Bootstrap resolution avoids capability
   refresh recursion. Gcloud, uv, fnm and fzf ownership observations use short
