@@ -836,6 +836,8 @@ The OOM total counts completed victims in the available kernel log.
 - **System Information (`sys-info`)**: Display OS, kernel, architecture,
   memory, swap, CPU, disks, uptime, local tool versions (such as Git, Python,
   Terraform, OpenTofu, kubectl, and Helm), and available package counts.
+  Uptime follows the shared day-aware duration format; JSON keeps numeric
+  seconds. CPU labels distinguish one logical core from multiple cores.
   Linux, WSL, and macOS use separate read-only collectors. On macOS the
   main disk is the Data volume (`/System/Volumes/Data`), because `/` is a
   sealed system snapshot, and available memory comes from the kernel's
@@ -873,12 +875,16 @@ The OOM total counts completed victims in the available kernel log.
   reports that it does not apply.
 - **Startup Analysis (`sys-startup`)**: Measure ten interactive Zsh startups
   with a timeout and run an isolated `zprof` report against `~/.zshrc`.
+  Benchmark values retain integer milliseconds for precision.
   This starts eleven isolated Zsh subprocesses in total. Startup files execute
   normally inside them and may still perform their usual external side effects.
 - **Telemetry (`sys-telemetry --dashboard` / `--browse`)**: Inspect validated,
   bounded local telemetry without passing raw JSON to the terminal preview.
   Malformed records, implausible durations, and an incomplete final line are
-  skipped. Timing footers and new records use registered commands and their
+  skipped, including incomplete integer tokens and a final object without LF.
+  The dashboard, browser and preview use shared duration units; stored
+  durations remain integer milliseconds. An unrenderable total is shown as
+  unavailable. Timing footers and new records use registered commands and their
   owning suite; an unrecognized or mismatched label appears as
   `<suite>:unknown`, or `unknown:unknown` if its suite is also unrecognized.
   Failed opt-in recording prints one generic warning per shell and preserves

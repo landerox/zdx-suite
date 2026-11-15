@@ -310,6 +310,11 @@ and a zero-padded hour remainder. For example, `88199.5` seconds is `1d 00h`,
 `LC_NUMERIC` cannot change the decimal point. Telemetry records keep their own
 machine format.
 
+The `sys-startup` benchmark is the sole exception: its average, minimum,
+maximum and performance thresholds retain integer milliseconds for benchmark
+precision. Its ordinary timing footer and every telemetry history display,
+including previews, use the standard duration format above.
+
 ## Counted nouns
 
 Use `_zdx_count_noun <count> <singular> [plural]`. Text such as `(s)` or

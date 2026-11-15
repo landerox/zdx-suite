@@ -265,24 +265,45 @@ _sys_update_linked_zdx_checkout() {
   REPLY="$checkout_root"
 }
 
+# REPLY: the raw path for UI; the message service escapes it once.
+_sys_update_git_path_display() {
+  local display_path="${1-}" display_home="${HOME-}"
+  while [[ "$display_home" != / && "$display_home" == */ ]]; do
+    display_home="${display_home%/}"
+  done
+  REPLY="$display_path"
+  if [[ -n "$display_home" && "$display_home" != / ]]; then
+    if [[ "$display_path" == "$display_home" ]]; then
+      REPLY="~"
+    elif [[ "$display_path" == "$display_home"/* ]]; then
+      REPLY="~/${display_path#"$display_home"/}"
+    fi
+  fi
+}
+
 # Capture the complete authorization identity for a user-owned Git checkout.
 # reply contains: path, origin, HEAD, repo device/inode, .git device/inode.
 _sys_update_git_fingerprint() {
   setopt LOCAL_OPTIONS EXTENDED_GLOB
   local allowed_root="${1:-}"
   local repository="${2:-}"
+  local repository_display
+  _sys_update_git_path_display "$repository"
+  repository_display="$REPLY"
 
   _sys_update_validate_owned_path \
     "$allowed_root" "$repository" directory || {
-      _sys_error "Git checkout is not an owned, symlink-free child of HOME: $(_sys_display_escape "$repository")"
+      _sys_error "Git checkout is not an owned, symlink-free child of HOME: $repository_display"
       return 1
     }
   local repository_abs="$REPLY"
   [[ "$repository_abs" != "${allowed_root:A}" ]] || return 1
+  _sys_update_git_path_display "$repository_abs"
+  repository_display="$REPLY"
 
   _sys_update_validate_owned_path \
     "$repository_abs" "$repository_abs/.git" directory || {
-      _sys_error "Git metadata is not an owned, symlink-free directory: $(_sys_display_escape "$repository_abs/.git")"
+      _sys_error "Git metadata is not an owned, symlink-free directory: $repository_display/.git"
       _sys_dim "Linked worktrees and .git indirection files are not supported."
       return 1
     }
@@ -291,19 +312,19 @@ _sys_update_git_fingerprint() {
   local repository_top origin origin_record current_commit
   repository_top=$(_sys_update_git_read -C "$repository_abs" \
     rev-parse --show-toplevel 2>/dev/null) || {
-      _sys_error "Unable to verify Git checkout: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Unable to verify Git checkout: $repository_display"
       return 1
     }
   [[ -n "$repository_top" \
     && "$repository_top" != *[[:cntrl:]]* \
     && "${repository_top:A}" == "$repository_abs" ]] || {
-      _sys_error "Git checkout root does not match its authorized path: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Git checkout root does not match its authorized path: $repository_display"
       return 1
     }
 
   origin_record=$(_sys_update_git_read -C "$repository_abs" \
     config --local --null --get-all remote.origin.url 2>/dev/null) || {
-      _sys_error "Git checkout has no readable origin: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Git checkout has no readable origin: $repository_display"
       return 1
     }
   [[ "$origin_record" == *$'\0' ]] || return 1
@@ -311,18 +332,18 @@ _sys_update_git_fingerprint() {
   [[ -n "$origin" && ${#origin} -le 2048 \
     && "$origin" != *[[:cntrl:]]* \
     && "$origin" != *$'\0'* ]] || {
-      _sys_error "Git checkout origin is empty or contains unsafe control data: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Git checkout origin is empty or contains unsafe control data: $repository_display"
       return 1
     }
 
   current_commit=$(_sys_update_git_read -C "$repository_abs" \
     rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || {
-      _sys_error "Git checkout has no verifiable HEAD commit: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Git checkout has no verifiable HEAD commit: $repository_display"
       return 1
     }
   (( ${#current_commit} == 40 || ${#current_commit} == 64 )) \
     && [[ "$current_commit" == [[:xdigit:]]## ]] || {
-      _sys_error "Git checkout returned an invalid HEAD identifier: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Git checkout returned an invalid HEAD identifier: $repository_display"
       return 1
     }
   current_commit="${current_commit:l}"
@@ -331,7 +352,7 @@ _sys_update_git_fingerprint() {
   zmodload -F zsh/stat b:zstat 2>/dev/null \
     && zstat -H repository_state "$repository_abs" 2>/dev/null \
     && zstat -H git_dir_state "$git_dir_abs" 2>/dev/null || {
-      _sys_error "Unable to fingerprint Git checkout metadata: $(_sys_display_escape "$repository_abs")"
+      _sys_error "Unable to fingerprint Git checkout metadata: $repository_display"
       return 1
     }
   [[ -n "${repository_state[device]:-}" \
@@ -360,7 +381,8 @@ _sys_update_git_revalidate() {
 
   _sys_update_git_fingerprint "$allowed_root" "$repository" || return 1
   [[ "$REPLY" == "$expected_fingerprint" ]] || {
-    _sys_error "Git checkout changed after authorization: $(_sys_display_escape "$repository")"
+    _sys_update_git_path_display "$repository"
+    _sys_error "Git checkout changed after authorization: $REPLY"
     return 1
   }
 }
@@ -384,7 +406,8 @@ _sys_update_git_revalidate_stable() {
     && "${reply[5]}" == "$expected_repo_inode" \
     && "${reply[6]}" == "$expected_git_device" \
     && "${reply[7]}" == "$expected_git_inode" ]] || {
-      _sys_error "Git checkout identity or origin changed during update: $(_sys_display_escape "$repository")"
+      _sys_update_git_path_display "$repository"
+      _sys_error "Git checkout identity or origin changed during update: $REPLY"
       return 1
     }
 }

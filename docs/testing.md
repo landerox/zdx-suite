@@ -344,6 +344,21 @@ single-object JSON assertions complement healthy controls. Finite returned
 statuses, modeled platforms and proc-file interception are separate from
 native host acceptance; no original hold is released.
 
+`sys_telemetry_output.bats` covers complete integer and LF boundaries,
+truthful empty states, shared duration units and range refusal, preserved
+caller state, and qualified comma-locale conversion. Dashboard and browser
+checks retain machine fields and input identity, and execute the fixed
+preview with quoted fixture data; they do not establish native fzf or
+terminal rendering. Read failures retain separate direct/public producer
+receipts. Existing clear-state controls retain ownership, mode and identity.
+
+`sys_output_contracts.bats` covers the three System JSON generation routes,
+compact/monochrome argv and failed-producer suppression, counted CPU labels,
+core-backed uptime with unchanged numeric JSON, complete health verdicts,
+and HOME-boundary checkout diagnostics. Finite producer returns, wrapper
+streams and reached controls remain distinct; private display-failure
+companions do not represent additional original findings.
+
 `sys_update_results.bats` covers Node.js version-evidence outcomes and failed
 default selection, fzf HEAD evidence and unsafe-owner blocking, separate Snap
 preview channels with finite byte/deadline/status controls, and all eight

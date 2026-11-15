@@ -37,25 +37,18 @@ _sys_telemetry_format_ms() {
   emulate -L zsh
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
-  local milliseconds="$1"
+  local LC_NUMERIC=C
+  local milliseconds="${1:-}"
   if [[ ! "$milliseconds" =~ '^[0-9]+$' \
     || "$milliseconds" == 0[0-9]* \
     || ${#milliseconds} -gt 11 \
     || "$milliseconds" -gt 31536000000 ]]; then
-    print -r -- "0ms"
     return 2
   fi
 
-  if (( milliseconds < 1000 )); then
-    printf '%dms' "$milliseconds"
-  elif (( milliseconds < 60000 )); then
-    printf '%.2fs' $(( milliseconds / 1000.0 ))
-  else
-    local -i total_seconds=$(( milliseconds / 1000 ))
-    local -i minutes=$(( total_seconds / 60 ))
-    local -i remaining_seconds=$(( total_seconds % 60 ))
-    printf '%dm %ds' "$minutes" "$remaining_seconds"
-  fi
+  local REPLY=""
+  _sys_duration_label "$(( milliseconds / 1000.0 ))" || return $?
+  print -rn -- "$REPLY"
 }
 
 # Status: 0 readable, 1 unsafe/unreadable, 2 invalid limit, 3 empty, 4 too large.
@@ -109,10 +102,21 @@ _sys_telemetry_report_log_error() {
 # stdout TSV: timestamp, suite, command, duration-ms, exit-code.
 # Malformed or unsafe records are skipped without being rendered.
 _sys_telemetry_records() {
+  emulate -L zsh
+  local MATCH MBEGIN MEND
+  local -a match=() mbegin=() mend=()
   local log_file="$1"
   _sys_telemetry_validate_log "$log_file" || return $?
 
-  command awk '
+  # Only LF-terminated records are complete. This is a bounded read, not an
+  # atomic snapshot against a concurrent replacement or append.
+  local complete_lines=""
+  complete_lines=$(command wc -l < "$log_file" 2>/dev/null) || return $?
+  [[ "$complete_lines" =~ '^[[:space:]]*([0-9]+)[[:space:]]*$' ]] || return 1
+  complete_lines="${match[1]}"
+  (( ${#complete_lines} <= 9 && complete_lines <= 134217728 )) || return 1
+
+  command awk -v complete_lines="$complete_lines" '
     function key_count(key, copy) {
       copy = $0
       return gsub("\"" key "\"[[:space:]]*:", "", copy)
@@ -128,14 +132,16 @@ _sys_telemetry_records() {
     }
 
     function number_value(key, pattern, matched) {
-      pattern = "\"" key "\"[[:space:]]*:[[:space:]]*[0-9]+"
+      pattern = "\"" key "\"[[:space:]]*:[[:space:]]*[0-9]+[[:space:]]*[,}]"
       if (!match($0, pattern)) return ""
       matched = substr($0, RSTART, RLENGTH)
       sub(/^[^:]*:[[:space:]]*/, "", matched)
+      sub(/[[:space:]]*[,}]$/, "", matched)
       return matched
     }
 
     {
+      if (NR > complete_lines) next
       if ($0 !~ /^\{.*\}$/) next
       structural = $0
       if (gsub(/\{/, "", structural) != 1) next
@@ -213,8 +219,8 @@ _sys_telemetry_dashboard() {
   _sys_label "Successful:" "$successful_runs"
   _sys_label "Failed:" "$failed_runs"
   _sys_label "Success Rate:" "${success_rate}%"
-  _sys_label "Total Duration:" "$(_sys_telemetry_format_ms "$total_duration")"
-  _sys_label "Average:" "$(_sys_telemetry_format_ms "$average_duration")"
+  _sys_label "Total Duration:" "$(_sys_telemetry_format_ms "$total_duration" || print -rn -- "unavailable")"
+  _sys_label "Average:" "$(_sys_telemetry_format_ms "$average_duration" || print -rn -- "unavailable")"
 
   _sys_blank
   _sys_info "Suite Distribution"
@@ -231,7 +237,7 @@ _sys_telemetry_dashboard() {
     printf '  %-12s %s %3d%% (%d runs) · %s\n' \
       "$(_sys_display_escape "$distribution_suite")" \
       "$distribution_bar" "$percentage" "$suite_count" \
-      "$(_sys_telemetry_format_ms "$suite_duration")" >&2
+      "$(_sys_telemetry_format_ms "$suite_duration" || print -rn -- "unavailable")" >&2
   done
 
   _sys_blank
@@ -250,7 +256,7 @@ _sys_telemetry_dashboard() {
     printf '  %d. %s:%s · %s · exit %d · %s\n' \
       "$display_index" "$(_sys_display_escape "$suite_name")" \
       "$(_sys_display_escape "$command_name")" \
-      "$(_sys_telemetry_format_ms "$duration_ms")" "$exit_code" \
+      "$(_sys_telemetry_format_ms "$duration_ms" || print -rn -- "unavailable")" "$exit_code" \
       "$(_sys_display_escape "$timestamp")" >&2
   done
 
@@ -268,7 +274,7 @@ _sys_telemetry_dashboard() {
     printf '  [%s] %s:%s · %s · exit %d · %s\n' \
       "$result_label" "$(_sys_display_escape "$suite_name")" \
       "$(_sys_display_escape "$command_name")" \
-      "$(_sys_telemetry_format_ms "$duration_ms")" "$exit_code" \
+      "$(_sys_telemetry_format_ms "$duration_ms" || print -rn -- "unavailable")" "$exit_code" \
       "$(_sys_display_escape "$timestamp")" >&2
   done
   return 0
@@ -310,10 +316,10 @@ _sys_telemetry_browse() {
       <<< "$record_line"
     result_label="ok"
     (( exit_code != 0 )) && result_label="failed"
-    duration_label=$(_sys_telemetry_format_ms "$duration_ms")
+    duration_label=$(_sys_telemetry_format_ms "$duration_ms" || print -rn -- "unavailable")
     display_label="[$result_label] $timestamp [$suite_name] $command_name ($duration_label)"
     browser_records+=(
-      "$display_label"$'\t'"$timestamp"$'\t'"$suite_name"$'\t'"$command_name"$'\t'"$duration_ms"$'\t'"$exit_code"
+      "$display_label"$'\t'"$timestamp"$'\t'"$suite_name"$'\t'"$command_name"$'\t'"$duration_ms"$'\t'"$exit_code"$'\t'"$duration_label"
     )
   done
 
@@ -324,7 +330,7 @@ _sys_telemetry_browse() {
     --with-nth=1 \
     --prompt='Telemetry history > ' \
     --header='Read-only history browser; Esc returns' \
-    --preview='printf "Execution details\n\n  Timestamp: %s\n  Suite: %s\n  Command: %s\n  Duration: %s ms\n  Exit code: %s\n" {2} {3} {4} {5} {6}' \
+    --preview='printf "Execution details\n\n  Timestamp: %s\n  Suite: %s\n  Command: %s\n  Duration: %s\n  Exit code: %s\n" {2} {3} {4} {7} {6}' \
     --preview-window='right:50%:wrap,<120(down:7:wrap)' \
     < <(printf '%s\n' "${browser_records[@]}") || select_rc=$?
   selected_record="$REPLY"
@@ -439,7 +445,7 @@ _sys_telemetry_clear() {
     fi
 
     clear_tmp=$(mktemp "$log_dir/.telemetry-clear.XXXXXX") || return 1
-    command chmod 600 "$clear_tmp" 2>/dev/null || return 1
+    command chmod -- 600 "$clear_tmp" 2>/dev/null || return 1
     command mv -f "$clear_tmp" "$log_file" 2>/dev/null || return 1
     clear_tmp=""
   } always {
