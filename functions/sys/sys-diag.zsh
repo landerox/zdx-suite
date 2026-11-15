@@ -192,7 +192,7 @@ _sys_diag_disk_record() {
   local target_path="$1"
   local disk_output
   disk_output=$(
-    _sys_run_bounded_probe 5 65536 df -Pk "$target_path" 2>/dev/null
+    _sys_run_native_probe 5 65536 df -Pk "$target_path" 2>/dev/null
   ) || return $?
   print -r -- "$disk_output" | command awk '
     NR == 2 {
@@ -209,7 +209,7 @@ _sys_diag_inode_percent() {
   local target_path="$1"
   local inode_output
   inode_output=$(
-    _sys_run_bounded_probe 5 65536 df -Pki "$target_path" 2>/dev/null
+    _sys_run_native_probe 5 65536 df -Pki "$target_path" 2>/dev/null
   ) || return $?
   print -r -- "$inode_output" | command awk '
     NR == 2 {
@@ -270,23 +270,23 @@ _sys_diag_tool_version() {
   local tool_name="$1"
 
   case "$tool_name" in
-    git)       _sys_run_bounded_probe 3 65536 git --version 2>/dev/null | command awk '{ print $3 }' ;;
-    python3)   _sys_run_bounded_probe 3 65536 python3 --version 2>/dev/null | command awk '{ print $2 }' ;;
-    uv)        _sys_run_bounded_probe 3 65536 uv --version 2>/dev/null | command awk '{ print $2 }' ;;
-    node)      _sys_run_bounded_probe 3 65536 node --version 2>/dev/null ;;
-    rustc)     _sys_run_bounded_probe 3 65536 rustc --version 2>/dev/null | command awk '{ print $2 }' ;;
-    go)        _sys_run_bounded_probe 3 65536 go version 2>/dev/null | command awk '{ sub(/^go/, "", $3); print $3 }' ;;
-    docker)    _sys_run_bounded_probe 3 65536 docker --version 2>/dev/null | command awk '{ gsub(/,/, "", $3); print $3 }' ;;
-    gcloud)    _sys_run_bounded_probe 3 65536 gcloud --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
-    terraform) _sys_run_bounded_probe 3 65536 terraform --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
-    tofu)      _sys_run_bounded_probe 3 65536 tofu --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
+    git)       _sys_run_native_probe 3 65536 git --version 2>/dev/null | command awk '{ print $3 }' ;;
+    python3)   _sys_run_native_probe 3 65536 python3 --version 2>/dev/null | command awk '{ print $2 }' ;;
+    uv)        _sys_run_native_probe 3 65536 uv --version 2>/dev/null | command awk '{ print $2 }' ;;
+    node)      _sys_run_native_probe 3 65536 node --version 2>/dev/null ;;
+    rustc)     _sys_run_native_probe 3 65536 rustc --version 2>/dev/null | command awk '{ print $2 }' ;;
+    go)        _sys_run_native_probe 3 65536 go version 2>/dev/null | command awk '{ sub(/^go/, "", $3); print $3 }' ;;
+    docker)    _sys_run_native_probe 3 65536 docker --version 2>/dev/null | command awk '{ gsub(/,/, "", $3); print $3 }' ;;
+    gcloud)    _sys_run_native_probe 3 65536 gcloud --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
+    terraform) _sys_run_native_probe 3 65536 terraform --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
+    tofu)      _sys_run_native_probe 3 65536 tofu --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
     kubectl)
-      _sys_run_bounded_probe 3 65536 \
+      _sys_run_native_probe 3 65536 \
         kubectl version --client -o json 2>/dev/null \
         | command sed -n 's/.*"gitVersion":[[:space:]]*"\([^"]*\)".*/\1/p'
       ;;
-    helm)      _sys_run_bounded_probe 3 65536 helm version --short 2>/dev/null | command sed 's/^v//' ;;
-    starship)  _sys_run_bounded_probe 3 65536 starship --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
+    helm)      _sys_run_native_probe 3 65536 helm version --short 2>/dev/null | command sed 's/^v//' ;;
+    starship)  _sys_run_native_probe 3 65536 starship --version 2>/dev/null | command awk 'NR == 1 { print $NF }' ;;
     *)         return 2 ;;
   esac
 }
@@ -383,7 +383,7 @@ _sys_diag_npm_global_count() {
   local npm_output
   local -a npm_lines=()
   npm_output=$(
-    _sys_run_bounded_probe 5 "$_SYS_DIAG_PROBE_MAX_BYTES" \
+    _sys_run_native_probe 5 "$_SYS_DIAG_PROBE_MAX_BYTES" \
       npm list -g --depth=0 2>/dev/null
   ) \
     || return 1
@@ -399,7 +399,7 @@ _sys_diag_pipx_count() {
   local pipx_output
   local -a pipx_lines=()
   pipx_output=$(
-    _sys_run_bounded_probe 5 "$_SYS_DIAG_PROBE_MAX_BYTES" \
+    _sys_run_native_probe 5 "$_SYS_DIAG_PROBE_MAX_BYTES" \
       pipx list --short 2>/dev/null
   ) \
     || return 1
@@ -455,7 +455,7 @@ _sys_info_json() {
   os_display=$(_sys_diag_os_name 2>/dev/null) || os_display=""
   [[ "$os_display" == Unknown ]] && os_display=""
   kernel_release=$(
-    _sys_run_bounded_probe 3 65536 uname -r 2>/dev/null
+    _sys_run_native_probe 3 65536 uname -r 2>/dev/null
   ) || kernel_release=""
   architecture=$(_sys_capability_value architecture) || architecture=""
   [[ "$architecture" == unknown ]] && architecture=""
@@ -499,7 +499,7 @@ _sys_info_json() {
 
   local zsh_version="" shell_path="${SHELL:-}"
   local -a match=() mbegin=() mend=()
-  value=$(_sys_run_bounded_probe 3 65536 zsh --version 2>/dev/null) || value=""
+  value=$(_sys_run_native_probe 3 65536 zsh --version 2>/dev/null) || value=""
   [[ "$value" =~ '^zsh ([0-9][0-9A-Za-z.-]{0,31})' ]] && zsh_version="${match[1]}"
   [[ "$shell_path" != *[[:cntrl:]]* ]] || shell_path=""
 
@@ -508,7 +508,7 @@ _sys_info_json() {
     omz_installed=true
     if _sys_tool_available git; then
       omz_version=$(
-        _sys_run_bounded_probe 3 65536 \
+        _sys_run_native_probe 3 65536 \
           git -C "$ZSH" describe --tags 2>/dev/null
       ) || omz_version=""
     fi
@@ -647,7 +647,12 @@ sys-info() {
       return 0
       ;;
     --json) json=1 ;;
-    "") ;;
+    "")
+      (( $# == 0 )) || {
+        _sys_error "sys-info accepts no positional arguments."
+        return 2
+      }
+      ;;
     *)
       _sys_error "Unknown option: $1"
       return 2
@@ -679,7 +684,7 @@ sys-info() {
   local os_display kernel_release architecture environment_name
   os_display=$(_sys_diag_os_name) || os_display="Unknown"
   kernel_release=$(
-    _sys_run_bounded_probe 3 65536 uname -r 2>/dev/null
+    _sys_run_native_probe 3 65536 uname -r 2>/dev/null
   ) || kernel_release="Unknown"
   architecture=$(_sys_capability_value architecture) || architecture="unknown"
   environment_name=$(_sys_capability_value environment) || environment_name="native"
@@ -753,7 +758,7 @@ sys-info() {
   _sys_blank
   local zsh_version
   zsh_version=$(
-    _sys_run_bounded_probe 3 65536 zsh --version 2>/dev/null
+    _sys_run_native_probe 3 65536 zsh --version 2>/dev/null
   ) || zsh_version="unknown"
   _sys_label "Shell:" \
     "$(_sys_display_escape "${SHELL:-zsh}") ($(_sys_display_escape "$zsh_version"))"
@@ -761,7 +766,7 @@ sys-info() {
     local omz_version="installed"
     if _sys_tool_available git; then
       omz_version=$(
-        _sys_run_bounded_probe 3 65536 \
+        _sys_run_native_probe 3 65536 \
           git -C "$ZSH" describe --tags 2>/dev/null
       ) \
         || omz_version="installed"
@@ -864,7 +869,12 @@ sys-health() {
       _sys_health_usage
       return 0
       ;;
-    "") ;;
+    "")
+      (( $# == 0 )) || {
+        _sys_error "sys-health accepts no positional arguments."
+        return 2
+      }
+      ;;
     *)
       _sys_error "Unknown option: $1"
       return 2

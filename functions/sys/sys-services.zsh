@@ -69,14 +69,20 @@ _sys_services_backend() {
   esac
 }
 
+_sys_services_validate_id_generic() {
+  emulate -L zsh
+  local service_id="${1:-}"
+  [[ -n "$service_id" && ${#service_id} -le 255 && "$service_id" != -* \
+    && "$service_id" != *[[:space:]/]* ]]
+}
+
 _sys_services_validate_id() {
   emulate -L zsh
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
   local service_backend="${1:-}"
   local service_id="${2:-}"
-  [[ -n "$service_id" && ${#service_id} -le 255 && "$service_id" != -* \
-    && "$service_id" != *[[:space:]/]* ]] || return 2
+  _sys_services_validate_id_generic "$service_id" || return 2
 
   case "$service_backend" in
     systemd)
@@ -272,6 +278,10 @@ _sys_services_state_matches() {
 
 _sys_services_show() {
   local service_id="${1:-}"
+  _sys_services_validate_id_generic "$service_id" || {
+    _sys_error "Invalid service identifier: $service_id"
+    return 2
+  }
   local service_backend
   service_backend=$(_sys_services_backend) || return $?
   _sys_services_validate_id "$service_backend" "$service_id" || {
@@ -376,6 +386,11 @@ _sys_services_mutate() {
     start|stop|restart|enable|disable) ;;
     *) return 2 ;;
   esac
+
+  _sys_services_validate_id_generic "$service_id" || {
+    _sys_error "Invalid service identifier: $service_id"
+    return 2
+  }
 
   local service_backend
   service_backend=$(_sys_services_backend) || return $?

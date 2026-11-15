@@ -57,15 +57,15 @@ _sys_macos_ports_backend() {
 _sys_macos_diag_os_name() {
   local product_name product_version build_version
   product_name=$(
-    _sys_run_bounded_probe 3 65536 sw_vers -productName 2>/dev/null
+    _sys_run_native_probe 3 65536 sw_vers -productName 2>/dev/null
   ) \
     || product_name="macOS"
   product_version=$(
-    _sys_run_bounded_probe 3 65536 sw_vers -productVersion 2>/dev/null
+    _sys_run_native_probe 3 65536 sw_vers -productVersion 2>/dev/null
   ) \
     || product_version=""
   build_version=$(
-    _sys_run_bounded_probe 3 65536 sw_vers -buildVersion 2>/dev/null
+    _sys_run_native_probe 3 65536 sw_vers -buildVersion 2>/dev/null
   ) \
     || build_version=""
 
@@ -81,7 +81,7 @@ _sys_macos_diag_memory_record() {
   local swap_output swap_record swap_total_bytes swap_free_bytes
 
   total_bytes=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n hw.memsize 2>/dev/null
+    _sys_run_native_probe 3 65536 sysctl -n hw.memsize 2>/dev/null
   ) || return 1
   local REPLY
   _sys_normalize_uint "$total_bytes" || return 1
@@ -94,7 +94,7 @@ _sys_macos_diag_memory_record() {
   local -i available_bytes=0
   local memory_level=""
   memory_level=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n kern.memorystatus_level \
+    _sys_run_native_probe 3 65536 sysctl -n kern.memorystatus_level \
       2>/dev/null
   ) || memory_level=""
   if _sys_normalize_uint "$memory_level" 100 \
@@ -103,7 +103,7 @@ _sys_macos_diag_memory_record() {
     available_bytes=$(( total_bytes * memory_level / 100 ))
   else
     vm_output=$(
-      _sys_run_bounded_probe 3 1048576 vm_stat 2>/dev/null
+      _sys_run_native_probe 3 1048576 vm_stat 2>/dev/null
     ) || return 1
     page_size=$(print -r -- "$vm_output" | command awk '
       NR == 1 && match($0, /page size of [0-9]+ bytes/) {
@@ -133,7 +133,7 @@ _sys_macos_diag_memory_record() {
   swap_total_bytes=0
   swap_free_bytes=0
   swap_output=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n vm.swapusage 2>/dev/null
+    _sys_run_native_probe 3 65536 sysctl -n vm.swapusage 2>/dev/null
   ) \
     || swap_output=""
   if [[ -n "$swap_output" ]]; then
@@ -172,19 +172,19 @@ _sys_macos_diag_memory_record() {
 _sys_macos_diag_cpu_record() {
   local core_count model_name
   core_count=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n hw.logicalcpu 2>/dev/null
+    _sys_run_native_probe 3 65536 sysctl -n hw.logicalcpu 2>/dev/null
   ) || core_count=0
   local REPLY
   _sys_normalize_uint "$core_count" 1048576 || core_count=0
   [[ "$core_count" == 0 ]] || core_count="$REPLY"
   model_name=$(
-    _sys_run_bounded_probe 3 65536 \
+    _sys_run_native_probe 3 65536 \
       sysctl -n machdep.cpu.brand_string 2>/dev/null
   ) \
     || model_name=""
   if [[ -z "$model_name" ]]; then
     model_name=$(
-      _sys_run_bounded_probe 3 65536 sysctl -n hw.model 2>/dev/null
+      _sys_run_native_probe 3 65536 sysctl -n hw.model 2>/dev/null
     ) || model_name="Unknown"
   fi
   model_name="${model_name//$'\t'/ }"
@@ -199,7 +199,7 @@ _sys_macos_diag_runtime_record() {
   local -a match=() mbegin=() mend=()
   local boot_record boot_seconds now_seconds uptime_seconds load_record
   boot_record=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n kern.boottime 2>/dev/null
+    _sys_run_native_probe 3 65536 sysctl -n kern.boottime 2>/dev/null
   ) || return 1
   boot_seconds=$(print -r -- "$boot_record" | command awk '
     {
@@ -214,7 +214,7 @@ _sys_macos_diag_runtime_record() {
     }
   ')
   now_seconds=$(
-    _sys_run_bounded_probe 3 65536 date +%s 2>/dev/null
+    _sys_run_native_probe 3 65536 date +%s 2>/dev/null
   ) || return 1
   local REPLY
   _sys_normalize_uint "$boot_seconds" || return 1
@@ -225,7 +225,7 @@ _sys_macos_diag_runtime_record() {
   uptime_seconds=$(( now_seconds - boot_seconds ))
 
   load_record=$(
-    _sys_run_bounded_probe 3 65536 sysctl -n vm.loadavg 2>/dev/null
+    _sys_run_native_probe 3 65536 sysctl -n vm.loadavg 2>/dev/null
   ) || return 1
   load_record="${load_record//[\{\}]/}"
   local -a load_parts=( ${(z)load_record} )
@@ -251,16 +251,16 @@ _sys_macos_diag_package_records() {
       local formula_output cask_output
       local -a formula_lines=() cask_lines=()
       formula_output=$(
-        _sys_run_bounded_probe 5 1048576 \
-          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
-          HOMEBREW_NO_ENV_HINTS=1 \
+        HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+          _sys_run_native_probe 5 1048576 \
           brew list --formula 2>/dev/null
       ) \
         || return 1
       cask_output=$(
-        _sys_run_bounded_probe 5 1048576 \
-          env HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
-          HOMEBREW_NO_ENV_HINTS=1 \
+        HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1 \
+          HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+          _sys_run_native_probe 5 1048576 \
           brew list --cask 2>/dev/null
       ) \
         || cask_output=""
@@ -272,7 +272,7 @@ _sys_macos_diag_package_records() {
     softwareupdate)
       command -v pkgutil &>/dev/null || return 3
       package_output=$(
-        _sys_run_bounded_probe 5 1048576 pkgutil --pkgs 2>/dev/null
+        _sys_run_native_probe 5 1048576 pkgutil --pkgs 2>/dev/null
       ) \
         || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
@@ -290,7 +290,7 @@ _sys_macos_diag_package_records() {
 # stdout TSV records: zombie PID, command name.
 _sys_macos_diag_zombie_records() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_bounded_probe 5 1048576 \
+  _sys_run_native_probe 5 1048576 \
     ps -axo pid=,state=,comm= 2>/dev/null | command awk '
     $2 ~ /^Z/ {
       pid = $1
@@ -314,7 +314,7 @@ _sys_macos_diag_launchd_records() {
   local record_kind="${1:-}" include_apple=0
   [[ "$record_kind" == failed || "$record_kind" == signaled ]] || return 2
   [[ "${SYS_HEALTH_INCLUDE_APPLE_JOBS:-0}" == 1 ]] && include_apple=1
-  _sys_run_bounded_probe 5 1048576 \
+  _sys_run_native_probe 5 1048576 \
     launchctl list 2>/dev/null | command awk \
       -v kind="$record_kind" -v include_apple="$include_apple" '
     BEGIN { FS = "[ \t]+" }
@@ -385,7 +385,7 @@ _sys_macos_clt_placeholder() {
   _sys_macos_clt_stub_dir
   [[ "$program" == "$REPLY/$tool_name" ]] || return 1
   developer_dir=$(
-    _sys_run_bounded_probe 3 4096 xcode-select -p </dev/null 2>/dev/null
+    _sys_run_native_probe 3 4096 xcode-select -p </dev/null 2>/dev/null
   ) || return 0
   developer_dir="${developer_dir%%$'\n'*}"
   [[ -n "$developer_dir" && -d "$developer_dir" ]] && return 1
@@ -403,7 +403,7 @@ _sys_macos_softwareupdate_records() {
   local list_output=""
   local -i list_rc=0
   list_output=$(
-    LC_ALL=C _sys_run_bounded_probe --merge-stderr 120 262144 \
+    LC_ALL=C _sys_run_native_probe --merge-stderr 120 262144 \
       softwareupdate --list </dev/null
   ) || list_rc=$?
   (( list_rc == 0 )) || return $list_rc

@@ -114,15 +114,96 @@ _sys_update_tool_applies() {
   (( resolve_rc == 3 )) && [[ "${reply[1]:-}" == "world-writable executable" ]]
 }
 
-# REPLY: the canonical Homebrew prefix. Status 1 without a usable brew.
+# Resolve one native manager for ownership reads. Status 1 means absent;
+# unsafe or indeterminate resolution is 2. Observation stops retain their code.
+_sys_update_owner_program() {
+  local -i program_rc=0
+  _sys_tool_program "$1" || program_rc=$?
+  case "$program_rc" in
+    0|124|130|143) return "$program_rc" ;;
+    1)
+      # A returned but unqualified PATH candidate is not proven absence.
+      # Honor negative availability before inspecting the external lookup.
+      command -v "$1" &>/dev/null || return 1
+      local -i lookup_rc=0
+      builtin whence -p -- "$1" >/dev/null 2>&1 || lookup_rc=$?
+      (( lookup_rc == 1 )) && return 1
+      return 2
+      ;;
+    3)
+      case "${reply[1]:-}" in
+        "Windows executable"|"Command Line Tools placeholder") return 1 ;;
+        *) return 2 ;;
+      esac
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+# REPLY: canonical Homebrew prefix. Status 1 means no native manager; a failed
+# or invalid read is 2, with timeout and interruption preserved separately.
 _sys_brew_prefix() {
-  local brew_prefix=""
   REPLY=""
-  command -v brew &>/dev/null || return 1
-  brew_prefix=$(_sys_brew --prefix 2>/dev/null) || return 1
-  [[ "$brew_prefix" == /* && "$brew_prefix" != *[[:cntrl:]]* \
-    && -d "$brew_prefix" ]] || return 1
-  REPLY="${brew_prefix:A}"
+  _sys_update_owner_program brew || return $?
+  local manager="$REPLY"
+  local -i probe_rc=0
+  _sys_update_homebrew_prefix "$manager" || probe_rc=$?
+  (( probe_rc == 0 )) && return 0
+  (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
+    && return "$probe_rc"
+  REPLY=""
+  return 2
+}
+
+# A successful complete inventory proves formula membership or absence.
+# A failed `brew list <formula>` cannot distinguish absence from read failure.
+_sys_update_brew_has_formula() {
+  local formula="$1" inventory="" line manager
+  _sys_update_owner_program brew || return $?
+  manager="$REPLY"
+  local -i probe_rc=0 found=0
+  local -A seen=()
+  local -x HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CURL_RETRIES=0
+  local -x HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+  inventory=$(_sys_run_bounded_probe 10 1048576 "$manager" list --formula \
+    </dev/null 2>/dev/null) || probe_rc=$?
+  if (( probe_rc != 0 )); then
+    (( probe_rc == 124 || probe_rc == 130 || probe_rc == 143 )) \
+      && return "$probe_rc"
+    return 2
+  fi
+  for line in "${(@f)inventory}"; do
+    [[ -n "$line" ]] || continue
+    [[ "$line" == [A-Za-z0-9]* && "$line" != *[^A-Za-z0-9@+_./-]* \
+      && ${+seen[$line]} -eq 0 ]] || return 2
+    seen[$line]=1
+    [[ "$line" != "$formula" ]] || found=1
+  done
+  (( found ))
+}
+
+# dpkg-query documents status 1 as a missing package and status 2 as failure.
+# Successful status data, rather than an unsupported version/query heuristic,
+# establishes whether this package is installed.
+_sys_update_package_installed() {
+  local package="$1" state="" manager
+  _sys_update_owner_program dpkg-query || return $?
+  manager="$REPLY"
+  local -i probe_rc=0
+  state=$(_sys_run_bounded_probe 10 4096 "$manager" \
+    -W '-f=${db:Status-Status}\n' -- "$package" \
+    </dev/null 2>/dev/null) || probe_rc=$?
+  case "$probe_rc" in
+    0)
+      case "$state" in
+        installed) return 0 ;;
+        not-installed|config-files) return 1 ;;
+        *) return 2 ;;
+      esac
+      ;;
+    1|124|130|143) return "$probe_rc" ;;
+    *) return 2 ;;
+  esac
 }
 
 # Homebrew owns a formula only when the active executable resolves inside
@@ -168,7 +249,7 @@ _sys_update_starship_owner() {
     REPLY=homebrew
     return 0
   fi
-  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+  (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   local cargo_home="${CARGO_HOME:-$HOME/.cargo}" cargo_program=""
   [[ "$cargo_home" == /* && "$cargo_home" != *[[:cntrl:]]* ]] || return 1
   cargo_program="$cargo_home/bin/starship"
@@ -195,7 +276,7 @@ _sys_gcloud_homebrew_managed() {
   local gcloud_program="${1:-}" REPLY
   [[ "$gcloud_program" == /* && "$gcloud_program" != *[[:cntrl:]]* ]] \
     || return 2
-  _sys_brew_prefix || return 1
+  _sys_brew_prefix || return $?
   local brew_prefix="$REPLY" candidate
   for candidate in "$gcloud_program" "${gcloud_program:A}"; do
     [[ "$candidate" == "$brew_prefix"/Caskroom/gcloud-cli/* \
@@ -222,12 +303,24 @@ _sys_gcloud_owner() {
   local gcloud_program="$REPLY" apt_root=""
   _sys_gcloud_apt_root
   apt_root="$REPLY"
-  if _sys_gcloud_homebrew_managed "$gcloud_program"; then
+  local -i owner_rc=0
+  _sys_gcloud_homebrew_managed "$gcloud_program" || owner_rc=$?
+  if (( owner_rc == 0 )); then
     REPLY=homebrew
-  elif [[ "${gcloud_program:A}" == "$apt_root"/* ]] \
-    && command -v dpkg &>/dev/null \
-    && dpkg -s google-cloud-cli &>/dev/null; then
-    REPLY=apt
+  elif (( owner_rc != 1 )); then
+    return "$owner_rc"
+  elif [[ "${gcloud_program:A}" == "$apt_root"/* ]]; then
+    owner_rc=0
+    _sys_update_package_installed google-cloud-cli || owner_rc=$?
+    if (( owner_rc == 0 )); then
+      REPLY=apt
+    else
+      (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) \
+        && return "$owner_rc"
+      # A path in APT's fixed SDK root never authorizes the self-updater
+      # without positive package evidence, including a proven absent package.
+      return 2
+    fi
   else
     REPLY=self
   fi
@@ -247,7 +340,13 @@ update-gcloud() {
   _sys_update_tool_program gcloud gcloud || program_rc=$?
   (( program_rc == 3 )) && return 0
   (( program_rc == 0 )) || return 1
-  _sys_gcloud_owner || return 1
+  local -i owner_rc=0
+  _sys_gcloud_owner || owner_rc=$?
+  if (( owner_rc != 0 )); then
+    _sys_error "Could not determine Google Cloud SDK ownership; no update was started."
+    (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+    return 1
+  fi
   local gcloud_owner="$REPLY" gcloud_program="${reply[1]}"
   case "$gcloud_owner" in
     apt)
@@ -472,7 +571,7 @@ update-awscli() {
     owner_rc=0
     _sys_update_homebrew_owns_program awscli "$aws_program" || owner_rc=$?
   fi
-  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+  (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   if (( owner_rc == 0 )); then
     local manager="${reply[2]}"
     _sys_update_owned_tool "$dry_run" "$assume_yes" aws "AWS CLI" \
@@ -497,7 +596,7 @@ update-awscli() {
         fi
       fi
     fi
-    (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+    (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   fi
 
   local current_version="not installed"
@@ -534,7 +633,7 @@ update-starship() {
   local starship_program="$REPLY"
   local -i owner_rc=0
   _sys_update_starship_owner "$starship_program" || owner_rc=$?
-  (( owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+  (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
   if (( owner_rc != 0 )); then
     _sys_error "Starship's installation owner could not be verified."
     _sys_dim "Update it with its original package manager."
@@ -568,13 +667,8 @@ _sys_uv_homebrew_managed() {
   [[ "$uv_program" == /* && "$uv_program" != *[[:cntrl:]]* \
     && -f "$uv_program" && -x "$uv_program" ]] || return 2
   uv_program="${uv_program:A}"
-  command -v brew &>/dev/null || return 1
-
-  local brew_prefix=""
-  brew_prefix=$(_sys_brew --prefix 2>/dev/null) || return 1
-  [[ "$brew_prefix" == /* && "$brew_prefix" != *[[:cntrl:]]* \
-    && -d "$brew_prefix" ]] || return 1
-  brew_prefix="${brew_prefix:A}"
+  _sys_brew_prefix || return $?
+  local brew_prefix="$REPLY"
 
   [[ "$uv_program" == "$brew_prefix"/Cellar/uv/*/bin/uv \
     || "$uv_program" == "$brew_prefix"/opt/uv/bin/uv ]]
@@ -618,7 +712,14 @@ update-uv-system() {
   local uv_program="$REPLY" uv_before=""
   _sys_uv_updated_version "$uv_program" && uv_before="$REPLY"
 
-  if _sys_uv_homebrew_managed "$uv_program"; then
+  local -i owner_rc=0
+  _sys_uv_homebrew_managed "$uv_program" || owner_rc=$?
+  if (( owner_rc != 0 && owner_rc != 1 )); then
+    _sys_error "Could not determine uv ownership; no update was started."
+    (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+    return 1
+  fi
+  if (( owner_rc == 0 )); then
     _sys_info "The active uv executable is managed by Homebrew; upgrading the uv formula."
     local -x HOMEBREW_NO_AUTO_UPDATE=1
     local -x HOMEBREW_CURL_RETRIES=0 HOMEBREW_NO_ANALYTICS=1
@@ -652,8 +753,14 @@ update-uv-system() {
       return 1
     }
     uv_program="$REPLY"
-    _sys_uv_homebrew_managed "$uv_program" \
-      && _sys_uv_updated_version "$uv_program" || {
+    owner_rc=0
+    _sys_uv_homebrew_managed "$uv_program" || owner_rc=$?
+    if (( owner_rc != 0 )); then
+      _sys_error "Homebrew completed, but could not verify the updated uv owner."
+      (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+      return 1
+    fi
+    _sys_uv_updated_version "$uv_program" || {
       _sys_error "Homebrew completed, but could not verify the updated uv version."
       return 1
     }
@@ -843,9 +950,14 @@ update-node() {
       return 1
     }
     fnm_program="${fnm_program:A}"
-    if command -v brew &>/dev/null \
-      && _sys_brew list fnm &>/dev/null 2>&1; then
+    local -i owner_rc=0
+    _sys_update_brew_has_formula fnm || owner_rc=$?
+    if (( owner_rc == 0 )); then
       _sys_info "fnm itself is managed by Homebrew — updating Node.js LTS only."
+    elif (( owner_rc != 1 )); then
+      _sys_error "Could not inspect fnm's Homebrew ownership; no Node.js update was started."
+      (( owner_rc == 124 || owner_rc == 130 || owner_rc == 143 )) && return "$owner_rc"
+      return 1
     fi
 
     local fnm_before=""
@@ -1001,7 +1113,9 @@ update-rust() {
 
 # Aggregate applicability predicates. update-system calls them only through
 # _sys_step_applies while it freezes the plan; each mirrors its step's own
-# skip conditions.
+# skip conditions. The differentiated gcloud/uv ownership reads use 2 for
+# indeterminate observations and retain 124/130/143; other predicates keep
+# their existing step-specific skip conditions.
 
 _sys_update_gcloud_applies() {
   local REPLY
@@ -1031,8 +1145,14 @@ _sys_update_uv_applies() {
   _sys_update_tool_applies uv || return 1
   # An unsafe executable applies so that the step reports it as blocked.
   _sys_tool_program uv || return 0
-  _sys_uv_resolved_program \
-    && ! _sys_uv_homebrew_managed "$REPLY"
+  _sys_uv_resolved_program || return $?
+  local -i owner_rc=0
+  _sys_uv_homebrew_managed "$REPLY" || owner_rc=$?
+  case "$owner_rc" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return "$owner_rc" ;;
+  esac
 }
 
 _sys_update_pipx_applies() {

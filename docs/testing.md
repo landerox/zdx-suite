@@ -308,6 +308,27 @@ where UID semantics matter; they do not establish real-host APT acceptance.
 real bounded owner observations returning `130` or `143`, proving no later
 mutation or false success, with an ordinary inapplicable-step control.
 
+`sys_planning_probes.bats` uses finite external managers to distinguish
+successful ownership evidence, proved absence and indeterminate reads. It
+records the exact selected executable, arguments, short deadline, closed stdin,
+Homebrew environment and actual producer status. Direct and aggregate cases
+cover ordinary failure, timeout and interruption before mutation or updater
+fallback, malformed inventories and package states, and the existing bounded
+Homebrew/Cargo controls. A real relative PATH lookup also distinguishes a
+rejected existing manager from an absolute manager, true absence and a shell
+function without an external program, with updater mutation receipts. These
+are fixture observations, not native package transactions or watchdog
+lifecycle acceptance.
+
+`sys_probe_cli.bats` covers diagnostic external-program identity despite
+same-named shell functions, bounded observations with closed stdin, all tool
+version routes, package counts, text/JSON shell and Oh My Zsh facts, and a cold
+capability refresh with non-recursive bootstrap resolution. Grammar cases
+reject empty diagnostic operands and universally malformed service identifiers
+before capability/backend probes across direct, nested and lazy routes, with
+valid service, help and no-operand controls. The standalone watchdog's documented
+mixed-lifetime residual remains outside these fixtures.
+
 `sys_session_safety.bats` checks option isolation for the frozen public
 inventory and menu/dispatcher, direct and nested resource records under
 hostile array/splitting options, seeded and unset regex state, public

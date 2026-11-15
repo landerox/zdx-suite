@@ -1113,6 +1113,47 @@ _sys_tool_available() {
   _sys_tool_program "${1:-}"
 }
 
+# Owned diagnostic probes execute the same vetted native program that PATH
+# selected. Generic bounded/timeout helpers retain arbitrary callback lookup.
+# Usage: _sys_run_native_probe [--merge-stderr] seconds max-bytes tool [args...]
+_sys_run_native_probe() {
+  emulate -L zsh
+  local -a probe_options=() reply=()
+  if [[ "${1:-}" == --merge-stderr ]]; then
+    probe_options=(--merge-stderr)
+    shift
+  fi
+  (( $# >= 3 )) || return 2
+  local seconds="$1" max_bytes="$2" tool_name="$3" REPLY="" program=""
+  shift 3
+  _sys_tool_program "$tool_name" || return $?
+  program="$REPLY"
+  [[ "$program" == /* && -f "$program" && -x "$program" ]] || return 1
+  _sys_run_bounded_probe "${probe_options[@]}" "$seconds" "$max_bytes" \
+    "$program" "$@" </dev/null
+}
+
+# REPLY: a safe absolute uname/ps for capability bootstrap. Do not consult the
+# registry here: these programs help build it. Neither is an Apple CLT stub.
+_sys_bootstrap_program() {
+  emulate -L zsh
+  local tool_name="${1:-}" program=""
+  REPLY=""
+  case "$tool_name" in uname|ps) ;; *) return 2 ;; esac
+  program=$(builtin whence -p -- "$tool_name" 2>/dev/null) || return 1
+  [[ "$program" == /* && -f "$program" && -x "$program" ]] || return 1
+  _sys_tool_program_safe "$program" || return 3
+  # Check the lexical Windows candidate first; ordinary native paths need no
+  # detector query. WSL remains a Linux environment, never a Darwin env flag.
+  if [[ "$OSTYPE" == linux* ]] \
+    && (( ${+functions[_sys_wsl_windows_program]} )) \
+    && _sys_wsl_windows_program "$program" \
+    && (( ${+functions[_sys_wsl_detect]} )) && _sys_wsl_detect; then
+    return 3
+  fi
+  REPLY="$program"
+}
+
 # reply: the global npm packages of one nvm runtime, read from its
 # lib/node_modules directory without running Node, each a plain name or
 # @scope/name. The npm and corepack packages that ship with every runtime are

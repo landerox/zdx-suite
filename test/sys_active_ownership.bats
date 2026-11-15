@@ -16,6 +16,9 @@ case "$tool:$*" in
   'brew:--version') printf 'Homebrew 4.5.0\n'; exit 0 ;;
   'cargo:--version') printf 'cargo 1.80.0\n'; exit 0 ;;
   'brew:--prefix') printf '%s\n' "$OWN_PREFIX"; exit 0 ;;
+  'brew:list --formula')
+    [[ "$OWN_BREW_INSTALLED" != 1 ]] || printf 'awscli\nstarship\n'
+    exit 0 ;;
   'brew:list awscli'|'brew:list starship') [[ "$OWN_BREW_INSTALLED" == 1 ]]; exit $? ;;
   'brew:list fzf') exit 1 ;;
   'aws:--version') printf 'aws-cli/2.30.0 Python/3.12\n' ;;
@@ -36,8 +39,14 @@ MOCK
     chmod -- 700 "$TEST_MOCK_BIN/$tool"
   done
   printf '#!/bin/sh\nexit 1\n' > "$TEST_MOCK_BIN/dpkg"
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/dpkg-query"
+  cat >> "$TEST_MOCK_BIN/dpkg-query" <<'MOCK'
+[[ $# == 4 && "$1" == -W && "$2" == '-f=${db:Status-Status}\n' \
+  && "$3" == -- && "$4" == fzf ]] || exit 97
+exit 1
+MOCK
   printf '#!/bin/sh\nexit 1\n' > "$TEST_MOCK_BIN/snap"
-  chmod -- 700 "$TEST_MOCK_BIN/dpkg" "$TEST_MOCK_BIN/snap"
+  chmod -- 700 "$TEST_MOCK_BIN/dpkg" "$TEST_MOCK_BIN/dpkg-query" "$TEST_MOCK_BIN/snap"
   cat > "$HOME/ownership-context.zsh" <<'ZSH'
 emulate -R zsh
 builtin cd -q -- "$TEST_TEMP_DIR" || return 90
