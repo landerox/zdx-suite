@@ -279,13 +279,22 @@ included in a backup, or exposed through an error log.
 - The telemetry writer validates its five fields, excludes arguments and
   output, enforces owner-only state, and bounds record retention.
 - Git, Developer, Py, System, and VPN commands capture child-tool output
-  through the core `_zdx_run_captured` service: a byte-bounded tail in an
-  owner-only, identity-checked directory below an owner-private or root-owned
-  sticky `TMPDIR`. Failure replay is line-bounded, color-stripped, and
-  control-escaped, and it replaces lines containing credential indicators,
-  including URL credentials, with a redaction notice. `ZDX_VERBOSE=1` or an
-  aggregate's `--verbose` streams the output live and unredacted as an
-  explicit operator choice.
+  through the core `_zdx_run_captured` service when it is available: a
+  byte-bounded tail in an owner-only, identity-checked directory below an
+  owner-private or root-owned sticky `TMPDIR`. Failure replay is line-bounded,
+  color-stripped, and control-escaped, and it replaces lines containing
+  credential indicators, including URL credentials, with a redaction notice.
+  The current-shell `_zdx_run_captured_here` variant bounds only readback and
+  is intended for small output. `ZDX_VERBOSE=1` or an aggregate's `--verbose`
+  streams the output live and unredacted as an explicit operator choice.
+  System checks for `_zdx_run_captured` or `_zdx_run_captured_here` at call
+  time. If the respective service is absent, as when `sys-menu.zsh` is sourced
+  standalone without `functions.zsh`, its logging wrapper announces the
+  command and sends both child streams raw and live to stderr, even without
+  verbose mode. That fallback closes stdin and preserves the command's status,
+  but does not bound, escape or redact its output. Capture-limit validation
+  still occurs; it does not bound this stream. Load System through the normal
+  plugin/core path when bounded, redacted failure replay is required.
 - A failed APT index refresh is diagnosed from a 64 KiB in-memory copy of
   APT's output, which is relayed unchanged as it runs. Displayed sources have
   URI credentials removed and are escaped. The diagnosis itself downloads and

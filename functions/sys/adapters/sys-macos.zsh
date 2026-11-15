@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# System macOS Adapter: Darwin capability probes
+# System macOS Adapter: Darwin capability probes and typed collectors
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after sys-capabilities.zsh.
-# Safe to re-source; defines private read-only probes only.
+# Loaded by sys-menu.zsh after sys-common.zsh and sys-capabilities.zsh.
+# Safe to re-source; defines private read-only probes and typed collectors.
 #
 
 if [[ -n "${_SYS_MACOS_ADAPTER_SOURCED:-}" ]]; then

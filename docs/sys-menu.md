@@ -1309,13 +1309,26 @@ When the previous default shares the new default's major release line, it
 names `clean-system` as the step that removes it once nothing needs it. fnm
 updates do not migrate packages.
 
-System update and cleanup helpers that capture tool output keep only a
-configurable byte-bounded tail in an owner-only temporary directory. On
-failure, at most the final 80 lines are rendered with control characters made
-visible; a line containing a common credential indicator is replaced by a
-redaction notice. Captured commands receive `/dev/null` as stdin so an
-unseen prompt cannot consume terminal input or block the aggregate. The
-temporary capture is removed on every exit path.
+System logging wrappers check for their respective core capture service at
+call time: `_zdx_run_captured` or `_zdx_run_captured_here`. The former keeps a
+configurable byte-bounded tail in an owner-only temporary directory. The
+current-shell variant bounds only readback and is intended for small output.
+On failure, at most the final 80 lines are rendered with control characters
+made visible; a line containing a common credential indicator is replaced by a
+redaction notice. Captured commands receive `/dev/null` as stdin so an unseen
+prompt cannot consume terminal input or block the aggregate. The temporary
+capture is removed on every exit path. Explicit verbose mode streams child
+output live instead.
+
+If the corresponding core service is absent, as when `sys-menu.zsh` is sourced
+standalone without `functions.zsh`, the wrapper announces the command and
+sends both child streams directly to stderr, even without verbose mode. This
+fallback does not bound, escape, redact or suppress successful output. It
+still closes command stdin and preserves the command's status; validating
+`SYS_COMMAND_CAPTURE_MAX_BYTES` does not bound the standalone stream.
+`_sys_run_logged` uses a subshell, while `_sys_run_logged_here` runs in the
+current shell. Load System through the normal plugin/core path when bounded,
+redacted failure replay is required.
 
 ### APT signing-key renewal
 

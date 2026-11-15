@@ -884,10 +884,14 @@ _sys_capture_max_bytes() {
   REPLY="$(( 10#$max_capture_bytes ))"
 }
 
-# Runs "$@" with closed stdin and its output captured privately. Only a failure
-# replays a bounded, escaped, credential-redacted tail; ZDX_VERBOSE=1 streams
-# the output live instead. <display> is the readable command announced before
-# it runs, never an internal identifier. Returns the command's status.
+# With _zdx_run_captured available, runs "$@" with closed stdin and privately
+# captured output. Only failure replays a bounded, escaped, credential-redacted
+# tail; ZDX_VERBOSE=1 streams live instead. Without that service, runs in a
+# subshell with closed stdin and streams raw child stdout and stderr to UI
+# stderr, even without ZDX_VERBOSE=1: no bound, escaping, or redaction applies.
+# Capture-limit validation still runs but does not bound this fallback.
+# <display> names the readable command announced before execution, never an
+# internal identifier. Returns the command's status when executed.
 # Usage: _sys_run_logged <display> <cmd> [args...]
 _sys_run_logged() {
   local display="${1:-}" REPLY
@@ -903,8 +907,15 @@ _sys_run_logged() {
   ( "$@" ) </dev/null >&2
 }
 
-# Like _sys_run_logged, but runs in the current shell so a shell function such
-# as nvm can change it. Use it only for commands with small output.
+# With _zdx_run_captured_here available, uses its current-shell capture with
+# closed stdin; only output read back is bounded. Default failure replay is
+# escaped and credential-redacted; ZDX_VERBOSE=1 streams live instead. Use it
+# only for commands with small output. Without that service, runs in the
+# current shell with closed stdin and streams raw child stdout and stderr to
+# UI stderr, even without ZDX_VERBOSE=1. No bound, escaping, or redaction
+# applies; capture-limit validation still runs but does not bound this fallback.
+# A shell function such as nvm can change the current shell. Returns the
+# command's status when executed.
 # Usage: _sys_run_logged_here <display> <cmd> [args...]
 _sys_run_logged_here() {
   local display="${1:-}" REPLY
