@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# System Linux Adapter: native Linux capability probes
+# System Linux Adapter: capability probes and typed diagnostic collectors
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after sys-capabilities.zsh.
-# Safe to re-source; defines private read-only probes only.
+# Loaded by sys-menu.zsh after sys-common.zsh and sys-capabilities.zsh.
+# Safe to re-source; defines private read-only probes and typed collectors.
 #
 
 if [[ -n "${_SYS_LINUX_ADAPTER_SOURCED:-}" ]]; then

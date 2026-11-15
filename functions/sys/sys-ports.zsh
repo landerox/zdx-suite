@@ -3,8 +3,9 @@
 # System Ports: inspect listeners and safely signal their owning processes
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after sys-common.zsh, sys-capabilities.zsh, and the
-# platform adapters.
+# Loaded by sys-menu.zsh after sys-common.zsh, sys-capabilities.zsh,
+# adapters/sys-linux.zsh, adapters/sys-wsl.zsh, adapters/sys-macos.zsh, and
+# sys-processes.zsh.
 # Safe to re-source; defines functions only.
 #
 

@@ -3,7 +3,9 @@
 # System Update APT: dpkg audits, unattended-upgrade yield, and update-apt
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after sys-common.zsh and the platform adapters.
+# Loaded by sys-menu.zsh after sys-common.zsh, sys-capabilities.zsh,
+# adapters/sys-linux.zsh, adapters/sys-wsl.zsh, adapters/sys-macos.zsh, and
+# sys-update-apt-keys.zsh.
 # Safe to re-source; defines functions only.
 #
 

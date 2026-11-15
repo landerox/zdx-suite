@@ -1,10 +1,11 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# System WSL Adapter: Linux capabilities with Windows interop detection
+# System WSL Adapter: Linux delegation, Windows interop, and config review
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after the native Linux adapter.
-# Safe to re-source; defines private read-only probes only.
+# Loaded by sys-menu.zsh after sys-common.zsh, sys-capabilities.zsh, and
+# adapters/sys-linux.zsh.
+# Safe to re-source; defines private read-only probes and typed collectors.
 #
 
 if [[ -n "${_SYS_WSL_ADAPTER_SOURCED:-}" ]]; then

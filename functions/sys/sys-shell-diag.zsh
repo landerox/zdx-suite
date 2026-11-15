@@ -3,7 +3,7 @@
 # System Shell Diagnostics: Zsh startup timing and profiling
 # =============================================================================
 #
-# Loaded by sys-menu.zsh after sys-diag.zsh.
+# Loaded by sys-menu.zsh after sys-common.zsh and sys-diag.zsh.
 # Safe to re-source; defines functions only.
 #
 

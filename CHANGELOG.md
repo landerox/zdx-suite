@@ -196,6 +196,10 @@ verification, and remaining limitations.
 
 ### Changed
 
+- System: document that standalone logging streams raw child output when its
+  core capture service is absent, and correct module prerequisites and adapter
+  descriptions. Runtime behavior is unchanged.
+
 - Git: index obstacle paths by component so large ignored trees no longer
   require comparing every candidate with every tracked target. Complete path
   inventories, case-insensitive checks and confirmation-time revalidation remain.
