@@ -277,7 +277,9 @@ EOF
     printf '%s\n' "$rc" > "$output.status" || return 1
     (( rc == 0 )) || return 1
     [[ ! -s "$output.stderr" ]] || return 1
-    [[ "$(cat "$output.stdout")" == '1,5' || "$(cat "$output.stdout")" == '1.5' ]] || return 1
+    # macOS fa_IR emits U+066B: a valid non-comma result; keep looking for 1,5.
+    [[ "$(cat "$output.stdout")" == '1,5' || "$(cat "$output.stdout")" == '1.5' \
+      || "$(cat "$output.stdout")" == '1٫5' ]] || return 1
   }
 
   f508_locale_eligible() {
