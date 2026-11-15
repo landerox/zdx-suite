@@ -694,3 +694,128 @@ write_clean_fixture() {
     false
   fi
 }
+
+
+f507_wsl_generation_assert() {
+  local mode="$1" expected=WSL2 generation_status=0 kernel_status=0 actual item count=0
+  local case_dir="$F507_WSL_CASE"
+  [[ "$mode" != legacy ]] || expected=WSL1
+  case "$mode" in
+    failed) generation_status=17; kernel_status=17 ;;
+    empty) generation_status=1 ;;
+    modeled-failure) generation_status=17 ;;
+  esac
+  for item in generation review review-json; do
+    [[ -f "$case_dir/$item.primary.status" ]] || return 1
+    actual=$(cat "$case_dir/$item.primary.status") || return 2
+    [[ "$actual" =~ ^[0-9]+$ ]] || return 3
+    if [[ "$item" == generation ]]; then
+      [[ "$actual" -eq "$generation_status" ]] || return 4
+    else
+      [[ "$actual" -eq 0 ]] || return 5
+    fi
+  done
+  [[ -f "$case_dir/generation.stdout" && -f "$case_dir/generation.stderr" \
+    && -f "$case_dir/review.stdout" && -f "$case_dir/review.stderr" \
+    && -f "$case_dir/review.json" && -f "$case_dir/review-json.stderr" ]] || return 6
+  [[ ! -s "$case_dir/generation.stderr" && ! -s "$case_dir/review.stdout" ]] || return 7
+  printf '%s\0' "$TEST_MOCK_BIN/uname" -r > "$case_dir/kernel.expected.argv.nul" || return 8
+  while IFS= read -r item; do
+    count=$((count+1))
+    [[ -f "$case_dir/kernel-$count.argv.nul" && -f "$case_dir/kernel-$count.primary.status" ]] || return 9
+    cmp "$case_dir/kernel.expected.argv.nul" "$case_dir/kernel-$count.argv.nul" || return 10
+    actual=$(cat "$case_dir/kernel-$count.primary.status") || return 11
+    [[ "$actual" =~ ^[0-9]+$ && "$actual" -eq "$kernel_status" ]] || return 12
+  done < "$case_dir/kernel.calls"
+  [[ "$count" -gt 0 ]] || return 13
+  if [[ "$mode" == modeled-failure ]]; then
+    grep -Fxq reached "$case_dir/generation-failure.reached" || return 14
+  fi
+  if [[ "$generation_status" -ne 0 ]]; then
+    [[ ! -s "$case_dir/generation.stdout" ]] || return 15
+    jq -es 'length == 1 and (.[0] | type == "object" and .schema == "zdx.sys-wsl.v1" and .applicable == true
+      and .host.generation == null and .network.networking_mode == null
+      and ([.findings[].id] | index("systemd-not-running") == null)
+      and ([.findings[].id] | index("no-memory-limit") == null))' "$case_dir/review.json" >/dev/null || return 16
+    grep -Eq '^ *Generation: +unknown$' "$case_dir/review.stderr" || return 17
+    grep -Eq '^ *Networking mode: +unavailable' "$case_dir/review.stderr" || return 18
+  else
+    printf '%s\n' "$expected" > "$case_dir/generation.expected" || return 19
+    cmp "$case_dir/generation.expected" "$case_dir/generation.stdout" || return 20
+    grep -Eq "^ *Generation: +$expected$" "$case_dir/review.stderr" || return 21
+    if [[ "$mode" == legacy ]]; then
+      jq -es 'length == 1 and (.[0] | type == "object" and .schema == "zdx.sys-wsl.v1" and .applicable == true
+        and .host.generation == "WSL1" and .network.networking_mode == null
+        and ([.findings[].id] | index("systemd-not-running") == null)
+        and ([.findings[].id] | index("no-memory-limit") == null))' "$case_dir/review.json" >/dev/null || return 22
+    else
+      jq -es 'length == 1 and (.[0] | type == "object" and .schema == "zdx.sys-wsl.v1" and .applicable == true
+        and .host.generation == "WSL2" and .network.networking_mode == "nat"
+        and ([.findings[].id] | index("systemd-not-running") != null)
+        and ([.findings[].id] | index("no-memory-limit") != null))' "$case_dir/review.json" >/dev/null || return 23
+    fi
+  fi
+  return 0
+}
+
+@test "sys wsl: generation evidence controls custom legacy and unknown review facts" {
+  require_jq
+  printf '[boot]\nsystemd = true\n' > "$WSL_ROOT/etc/wsl.conf"
+  printf 'init\n' > "$WSL_ROOT/proc/1/comm"
+  # A finite model of the selected uname; no kernel or Windows host read.
+  printf '#!%s\n' "$BASH" > "$HOME/kernel-backend"
+  cat >> "$HOME/kernel-backend" <<'MOCK'
+[[ "$*" == -r ]] || exit 97
+printf '%s\n' "$F507_WSL_KERNEL"
+exit "$F507_WSL_KERNEL_RC"
+MOCK
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/uname"
+  cat >> "$TEST_MOCK_BIN/uname" <<'MOCK'
+number=1
+while IFS= read -r row; do number=$((number+1)); done < "$F507_WSL_CASE/kernel.calls"
+printf '%s\0' "$0" "$@" > "$F507_WSL_CASE/kernel-$number.argv.nul" || exit 90
+printf 'called\n' >> "$F507_WSL_CASE/kernel.calls" || exit 91
+rc=0
+"$HOME/kernel-backend" "$@" || rc=$?
+printf '%s\n' "$rc" > "$F507_WSL_CASE/kernel-$number.primary.status" || exit 92
+exit "$rc"
+MOCK
+  chmod -- 700 "$HOME/kernel-backend" "$TEST_MOCK_BIN/uname"
+  local mode failures=0 rc
+  for mode in legacy standard custom failed empty modeled-failure; do
+    export F507_WSL_CASE="$HOME/receipt-$mode"
+    mkdir "$F507_WSL_CASE"
+    : > "$F507_WSL_CASE/kernel.calls"
+    export F507_WSL_MODE="$mode" F507_WSL_KERNEL_RC=0 F507_WSL_KERNEL=6.6.36-custom
+    case "$mode" in
+      legacy) export F507_WSL_KERNEL=4.4.0-19041-Microsoft ;;
+      standard) export F507_WSL_KERNEL=5.15.0-microsoft-standard-WSL2 ;;
+      failed) export F507_WSL_KERNEL_RC=17 ;;
+      empty) export F507_WSL_KERNEL="" ;;
+    esac
+    run_wsl '
+      if [[ "$F507_WSL_MODE" == modeled-failure ]]; then
+        _sys_wsl_diag_release() {
+          print -r -- reached > "$F507_WSL_CASE/generation-failure.reached" || return 90
+          return 17
+        }
+      fi
+      local -i rc=0
+      _sys_wsl_diag_release > "$F507_WSL_CASE/generation.stdout" 2> "$F507_WSL_CASE/generation.stderr" || rc=$?
+      print -r -- "$rc" > "$F507_WSL_CASE/generation.primary.status" || exit 91
+      rc=0
+      NO_COLOR=1 sys-wsl > "$F507_WSL_CASE/review.stdout" 2> "$F507_WSL_CASE/review.stderr" || rc=$?
+      print -r -- "$rc" > "$F507_WSL_CASE/review.primary.status" || exit 92
+      rc=0
+      sys-wsl --json > "$F507_WSL_CASE/review.json" 2> "$F507_WSL_CASE/review-json.stderr" || rc=$?
+      print -r -- "$rc" > "$F507_WSL_CASE/review-json.primary.status" || exit 93
+    '
+    printf '%s\n' "$status" > "$F507_WSL_CASE/wrapper.status"
+    [ "$status" -eq 0 ]
+    if f507_wsl_generation_assert "$mode"; then rc=0
+    else rc=$?; failures=$((failures+1)); fi
+    printf '%s\t%s\n' "$mode" "$rc" >> "$HOME/review-generation.matrix.tsv"
+  done
+  [ "$(wc -l < "$HOME/review-generation.matrix.tsv")" -eq 6 ]
+  [ "$failures" -eq 0 ]
+}

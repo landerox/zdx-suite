@@ -825,6 +825,14 @@ backend, and service backend.
 
 ### 🔎 Portable Diagnostics
 
+Unavailable optional data stays unavailable: a failed swap/core probe or
+package listing is not a known zero. Known memory or CPU model data still
+appears. An empty successful npm tree counts zero, and APT counts currently
+installed records, including held packages, while excluding removed packages
+that only kept configuration. Disk names and mountpoints with ordinary spaces
+retain their facts when the returned row has one unambiguous interpretation.
+The OOM total counts completed victims in the available kernel log.
+
 - **System Information (`sys-info`)**: Display OS, kernel, architecture,
   memory, swap, CPU, disks, uptime, local tool versions (such as Git, Python,
   Terraform, OpenTofu, kubectl, and Helm), and available package counts.
@@ -845,7 +853,10 @@ backend, and service backend.
   failed only when it is not running and last exited with a positive status;
   jobs that last ended by a signal are listed as advisory, and Apple's
   `com.apple.*` jobs are skipped unless `SYS_HEALTH_INCLUDE_APPLE_JOBS=1`.
-- **WSL Review (`sys-wsl`)**: On WSL, review `/etc/wsl.conf` and the
+- **WSL Review (`sys-wsl`)**: Custom kernels are classified as WSL2; only a
+  successful kernel release ending in the exact `-Microsoft` suffix identifies
+  WSL1. Unknown generation does not invent WSL2 networking or findings.
+  On WSL, review `/etc/wsl.conf` and the
   Windows `%UserProfile%\.wslconfig` without changing anything: automount and
   DrvFs metadata, systemd and the `[boot]` command, a generated
   `resolv.conf`, interop and the appended Windows `PATH`, the default-route

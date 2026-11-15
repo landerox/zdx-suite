@@ -746,7 +746,7 @@ MOCK
   done
   [ "$(cat "$HOME/adapter-linux-zombies.out")" = $'42\tfixture' ]
   [ "$(cat "$HOME/adapter-mac-runtime.out")" = $'42\t0.1\t0.2\t0.3' ]
-  [ "$(cat "$HOME/adapter-wsl-release.out")" = WSL1 ]
+  [ "$(cat "$HOME/adapter-wsl-release.out")" = WSL2 ]
   export SYS_PROBE_CALLS="$HOME/adapter-linux-zombies.calls.tsv"
   assert_sys_probe --seconds 5 ps -eo pid=,stat=,comm=
   export SYS_PROBE_CALLS="$HOME/adapter-mac-runtime.calls.tsv"

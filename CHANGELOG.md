@@ -219,6 +219,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- System: preserve unavailable diagnostic facts instead of inventing zeroes,
+  recognize custom WSL2 kernels, count installed dpkg records and completed OOM
+  victims, handle empty npm trees, and parse GNU/BSD disk rows containing spaces.
+
 - System: distinguish declined confirmations from prompt failures and preserve
   returned interruptions; count only successful Snap preview data, retain
   bounded diagnostics, and refuse incomplete previews. Node.js and fzf results

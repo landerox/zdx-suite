@@ -123,25 +123,26 @@ _sys_linux_diag_memory_record() {
   ' /proc/meminfo 2>/dev/null
 }
 
-# stdout TSV: logical-core-count, CPU model.
+# stdout TSV: positive logical-core-count or "unknown", CPU model.
 _sys_linux_diag_cpu_record() {
   emulate -L zsh
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
-  local core_count="" model_name=""
+  local core_count="" model_name="" REPLY
 
   if command -v getconf &>/dev/null; then
     core_count=$(
       _sys_run_native_probe 3 65536 getconf _NPROCESSORS_ONLN 2>/dev/null
-    )
+    ) || core_count=""
   fi
-  if [[ ! "$core_count" =~ '^[0-9]+$' ]] \
+  if { ! _sys_normalize_uint "$core_count" 1048576 || (( REPLY == 0 )); } \
     && command -v nproc &>/dev/null; then
-    core_count=$(_sys_run_native_probe 3 65536 nproc 2>/dev/null)
+    core_count=$(_sys_run_native_probe 3 65536 nproc 2>/dev/null) || core_count=""
   fi
-  if [[ ! "$core_count" =~ '^[0-9]+$' ]] && [[ -r /proc/cpuinfo ]]; then
+  if { ! _sys_normalize_uint "$core_count" 1048576 || (( REPLY == 0 )); } \
+    && [[ -r /proc/cpuinfo ]]; then
     core_count=$(command awk -F: '$1 ~ /^processor[[:space:]]*$/ { count++ }
-      END { print count + 0 }' /proc/cpuinfo 2>/dev/null)
+      END { print count + 0 }' /proc/cpuinfo 2>/dev/null) || core_count=""
   fi
 
   if [[ -r /proc/cpuinfo ]]; then
@@ -155,9 +156,14 @@ _sys_linux_diag_cpu_record() {
     ' /proc/cpuinfo 2>/dev/null)
   fi
 
+  if _sys_normalize_uint "$core_count" 1048576 && (( REPLY > 0 )); then
+    core_count="$REPLY"
+  else
+    core_count=unknown
+  fi
   model_name="${model_name//$'\t'/ }"
   model_name="${model_name//$'\n'/ }"
-  printf '%s\t%s\n' "${core_count:-0}" "${model_name:-Unknown}"
+  printf '%s\t%s\n' "$core_count" "${model_name:-Unknown}"
 }
 
 # stdout TSV: uptime-seconds, 1-minute, 5-minute, and 15-minute load.
@@ -187,10 +193,19 @@ _sys_linux_diag_package_records() {
     apt)
       package_output=$(
         _sys_run_native_probe 5 1048576 \
-          dpkg-query -W -f='${binary:Package}\n' 2>/dev/null
+          dpkg-query -W '-f=${db:Status-Status}\n' 2>/dev/null
       ) || return 1
       [[ -n "$package_output" ]] && package_lines=("${(@f)package_output}")
-      printf 'APT packages\t%d\n' "${#package_lines}"
+      local package_state
+      local -i installed_count=0
+      for package_state in "${package_lines[@]}"; do
+        case "$package_state" in
+          installed) (( ++installed_count )) ;;
+          not-installed|config-files|half-installed|unpacked|half-configured|triggers-awaited|triggers-pending) ;;
+          *) return 1 ;;
+        esac
+      done
+      printf 'APT packages\t%d\n' "$installed_count"
       ;;
     dnf|zypper)
       package_output=$(
@@ -291,9 +306,11 @@ _sys_linux_diag_failed_service_records() {
 # of dmesg; status 3 is reserved for platforms without a kernel OOM log.
 _sys_linux_diag_oom_event_count() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  _sys_run_native_probe 5 1048576 dmesg 2>/dev/null | command awk '
+  local kernel_log
+  kernel_log=$(_sys_run_native_probe 5 1048576 dmesg 2>/dev/null) || return $?
+  print -r -- "$kernel_log" | command awk '
     BEGIN { count = 0 }
-    tolower($0) ~ /out of memory|oom-killer/ { count++ }
+    tolower($0) ~ /out of memory: killed process [1-9][0-9]*([[:space:]]|$)/ { count++ }
     END { print count }
   '
 }
