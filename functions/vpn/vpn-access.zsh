@@ -18,6 +18,10 @@ fi
 #   Status:    0 when unlocked, 1 when authentication failed.
 vpn-access-unlock() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-access-unlock accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-unlock"
@@ -46,6 +50,10 @@ vpn-access-unlock() {
 #   Status:    0 on success, 1 when sudo is unavailable or invalidation fails.
 vpn-access-lock() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-access-lock accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-lock"
@@ -88,6 +96,10 @@ vpn-access-lock() {
 #   Status:    0 always.
 vpn-access-status() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-access-status accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-access-status"

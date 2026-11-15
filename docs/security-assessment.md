@@ -361,10 +361,12 @@ snippet and executes unintended code.
   literal argument vectors. This binds the selected path, not its inode against
   replacement by its owner between validation and execution.
 - The Git command menu additionally requires the complete selected row to
-  match its current snapshot. Every suite except VPN captures pickers through
-  the core `_zdx_picker_capture` (or its generated copy in a shell without the
-  core); VPN's menu captures into its own private, bounded result file, and
-  its profile and interface picker still reads through command substitution.
+  match its current snapshot. Suite capture wrappers call the core
+  `_zdx_picker_capture` or their generated copies in a shell without the core.
+  VPN's manager captures into its own private, bounded result file. Its
+  profile and interface pickers use the canonical capture through the complete
+  foreground owner chain, validate the complete returned row against the
+  offered snapshot before name normalization, and clear failed selections.
   The core capture uses a private mode-700 directory and mode-600 result file
   below the validated temporary root, identity checks before and after the
   picker, a byte limit (64 KiB for Git), refusal of data returned with a

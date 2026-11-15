@@ -236,7 +236,11 @@ vpn-profile-create() {
   fi
 
   _vpn_require_platform || return 1
-  _vpn_ensure_profile_dir || return 1
+  local -i directory_status=0
+  _vpn_ensure_profile_dir || directory_status=$?
+  (( directory_status == 3 )) && return 0
+  (( directory_status == 130 || directory_status == 143 )) && return "$directory_status"
+  (( directory_status == 0 )) || return 1
 
   if [[ -z "$iface" ]]; then
     local -i prompt_rc=0
@@ -340,7 +344,11 @@ vpn-profile-import() {
   local -i hardening_failed=0
 
   _vpn_require_platform || return 1
-  _vpn_ensure_profile_dir || return 1
+  local -i directory_status=0
+  _vpn_ensure_profile_dir || directory_status=$?
+  (( directory_status == 3 )) && return 0
+  (( directory_status == 130 || directory_status == 143 )) && return "$directory_status"
+  (( directory_status == 0 )) || return 1
 
   if [[ -z "$source_path" ]]; then
     local -i prompt_rc=0
@@ -529,7 +537,8 @@ vpn-profile-rename() {
   if [[ -z "$old_iface" ]]; then
     local picked
     local -i pick_status=0
-    picked=$(_vpn_pick_profile "Rename VPN profile") || pick_status=$?
+    _vpn_pick_profile "Rename VPN profile" || pick_status=$?
+    picked="$REPLY"
     (( pick_status == 3 )) && return 0
     (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
@@ -941,7 +950,8 @@ vpn-profile-remove() {
   if [[ -z "$iface" ]]; then
     local picked
     local -i pick_status=0
-    picked=$(_vpn_pick_profile "Remove VPN profile") || pick_status=$?
+    _vpn_pick_profile "Remove VPN profile" || pick_status=$?
+    picked="$REPLY"
     (( pick_status == 3 )) && return 0
     (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1

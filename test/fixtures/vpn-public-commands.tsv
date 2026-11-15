@@ -7,7 +7,7 @@ vpn-config-edit	vpn-config.zsh	mutating	privileged
 vpn-config-restore	vpn-config.zsh	destructive	privileged
 vpn-default-clear	vpn-control.zsh	mutating	unprivileged
 vpn-default-connect	vpn-control.zsh	mutating	privileged
-vpn-default-set	vpn-control.zsh	mutating	unprivileged
+vpn-default-set	vpn-control.zsh	mutating	privileged
 vpn-details	vpn-info.zsh	read-only	privileged
 vpn-ip-info	vpn-info.zsh	read-only	privileged
 vpn-mtu-probe	vpn-mtu.zsh	read-only	unprivileged

@@ -562,7 +562,7 @@ forms, and the tests named here keep the copies honest.
 
 | Primitive | Form | Copies | Guard |
 | --- | --- | --- | --- |
-| `_zdx_picker_capture` | Canonical in `functions.zsh`; each suite's `_<prefix>_fzf_capture` calls it and falls back to a generated `_<prefix>_picker_capture` | Git, System, Developer, Python, Workspace, Environment, File, and the master menu; the plugin manager calls the core only | `just primitives-check` (part of `just check`), `test/primitive_sync.bats` |
+| `_zdx_picker_capture` | Canonical in `functions.zsh`; each suite's `_<prefix>_fzf_capture` calls it and falls back to a generated `_<prefix>_picker_capture` | Git, System, Developer, Python, Workspace, Environment, File, VPN, and the master menu; the plugin manager calls the core only | `just primitives-check` (part of `just check`), `test/primitive_sync.bats` |
 | `_zdx_confirm_prompt` | Canonical in `functions.zsh`; `_<prefix>_confirm_ask` delegates or uses a generated copy when standalone | Git, System, Developer, Python, Workspace, Environment, File, VPN, and the doctor; the plugin manager delegates to the core only | Same |
 | `_<prefix>_resolve_trusted_dir` | Identical copy of the core resolver | Every suite | `test/primitive_drift.bats` |
 | `_zdx_ancestors_trusted` | Canonical core helper with an identical guarded standalone copy | Master common file | `test/platform_paths.bats` |

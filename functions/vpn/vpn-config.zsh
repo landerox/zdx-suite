@@ -43,9 +43,9 @@ _vpn_edit_privileged() {
 
   local -i edit_status=0
   if command -v sudoedit &>/dev/null; then
-    command sudoedit -n -- "$conf_file" || edit_status=$?
+    command sudoedit -n -- "$conf_file" 1>&2 || edit_status=$?
   else
-    command sudo -n -e -- "$conf_file" || edit_status=$?
+    command sudo -n -e -- "$conf_file" 1>&2 || edit_status=$?
   fi
 
   if (( edit_status != 0 )); then
@@ -196,7 +196,7 @@ _vpn_edit_staged() {
     local -a reply=()
     _vpn_editor_argv
     local -i edit_status=0
-    "${reply[@]}" "$staged" || edit_status=$?
+    "${reply[@]}" "$staged" 1>&2 || edit_status=$?
     if (( edit_status != 0 )); then
       _vpn_error "The editor exited with status $edit_status; the profile is unchanged."
       return 1
@@ -446,7 +446,8 @@ vpn-config-edit() {
   if [[ -z "$iface" ]]; then
     local picked
     local -i pick_status=0
-    picked=$(_vpn_pick_profile "Edit VPN profile") || pick_status=$?
+    _vpn_pick_profile "Edit VPN profile" || pick_status=$?
+    picked="$REPLY"
     (( pick_status == 3 )) && return 0
     (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
@@ -567,8 +568,9 @@ vpn-config-restore() {
     else
       local picked
       local -i pick_status=0
-      picked=$(_vpn_pick_from_list "Restore backup for" "${candidates[@]}") \
+      _vpn_pick_from_list "Restore backup for" "${candidates[@]}" \
         || pick_status=$?
+      picked="$REPLY"
       (( pick_status == 3 )) && return 0
       (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
       (( pick_status != 0 )) && return 1
@@ -770,6 +772,10 @@ _vpn_config_copy_inventory() {
 #   Effects:   read-only.
 vpn-config-dir() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-config-dir accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-config-dir"

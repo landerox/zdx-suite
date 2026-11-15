@@ -27,10 +27,15 @@ _vpn_parse_iface_options() {
   shift 2
 
   _vpn_opt_iface=""
+  local -i iface_given=0
 
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
+        if (( $# != 1 || iface_given )); then
+          _vpn_error "$command_name --help must be used alone."
+          return 2
+        fi
         print -u2 -r -- "Usage: $command_name [PROFILE]"
         [[ -n "$usage_extra" ]] && print -u2 -r -- "$usage_extra"
         return 3
@@ -44,10 +49,15 @@ _vpn_parse_iface_options() {
         return 2
         ;;
       *)
-        if [[ -n "$_vpn_opt_iface" ]]; then
+        if (( iface_given )); then
           _vpn_error "$command_name accepts a single profile name."
           return 2
         fi
+        [[ -n "$1" ]] || {
+          _vpn_error "$command_name requires a nonempty profile name when supplied."
+          return 2
+        }
+        iface_given=1
         _vpn_opt_iface="$1"
         ;;
     esac
@@ -57,10 +67,15 @@ _vpn_parse_iface_options() {
   # Anything after `--` stays data, so a name beginning with a dash is still
   # rejected by validation rather than parsed as an option.
   while (( $# > 0 )); do
-    if [[ -n "$_vpn_opt_iface" ]]; then
+    if (( iface_given )); then
       _vpn_error "$command_name accepts a single profile name."
       return 2
     fi
+    [[ -n "$1" ]] || {
+      _vpn_error "$command_name requires a nonempty profile name when supplied."
+      return 2
+    }
+    iface_given=1
     _vpn_opt_iface="$1"
     shift
   done
@@ -275,7 +290,8 @@ vpn-on() {
   if [[ -z "$iface" ]]; then
     local picked
     local -i pick_status=0
-    picked=$(_vpn_pick_profile "Connect VPN profile") || pick_status=$?
+    _vpn_pick_profile "Connect VPN profile" || pick_status=$?
+    picked="$REPLY"
     (( pick_status == 3 )) && return 0
     (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
@@ -360,8 +376,9 @@ vpn-off() {
     else
       local picked
       local -i pick_status=0
-      picked=$(_vpn_pick_from_list "Disconnect VPN" "${active[@]}") \
+      _vpn_pick_from_list "Disconnect VPN" "${active[@]}" \
         || pick_status=$?
+      picked="$REPLY"
       (( pick_status == 3 )) && return 0
       (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
       (( pick_status != 0 )) && return 1
@@ -552,6 +569,10 @@ vpn-off-all() {
 #   Effects:   brings the recorded last-used profile down, if up, then up again.
 vpn-reconnect-last() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-reconnect-last accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-reconnect-last"
@@ -604,6 +625,10 @@ vpn-reconnect-last() {
 #              already active.
 vpn-default-connect() {
   emulate -L zsh
+  if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != (-h|--help) ]]; }; then
+    _vpn_error "vpn-default-connect accepts no arguments."
+    return 2
+  fi
   case "${1:-}" in
     -h|--help)
       print -u2 -r -- "Usage: vpn-default-connect"
@@ -671,7 +696,8 @@ vpn-default-set() {
   if [[ -z "$iface" ]]; then
     local picked
     local -i pick_status=0
-    picked=$(_vpn_pick_profile "Set default VPN profile") || pick_status=$?
+    _vpn_pick_profile "Set default VPN profile" || pick_status=$?
+    picked="$REPLY"
     (( pick_status == 3 )) && return 0
     (( pick_status == 130 || pick_status == 143 )) && return "$pick_status"
     (( pick_status != 0 )) && return 1
