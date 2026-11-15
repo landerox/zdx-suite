@@ -357,6 +357,47 @@ EOF
   }
   # End scoped locale eligibility.
 
+  # Failure-only receipt output; it never decides eligibility or product status.
+  f508_locale_diagnostic() {
+    local evidence="$1" file candidate name index highest='' highest_number=0
+    local -a files=(lookup.status lookup.stdout lookup.stderr
+      advertised.status advertised.stdout advertised.stderr
+      build-lookup.status build-lookup.stdout build-lookup.stderr
+      support.status support.stdout support.stderr
+      build.status build.stdout build.stderr
+      private-probe.status private-probe.stdout private-probe.stderr
+      selected.name reason)
+    printf 'Locale eligibility failure: existing receipts only.\n' >&2
+    for candidate in "$evidence"/installed-*.name; do
+      [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+      name="${candidate##*/}"
+      index="${name#installed-}"
+      index="${index%.name}"
+      [[ "$index" =~ ^[0-9]+$ && ${#index} -le 8 ]] || continue
+      if (( 10#$index > highest_number )); then
+        highest_number=$((10#$index))
+        highest="installed-$index"
+      fi
+    done
+    if [[ -n "$highest" ]]; then
+      files+=("$highest.name" "$highest.status" "$highest.stdout" "$highest.stderr")
+    else
+      printf 'No installed-N.name receipt found; attempted phase remains unknown.\n' >&2
+    fi
+    for file in "${files[@]}"; do
+      if [[ ! -e "$evidence/$file" && ! -L "$evidence/$file" ]]; then
+        printf 'Receipt %s: missing.\n' "$file" >&2
+      elif [[ -f "$evidence/$file" && ! -L "$evidence/$file" ]]; then
+        printf 'Receipt %s: hex, at most 512 bytes.\n' "$file" >&2
+        command od -An -v -tx1 -N 512 "$evidence/$file" >&2 \
+          || printf 'Receipt %s: read failed.\n' "$file" >&2
+      else
+        printf 'Receipt %s: not a regular non-link file; unread.\n' "$file" >&2
+      fi
+    done
+    return 0
+  }
+
   local eligibility_rc=0
   f508_locale_eligible "$F508_ROOT/eligibility" /usr/share/i18n || eligibility_rc=$?
   printf '%s\n' "$eligibility_rc" > "$F508_ROOT/eligibility.status" || return 1
@@ -366,6 +407,9 @@ EOF
     reason=$(cat "$F508_ROOT/eligibility/reason") || return 1
     [[ -n "$reason" ]] || return 1
     skip "$reason"
+  fi
+  if (( eligibility_rc != 0 && eligibility_rc != 77 )); then
+    f508_locale_diagnostic "$F508_ROOT/eligibility" || :
   fi
   [[ "$eligibility_rc" == 0 ]]
   export F508_LOCALE F508_LOCALE_DIR

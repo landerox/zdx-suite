@@ -58,6 +58,15 @@ jobs:
               run: |
                   git ls-files -z '*.zsh' | xargs -0 -n 1 zsh -n
 
+            - name: Check telemetry locale eligibility
+              env:
+                  BATS_JOBS: "1"
+                  GIT_CONFIG_NOSYSTEM: "1"
+              run: |
+                  prefix="$(brew --prefix)"
+                  export PATH="$prefix/bin:$PATH"
+                  just test --filter '^sys telemetry output: duration conversion keeps a decimal point under a supported comma locale$' test/sys_telemetry_output.bats
+
             - name: Run the BATS suite
               env:
                   BATS_JOBS: "3"
