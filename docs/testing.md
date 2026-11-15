@@ -405,6 +405,15 @@ core-package and optional-tool success/failure/not-run totals.
 
 ### Git coverage
 
+`git_collision_index.bats` covers ordered literal obstacle matching, directory
+boundaries, duplicate candidates and case folding. A qualified test-local DEBUG
+observer checks operation growth against input components, alongside structural
+review of indexed matching and deduplication. Disposable hard-undo fixtures keep
+the complete tracked and ignored inventories and assert unchanged repository
+state; signed realtime samples supplement the operation bound rather than define
+a universal wall-clock guarantee. Symlink victims and failed partial NUL
+inventories remain explicit refusal controls.
+
 `git_preview_paths.bats` executes the actual fixed preview programs against
 raw filename snapshots, with independent content and selected-target checks
 for escaped display collisions and trailing newlines. Resource tests cover

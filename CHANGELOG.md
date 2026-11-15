@@ -191,6 +191,10 @@ verification, and remaining limitations.
 
 ### Changed
 
+- Git: index obstacle paths by component so large ignored trees no longer
+  require comparing every candidate with every tracked target. Complete path
+  inventories, case-insensitive checks and confirmation-time revalidation remain.
+
 - Add isolated Python pin, package, tool and PyPI failure-path coverage,
   including exact backend arguments, consent and revalidation boundaries,
   preserved unrelated data, and strict fixture containment.

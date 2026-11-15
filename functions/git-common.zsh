@@ -1390,31 +1390,54 @@ _git_path_collisions() {
   local -a candidate_paths=("${(@P)1}")
   local -a target_paths=("${(@P)2}")
   local fold_case="${3:-no}"
-  local -a target_keys=("${target_paths[@]}")
-  local -a collisions=()
-  local candidate_path=""
-  local candidate_key=""
-  local target_key=""
+  local -a collisions=() path_parts=()
+  local -A trie_edges=() terminal_nodes=() seen_candidates=()
+  local candidate_path="" candidate_key="" target_key="" path_part="" edge_key=""
+  local -i node=0 child_node=0 next_node=0
+  reply=()
+  (( ${#candidate_paths[@]} && ${#target_paths[@]} )) || return 0
 
-  [[ "$fold_case" == "yes" ]] && target_keys=("${(@L)target_paths}")
+  # Index canonical Git paths by component. Edges contain only a node ID and
+  # one literal component, never a growing whole-path prefix. A terminal node
+  # marks a target ancestor; any reached node also has a target below it.
+  for target_key in "${target_paths[@]}"; do
+    [[ "$fold_case" == "yes" ]] && target_key="${(L)target_key}"
+    path_parts=("${(@s:/:)target_key}")
+    node=0
+    for path_part in "${path_parts[@]}"; do
+      edge_key="$node/$path_part"
+      child_node="${trie_edges[$edge_key]:-0}"
+      if (( child_node == 0 )); then
+        (( ++next_node ))
+        child_node=$next_node
+        trie_edges[$edge_key]=$child_node
+      fi
+      node=$child_node
+    done
+    terminal_nodes[$node]=1
+  done
+
   for candidate_path in "${candidate_paths[@]}"; do
     candidate_path="${candidate_path%/}"
     [[ -n "$candidate_path" ]] || continue
+    (( ${+seen_candidates[$candidate_path]} )) && continue
+    # Deduplicate original spelling, independently of the comparison case.
+    seen_candidates[$candidate_path]=1
     candidate_key="$candidate_path"
     [[ "$fold_case" == "yes" ]] && candidate_key="${(L)candidate_path}"
-
-    for target_key in "${target_keys[@]}"; do
-      if [[ "$candidate_key" == "$target_key" \
-        || "$candidate_key" == "$target_key"/* \
-        || "$target_key" == "$candidate_key"/* ]]; then
-        (( ${collisions[(Ie)$candidate_path]} == 0 )) &&
-          collisions+=("$candidate_path")
-        break
-      fi
+    path_parts=("${(@s:/:)candidate_key}")
+    node=0
+    for path_part in "${path_parts[@]}"; do
+      edge_key="$node/$path_part"
+      node="${trie_edges[$edge_key]:-0}"
+      (( node > 0 )) || break
+      (( ${+terminal_nodes[$node]} )) && break
     done
+    (( node > 0 )) && collisions+=("$candidate_path")
   done
 
   reply=("${collisions[@]}")
+  return 0
 }
 
 # --- Dependencies ------------------------------------------------------------

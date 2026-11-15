@@ -989,6 +989,15 @@ An explicit tag or cleanup target that does not exist or is not eligible
 returns `1`, including when the complete candidate inventory is empty.
 An unnamed empty inventory remains a successful no-op and opens no picker.
 
+Local Git obstacle matching uses an invocation-local target
+component index. It preserves candidate order, literal path bytes, directory
+boundaries and the existing `core.ignorecase` comparison. Callers still capture
+the complete individual untracked and ignored path inventories; ignored trees
+are not collapsed into directory markers. Matching does not compare every
+candidate with every target. Existing post-confirmation discovery and state
+checks remain required; this index adds no cross-invocation cache or filesystem
+race guarantee.
+
 A computed rebase file/directory conflict can invent a side-file label that
 differs from the one `merge-tree` exposes. The suite refuses that unprovable
 write before ref promotion or worktree mutation. When merge-tree computation
@@ -1275,6 +1284,10 @@ regressing.
 | User documentation advertises behavior the suite does not provide | [`user-guide.md`](user-guide.md) lists only Git-owned commands, direct pull-request-number checkout, and redacted authentication status, and changes with the code |
 
 ## Verification files
+
+`test/git_collision_index.bats` checks literal, ordered and case-folded obstacle
+results, qualified operation growth and complete large-tree hard-undo dry runs.
+Existing obstacle, late-change and failed-inventory controls remain required.
 
 `test/git_remote_proofs.bats` exercises replacement-ref and legacy-graft ancestry attacks,
 local-branch reflog integration and expiration, stacked rebase refs, exact PR

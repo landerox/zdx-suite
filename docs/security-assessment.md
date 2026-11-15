@@ -743,6 +743,10 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   `--include-untracked` and through `git clean` without `-x` so ignored files
   and nested repositories are never deleted, and revalidates the complete
   reviewed state after confirmation;
+  local obstacle matching indexes target path components without truncating or
+  collapsing the complete untracked and ignored inventories. The invocation-local
+  index preserves literal names, directory boundaries and case folding, and does
+  not replace post-confirmation discovery or close the final check-to-write race;
   `git-unstage` requires confirmation or `--yes` before dropping a staged
   version that is not in the working tree, and it judges that risk from the
   index and working tree its picker listed: `git-unstage` and `git-amend` take
