@@ -334,11 +334,14 @@ _sys_processes_terminate() {
       _sys_error "Non-interactive process signaling requires --yes."
       return 1
     fi
-    if ! _sys_confirm \
-      "Send SIG${signal_name} to PID $pid ($command_name, UID $process_uid)?"; then
-      _sys_info "Process signaling cancelled."
-      return 0
-    fi
+    local -i confirmation_rc=0
+    _sys_confirm "Send SIG${signal_name} to PID $pid ($command_name, UID $process_uid)?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1) _sys_info "Process signaling cancelled."; return 0 ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
   _sys_processes_signal_validated "$fingerprint" "$signal_name"

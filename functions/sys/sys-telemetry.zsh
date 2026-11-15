@@ -377,11 +377,19 @@ _sys_telemetry_clear() {
   local file_bytes
   file_bytes=$(command wc -c < "$log_file" 2>/dev/null) || return 1
   file_bytes="${file_bytes//[[:space:]]/}"
-  _sys_info "Telemetry clear plan: replace $log_file with an empty file."
-  _sys_dim "Current size: ${file_bytes:-unknown} bytes."
+  local REPLY scope display_log="$log_file"
+  [[ -n "$HOME" && "$HOME" != / && "$display_log" == "$HOME"/* ]] \
+    && display_log="~/${display_log#"$HOME"/}"
+  display_log=$(_sys_display_escape "$display_log")
+  _sys_count_noun 1 log
+  scope="$REPLY"
+  _sys_header "Telemetry Clear Plan"
+  _sys_table $'#\tLog' "1"$'\t'"$display_log"
+  _sys_count_noun "$file_bytes" byte || return 1
+  _sys_label "Current size:" "$REPLY"
 
   if (( dry_run )); then
-    _sys_info "Dry run complete; no telemetry data was changed."
+    _sys_info "Dry run: 1 planned; nothing was cleared."
     return 0
   fi
 
@@ -390,10 +398,14 @@ _sys_telemetry_clear() {
       _sys_error "Non-interactive telemetry clearing requires --yes."
       return 1
     fi
-    _sys_confirm "Clear the validated local telemetry log?" || {
-      _sys_info "Cancelled."
-      return 0
-    }
+    local -i confirmation_rc=0
+    _sys_confirm "Clear $scope?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1) _sys_info "Cancelled: nothing was cleared."; return 0 ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
   [[ -d "$log_dir" && ! -L "$log_dir" && -O "$log_dir" ]] || {
@@ -439,7 +451,8 @@ _sys_telemetry_clear() {
   }
 
   (( clear_rc == 0 )) || return "$clear_rc"
-  _sys_success "Telemetry log cleared successfully."
+  _sys_success "$display_log cleared."
+  _sys_success "Telemetry clear completed: $scope cleared."
   return 0
 }
 

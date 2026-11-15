@@ -391,11 +391,14 @@ _sys_ports_terminate_record() {
       _sys_error "Non-interactive listener signaling requires --yes."
       return 1
     fi
-    if ! _sys_confirm \
-      "Send SIG${signal_name} to PID $process_pid ($command_name) on ${protocol}:${port_number}?"; then
-      _sys_info "Listener signaling cancelled."
-      return 0
-    fi
+    local -i confirmation_rc=0
+    _sys_confirm "Send SIG${signal_name} to PID $process_pid ($command_name) on ${protocol}:${port_number}?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1) _sys_info "Listener signaling cancelled."; return 0 ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
   if [[ -n "$port_target" ]]; then

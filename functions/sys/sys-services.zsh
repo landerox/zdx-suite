@@ -411,11 +411,14 @@ _sys_services_mutate() {
       _sys_error "Non-interactive service mutation requires --yes."
       return 1
     fi
-    if ! _sys_confirm \
-      "${action_name:u} $service_backend service '$service_id'?"; then
-      _sys_info "Service action cancelled."
-      return 0
-    fi
+    local -i confirmation_rc=0
+    _sys_confirm "${action_name:u} $service_backend service '$service_id'?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1) _sys_info "Service action cancelled."; return 0 ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
   _sys_services_state_matches "$initial_state" || {

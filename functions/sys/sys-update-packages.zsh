@@ -214,8 +214,120 @@ _sys_brew_update_phases() {
   fi
 }
 
+# The actual logged callback: one bounded Snap read, stdout data kept private.
+# The outer, independently timed head prevents stderr from escaping its cap.
+_sys_snap_refresh_capture() {
+  emulate -L zsh
+  local capture="$1" snap_program="$2" head_program="$3" result=""
+  local -a identities=("$4" "$5" "$6")
+  local -i max_bytes=262144 observed=0 status_bytes=0 index=0
+  local -a capture_status=()
+  local -A state=()
+  {
+    local -i probe_rc=0
+    LC_ALL=C _sys_run_bounded_probe 30 "$max_bytes" \
+      "$snap_program" refresh --list < /dev/null > "$capture/data" || probe_rc=$?
+    print -r -- "$probe_rc" > "$capture/status"
+  } 2>&1 | _sys_run_with_timeout 30 "$head_program" -c "$(( max_bytes + 1 ))" \
+    > "$capture/errors"
+  capture_status=("${pipestatus[@]}")
+  (( ${#capture_status} == 2 )) || return 1
+  # An interrupt wins over a concurrent reader deadline. Neither permits data
+  # consumption; a validated producer stop also survives diagnostic overflow.
+  local code
+  local -i failure_rc=1
+  for code in "${capture_status[@]}"; do
+    (( code == 130 || code == 143 )) && return "$code"
+    (( code == 124 )) && failure_rc=124
+  done
+  local entry
+  for entry in status data errors; do
+    case "$entry" in status) index=3 ;; data) index=1 ;; errors) index=2 ;; esac
+    [[ -f "$capture/$entry" && ! -L "$capture/$entry" ]] \
+      && zstat -LH state -- "$capture/$entry" 2>/dev/null || return "$failure_rc"
+    (( state[uid] == EUID && state[nlink] == 1 \
+      && (state[mode] & 8#777) == 8#600 )) || return "$failure_rc"
+    [[ "${state[device]}:${state[inode]}" == "${identities[index]}" ]] \
+      || return "$failure_rc"
+    if [[ "$entry" == status ]]; then
+      (( state[size] > 0 && state[size] <= 4 )) || return "$failure_rc"
+      status_bytes="${state[size]}"
+      result=$(command cat "$capture/status") || return "$failure_rc"
+      [[ "$result" == <-> && ${#result} -le 3 ]] || return "$failure_rc"
+      observed=$(( 10#$result ))
+      (( observed <= 255 && status_bytes == ${#result} + 1 )) || return "$failure_rc"
+      (( observed == 124 || observed == 130 || observed == 143 )) \
+        && failure_rc="$observed"
+      (( capture_status[1] == 0 && capture_status[2] == 0 )) \
+        || return "$failure_rc"
+    elif (( state[size] > max_bytes )); then
+      _sys_error "Snap refresh discovery output exceeded its byte limit."
+      return "$failure_rc"
+    fi
+  done
+  # The normal logged-command service owns replay, escaping and redaction.
+  command cat "$capture/errors" >&2 || return "$failure_rc"
+  return "$observed"
+}
+
+# Publish stdout only after the actual logged callback has succeeded.
+_sys_snap_refresh_plan() {
+  emulate -L zsh
+  local REPLY="" parent="" capture="" identity="" head_program="" snap_program=""
+  local -i operation_rc=1
+  local -A state=()
+  local -a identities=()
+  _sys_tool_program snap || return 1
+  snap_program="$REPLY"
+  _sys_tool_program head || return 1
+  head_program="$REPLY"
+  _sys_temp_parent_safe "${TMPDIR:-/tmp}" || return 1
+  parent="${REPLY%/}"
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  capture=$(umask 077; command mktemp -d "$parent/zdx-snap-refresh.XXXXXX") \
+    || return 1
+  {
+    [[ "${capture:h}" == "$parent" && "${capture:t}" == zdx-snap-refresh.?????? \
+      && "$capture" == "${capture:A}" && -d "$capture" && ! -L "$capture" ]] \
+      && zstat -LH state -- "$capture" 2>/dev/null || return 1
+    (( state[uid] == EUID && (state[mode] & 8#777) == 8#700 )) || return 1
+    identity="${state[device]}:${state[inode]}"
+    local entry
+    for entry in data errors status; do
+      (umask 077; : > "$capture/$entry") || return 1
+      [[ -f "$capture/$entry" && ! -L "$capture/$entry" ]] \
+        && zstat -LH state -- "$capture/$entry" 2>/dev/null || return 1
+      (( state[uid] == EUID && state[nlink] == 1 && state[size] == 0 \
+        && (state[mode] & 8#777) == 8#600 )) || return 1
+      identities+=("${state[device]}:${state[inode]}")
+    done
+    _sys_run_logged "snap refresh --list" \
+      _sys_snap_refresh_capture "$capture" "$snap_program" "$head_program" \
+      "${identities[@]}" || return $?
+    [[ -d "$capture" && ! -L "$capture" ]] \
+      && zstat -LH state -- "$capture" 2>/dev/null \
+      && [[ "${state[device]}:${state[inode]}" == "$identity" ]] || return 1
+    (( state[uid] == EUID && (state[mode] & 8#777) == 8#700 )) || return 1
+    [[ -f "$capture/data" && ! -L "$capture/data" ]] \
+      && zstat -LH state -- "$capture/data" 2>/dev/null \
+      && [[ "${state[device]}:${state[inode]}" == "${identities[1]}" ]] || return 1
+    (( state[uid] == EUID && state[nlink] == 1 && state[size] <= 262144 \
+      && (state[mode] & 8#777) == 8#600 )) || return 1
+    command cat "$capture/data"
+  } always {
+    operation_rc=$?
+    if [[ -n "$identity" && -d "$capture" && ! -L "$capture" ]] \
+      && zstat -LH state -- "$capture" 2>/dev/null \
+      && [[ "${state[device]}:${state[inode]}" == "$identity" ]]; then
+      command rm -rf -- "$capture"
+    fi
+  }
+  return "$operation_rc"
+}
+
 update-snap() {
   emulate -L zsh
+  setopt EXTENDED_GLOB
   local REPLY
   local -a reply=()
   _sys_update_parse_plan_flags update-snap "$@" || return $?
@@ -233,13 +345,13 @@ update-snap() {
 
   local refresh_plan=""
   local -i refresh_plan_rc=0
-  refresh_plan=$(
-    LC_ALL=C _sys_run_bounded_probe 30 262144 \
-      snap refresh --list </dev/null 2>&1
-  ) || refresh_plan_rc=$?
+  refresh_plan=$(_sys_snap_refresh_plan) || refresh_plan_rc=$?
   if (( refresh_plan_rc == 124 )); then
     _sys_error "Snap refresh discovery timed out after 30s."
     return 1
+  elif (( refresh_plan_rc == 130 || refresh_plan_rc == 143 )); then
+    _sys_error "Snap refresh discovery interrupted (status $refresh_plan_rc)."
+    return "$refresh_plan_rc"
   elif (( refresh_plan_rc != 0 )); then
     _sys_error "Snap could not calculate the refresh plan."
     return 1
@@ -250,13 +362,37 @@ update-snap() {
       "No Snap refreshes are currently pending."
     return 0
   fi
-  _sys_info "Currently pending Snap refreshes (advisory; snap resolves the final transaction):"
   local plan_line
-  local -a pending_snaps=()
+  local -a pending_snaps=() fields=()
+  local -i header_seen=0
   for plan_line in "${(@f)refresh_plan}"; do
-    _sys_dim "$(_sys_display_escape "$plan_line")"
-    [[ -n "$plan_line" && "$plan_line" != Name[[:space:]]* ]] \
-      && pending_snaps+=("${plan_line%%[[:space:]]*}")
+    [[ -n "${plan_line//[[:space:]]/}" ]] || continue
+    IFS=$' \t' read -rA fields <<< "$plan_line"
+    if (( ! header_seen )); then
+      (( ${#fields} >= 6 )) \
+        && [[ "${fields[1]}" == Name && "${fields[2]}" == Version \
+          && "${fields[3]}" == Rev ]] || {
+        _sys_error "Snap returned an unrecognized refresh-plan header."
+        return 1
+      }
+      header_seen=1
+      continue
+    fi
+    (( ${#fields} >= 6 )) \
+      && [[ "${fields[1]}" == [a-z0-9][a-z0-9-]# && "${fields[3]}" == <-> ]] || {
+      _sys_error "Snap returned an incomplete refresh-plan row."
+      return 1
+    }
+    pending_snaps+=("${fields[1]}")
+  done
+  if (( ${#pending_snaps} == 0 )); then
+    _sys_report_result current "no refreshes pending" \
+      "No Snap refreshes are currently pending."
+    return 0
+  fi
+  _sys_info "Currently pending Snap refreshes (advisory; snap resolves the final transaction):"
+  for plan_line in "${(@f)refresh_plan}"; do
+    _sys_dim "$plan_line"
   done
   local pending_label=""
   _sys_count_noun "${#pending_snaps}" snap
@@ -272,8 +408,12 @@ update-snap() {
       return 1
     fi
     _sys_confirm "Run the privileged dynamic Snap refresh scope?" || {
-      _sys_info "Cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
   fi
 
@@ -726,8 +866,12 @@ _sys_update_softwareupdate() {
       return 1
     fi
     _sys_confirm "Install these exact macOS software updates?" || {
-      _sys_info "Native package update cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Native package update cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
   fi
   local -a privilege_prefix=()
@@ -891,8 +1035,12 @@ _sys_update_platform_packages() {
       return 1
     fi
     _sys_confirm "Run this privileged dynamic $package_backend update scope?" || {
-      _sys_info "Native package update cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Native package update cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
   fi
   local -a privilege_prefix=()

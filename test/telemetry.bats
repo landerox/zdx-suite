@@ -155,7 +155,7 @@ teardown() {
     [ ! -s \"\$HOME/.config/zdx/telemetry.json\" ]
   "
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Telemetry log cleared successfully"* ]]
+  [[ "$output" == *"Telemetry clear completed: 1 log cleared."* ]]
 }
 
 @test "telemetry: unknown timer labels cannot enter the footer or persisted records" {

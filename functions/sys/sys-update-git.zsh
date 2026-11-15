@@ -968,7 +968,8 @@ update-fzf() {
   fi
 
   if (( discovery_rc == 2 )); then
-    _sys_error "Refusing an unsafe Git-owned fzf checkout."
+    _sys_report_result blocked "unsafe Git-owned fzf checkout" \
+      "Refusing an unsafe Git-owned fzf checkout."
     return 1
   fi
 
@@ -1009,8 +1010,12 @@ update-fzf() {
         return 1
       fi
       _sys_confirm "Trust this origin and fast-forward fzf?" || {
-        _sys_info "Cancelled."
-        return 0
+        local -i confirm_rc=$?
+        case "$confirm_rc" in
+          1) _sys_info "Cancelled."; return 0 ;;
+          130|143) return "$confirm_rc" ;;
+          *) return 1 ;;
+        esac
       }
     fi
 
@@ -1045,7 +1050,12 @@ update-fzf() {
       fi
       _sys_tool_program fzf \
         && _sys_update_fzf_active_in_git_dir "$fzf_dir" "$REPLY" || {
-        _sys_error "fzf updated, but the active executable no longer belongs to this checkout."
+        _sys_update_git_change "$fzf_dir" "$current_commit" "$updated_head"
+        if [[ "$REPLY" == updated ]]; then
+          _sys_error "fzf checkout updated (${reply[1]}), but the active executable no longer belongs to this checkout."
+        else
+          _sys_error "fzf checkout is current (${reply[1]}), but the active executable no longer belongs to this checkout."
+        fi
         return 1
       }
       fzf_program="$REPLY"
@@ -1130,8 +1140,12 @@ update-omz() {
         return 1
       fi
     _sys_confirm "Trust this origin and fast-forward Oh My Zsh?" || {
-      _sys_info "Cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
   fi
 
@@ -1299,8 +1313,12 @@ update-zsh-plugins() {
       return 1
     fi
     _sys_confirm "Trust every listed origin and fast-forward its code?" || {
-      _sys_info "Cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
   fi
 

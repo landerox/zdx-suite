@@ -223,7 +223,7 @@ run_core_state_zsh() {
   [ "$(cat "$HOME/.config/zdx/telemetry.json")" = "telemetry-data" ]
   [ "$(file_identity "$HOME/.config/zdx/telemetry.json")" = "$before_inode" ]
   [ ! -e "$HOME/.config/zdx/.telemetry.lock" ]
-  grep -q "Dry run complete" "$HOME/clear.stderr"
+  grep -Fq "Dry run: 1 planned; nothing was cleared." "$HOME/clear.stderr"
 }
 
 @test "sys state telemetry: non-interactive clear without yes fails closed" {

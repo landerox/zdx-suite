@@ -517,6 +517,14 @@ Zsh. They never place `kill`, `sudo`, `systemctl`, or `launchctl` inside an
 `fzf` preview or binding. They run through the same foreground private capture
 helper as the top-level menu rather than inside command substitution.
 
+System confirmation distinguishes a deliberate decline from a failed prompt.
+The private `_sys_confirm` protocol is `0` for Yes, `1` for No or Esc, `2` for
+unavailable or failed confirmation, and unchanged `130`/`143` for returned
+interruptions. A deliberate decline returns `0` without mutation; a failed
+prompt returns `1` without a cancellation message, and interruptions
+stop before mutation with their original status. A picker returning `130`
+means Esc under the existing picker protocol.
+
 ## Updates
 
 The update orchestrator never runs an unverifiable upstream installer
@@ -602,6 +610,20 @@ steps. A Snap preview error or deadline is a visible failed step, never a
 successful "no pending updates" result. Direct update commands that do not
 advertise `--dry-run` retain their narrower command-specific interface; the
 aggregate flags must not be inferred to exist on every updater.
+
+Snap refresh discovery keeps stdout separate from diagnostics. One native
+`snap refresh --list` observation has closed stdin, a 30-second deadline and
+independent 256 KiB channel limits; the stderr reader also has a 30-second
+deadline. Only a complete successful stdout inventory contributes pending
+rows. Empty output, the recognized up-to-date sentence, and a recognized
+header without rows mean no refreshes; other nonempty malformed output fails.
+Failure diagnostics follow the existing captured-command policy: default
+core-loaded logging escapes and redacts them, while verbose and standalone
+output retain their existing streaming behavior.
+A timeout fails the public step with `1`; returned `130`/`143` remain distinct
+and take precedence over an observed channel timeout or overflow. Private
+capture identities and modes are revalidated before consuming stdout; these
+pathname checks retain the usual final replacement race.
 
 Gcloud, uv, fnm and fzf ownership observations use bounded, closed-input
 external probes. A complete successful inventory may prove membership or
@@ -701,6 +723,11 @@ Oh My Zsh, and Zsh plugins.
   pipx compares its application inventory. A step without such evidence
   reports `done`, and an entry that hands work to another owner reports
   `delegated`.
+- Node.js reports `updated` only when known before/after versions differ;
+  an unchanged active version or known default reports `current`, and missing comparison
+  evidence reports `done`. A failed default-selection phase remains a failure.
+  Git-owned fzf compares HEAD across the successful pull; equal HEAD reports
+  `current`. An unsafe active executable reports `blocked` before execution.
 - The `Update Summary` table lists every entry with its result, time, and
   detail. The core and optional category lines, the verdict, each failed
   entry with its cause, and the public commands that retry them follow. The
@@ -1426,6 +1453,10 @@ cleanup targets or running a cleanup step. A refused tool is never executed,
 including during a dry run; neutral-directory and cache-boundary checks still
 apply.
 
+A refused static thumbnails, temporary-cache, Cargo or rustup directory is
+omitted with a named warning while independent safe targets remain available.
+This omission does not turn a failed dynamic inventory into an empty plan.
+
 Every cache path, root, and store must be a user-owned directory below `HOME`,
 never `HOME` itself, that no symbolic link reaches, and it must not be or
 contain a protected root: the ZDX suite root, both the core's and the System
@@ -1541,8 +1572,14 @@ Disabled Snap revisions are treated as dynamic privileged targets. The helper
 authenticates once with `sudo -v`, re-queries each recorded snap and revision,
 confirms it is still disabled, and runs only the final `snap remove` through
 `sudo -n`. A revision is disabled only when the `Notes` column says so. A
-changed or missing revision fails closed and is reported as a partial failure.
-Snap's own progress output goes to stderr.
+changed or missing revision fails closed before removal. The exact-target
+plan numbers each `Snap` and `Revision`; an empty plan prints one state line.
+Dry runs and declines leave all revisions intact. Removal results preserve both
+backend channels on stderr. Ordinary command failures allow later reviewed
+targets; interrupted removal commands preserve `130`/`143` and list the
+remaining original records under `Not run`. The verdict counts actual removals and failed removal
+commands separately from pre-removal refusals. Partial failure requires an
+actual successful removal; all-failed work never claims a partial change.
 
 ### Telemetry state
 
@@ -1569,7 +1606,10 @@ clearer is active. No lock is removed based on its age or a PID guess.
 `sys-telemetry --clear [--dry-run] [--yes]` shows the exact file and size,
 fails closed non-interactively, locks the telemetry directory, revalidates the
 file's device and inode, and atomically replaces it with an owner-only empty
-file. Dashboard and browse remain read-only.
+file. Its numbered `Log` plan displays the escaped HOME-abbreviated path;
+dry runs preserve the original bytes and identity. Results describe the actual
+replacement and counted log total, and an absent log is a one-line no-op.
+Dashboard and browse remain read-only.
 
 ## Interface
 

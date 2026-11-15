@@ -293,14 +293,14 @@ EOF
 
 @test "sys: _sys_confirm rejects piped confirmation without a terminal" {
   run run_zsh "echo 'y' | _sys_confirm 'Proceed'"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"Interactive confirmation requires a terminal"* ]]
 
   run run_zsh "echo 'n' | _sys_confirm 'Proceed'"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
 
   run run_zsh "_sys_confirm 'Proceed'"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
 }
 
 @test "sys: _sys_has_systemd returns correctly" {

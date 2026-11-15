@@ -779,8 +779,12 @@ EOF
       return 1
     fi
     _sys_confirm "Authorize and run this exact update plan?" || {
-      _sys_info "Cancelled."
-      return 0
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
     }
     # The confirmed plan is the one aggregate trust decision. Children run
     # with the same authorization as --yes so a mid-run prompt cannot stall
