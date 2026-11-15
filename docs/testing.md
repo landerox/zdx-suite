@@ -329,6 +329,21 @@ before capability/backend probes across direct, nested and lazy routes, with
 valid service, help and no-operand controls. The standalone watchdog's documented
 mixed-lifetime residual remains outside these fixtures.
 
+`sys_update_results.bats` covers Node.js version-evidence outcomes and failed
+default selection, fzf HEAD evidence and unsafe-owner blocking, separate Snap
+preview channels with finite byte/deadline/status controls, and all eight
+update confirmation consumers. `sys_confirmation_results.bats` covers the
+private confirmation protocol and seven other consumers, including isolated
+PTY Yes/No/Esc/error and missing-terminal controls. Returned interruption
+statuses are finite models, not physical signal or process-lifetime acceptance.
+
+`sys_cleanup_results.bats` covers refused static cache/Cargo/rustup targets
+beside safe work, complete numbered Snap and telemetry plans, unchanged dry-run
+bytes and identities, per-target removal results, retained backend diagnostics,
+interruptions with exact not-run targets, and refusal versus failed-command
+accounting. Fixture checks include all three linked target families and
+complete target sequences, not selected output substrings.
+
 `sys_session_safety.bats` checks option isolation for the frozen public
 inventory and menu/dispatcher, direct and nested resource records under
 hostile array/splitting options, seeded and unset regex state, public

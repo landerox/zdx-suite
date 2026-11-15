@@ -224,16 +224,18 @@ _sys_confirm_prompt() {
 }
 # <<< zdx-primitive confirm-prompt
 
+# 0 confirms, 1 declines, 2 reports an unavailable or failed confirmation;
+# returned line/key interruptions retain 130 and 143. Picker Esc is already 1.
 _sys_confirm() {
   local -i ask_rc=0
   _sys_confirm_ask "${1:-Proceed?}" || ask_rc=$?
   case "$ask_rc" in
-    0) return 0 ;;
+    0|1|130|143) return "$ask_rc" ;;
     2)
       _sys_error "Interactive confirmation requires a terminal; use the documented --yes flag."
-      return 1
+      return 2
       ;;
-    *) return 1 ;;
+    *) return 2 ;;
   esac
 }
 

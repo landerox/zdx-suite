@@ -219,6 +219,13 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- System: distinguish declined confirmations from prompt failures and preserve
+  returned interruptions; count only successful Snap preview data, retain
+  bounded diagnostics, and refuse incomplete previews. Node.js and fzf results
+  require observed version or HEAD changes. Unsafe static cleanup targets no
+  longer block independent safe work; Snap and telemetry show numbered plans
+  and report actual removals, failures and refusals.
+
 - Git: resolve file previews from raw row identities, derive authentication
   workspace facts from the repository root, and preserve path at-signs while
   masking URL userinfo. Status handles unborn HEAD with a fetched upstream,

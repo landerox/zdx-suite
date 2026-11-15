@@ -1401,6 +1401,15 @@ macOS or `update-snap` without a running snapd, fail directly with
 aggregate they would report `skipped: not applicable (<reason>)`, but
 `update-system` omits them from the plan.
 
+Update results distinguish observed changes from successful execution.
+Node.js reports `updated` only when known before/after versions differ; an
+unchanged active version or known default reports `current`, and unavailable
+comparison evidence reports `done`.
+Git-owned fzf uses the same rule with HEAD before and after its pull. An unsafe
+active executable is `blocked`. Snap counts only a complete successful refresh
+list on stdout; warnings never count as pending packages. A failed, timed-out,
+malformed or oversized preview stops before refresh execution.
+
 `update-node` uses external fnm or an existing nvm installation already loaded
 in your shell. The menu marks unloaded NVM as `missing: loaded nvm`. A runtime
 installation can succeed while activation or default selection fails; the
@@ -1438,6 +1447,14 @@ clean-journal --dry-run
 clean-snaps --dry-run
 ```
 
+Focused Snap cleanup shows each disabled revision in a numbered plan;
+telemetry clear shows its numbered log path using `~` for HOME. Dry runs state
+how many targets were planned, and a decline reports that nothing was removed
+or cleared. A failed confirmation returns an error instead of cancellation;
+returned interruptions stop before mutation. Snap failures retain backend
+diagnostics and distinguish failed removals, refused targets and targets not
+run. Partial change is reported only after a successful removal.
+
 Every broad cleanup displays its typed target plan. Execution runs only those
 confirmed records, forwards their recorded scopes to the owning helpers, and
 revalidates dynamic cache paths before mutation. Cache locations come from your
@@ -1455,6 +1472,9 @@ the closing `Cleanup Summary` table lists every step; `current` means there was
 nothing to clean. Ctrl-C stops the cleanup and leaves the remaining targets
 untouched. Generic cleanup never removes shared
 `/tmp` content and never prunes Docker resources.
+
+Unsafe static cache, Cargo and rustup directories are skipped with a warning;
+independent safe cleanup targets remain available.
 
 Homebrew cleanup removes caches through `cleanup --prune=all`; dependency
 removal belongs to `update-brew`. Both the literal and canonical HOME paths

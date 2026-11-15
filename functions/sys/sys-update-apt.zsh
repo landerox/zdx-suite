@@ -1159,9 +1159,13 @@ update-apt() {
       return 1
     fi
     _sys_confirm "Run this privileged dynamic APT update scope?" || {
-      _sys_info "Cancelled."
-      return 0
-      }
+      local -i confirm_rc=$?
+      case "$confirm_rc" in
+        1) _sys_info "Cancelled."; return 0 ;;
+        130|143) return "$confirm_rc" ;;
+        *) return 1 ;;
+      esac
+    }
   fi
 
   local -i direct_sudo_authenticated=0

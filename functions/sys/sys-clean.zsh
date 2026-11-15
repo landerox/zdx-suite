@@ -900,12 +900,15 @@ _sys_validate_disabled_snap_revisions() {
   done
 }
 
+# reply: successful removals, failed removal commands, pre-removal refusals.
+# Authentication failures leave no tuple; raw interruptions remain authoritative.
 _sys_remove_disabled_snap_revisions() {
   emulate -L zsh
   local MATCH MBEGIN MEND
   local -a match=() mbegin=() mend=()
   local disabled_snaps="$1"
 
+  reply=(0 0 0)
   [[ -z "$disabled_snaps" ]] && return 0
 
   local -a privilege_prefix=()
@@ -915,21 +918,26 @@ _sys_remove_disabled_snap_revisions() {
     read -r planned_name planned_revision <<< "$planned_record"
     operations+=("snap remove $planned_name --revision=$planned_revision")
   done
-  _sys_privilege_authorize "${operations[@]}" || return $?
+  _sys_privilege_authorize "${operations[@]}" || {
+    local -i authorization_rc=$?
+    reply=()
+    return "$authorization_rc"
+  }
   privilege_prefix=("${reply[@]}")
   local privilege_label=""
   (( ${#privilege_prefix[@]} > 0 )) \
     && privilege_label="${(j: :)privilege_prefix} "
   local -a snap_records=("${(@f)disabled_snaps}")
   local record name rev current_disabled current_record
-  local -i failures=0 revision_index=0
+  local -i removed=0 failures=0 refused=0 revision_index=0
+  reply=()
   for record in "${snap_records[@]}"; do
     (( ++revision_index ))
     read -r name rev <<< "$record"
     [[ "$name" =~ '^[[:alnum:]][[:alnum:]._-]*$' \
       && "$rev" =~ '^[0-9]+$' ]] || {
       _sys_error "Invalid disabled Snap record; refusing to remove it."
-      (( failures++ ))
+      (( refused++ ))
       continue
     }
 
@@ -937,13 +945,13 @@ _sys_remove_disabled_snap_revisions() {
       local -i inspection_rc=$?
       _sys_error "Unable to revalidate $name revision $rev."
       (( inspection_rc == 130 || inspection_rc == 143 )) && return $inspection_rc
-      (( failures++ ))
+      (( refused++ ))
       continue
     }
     current_disabled=$(
       _sys_validate_disabled_snap_revisions "$current_disabled"
     ) || {
-      (( failures++ ))
+      (( refused++ ))
       continue
     }
     local -a current_records=()
@@ -959,27 +967,31 @@ _sys_remove_disabled_snap_revisions() {
     if (( ! still_disabled )); then
       _sys_error \
         "$name revision $rev is no longer disabled; refusing to remove it."
-      (( failures++ ))
+      (( refused++ ))
       continue
     fi
 
     _sys_info "Removing $name rev $rev..."
     _sys_dim \
       "Privileged operation: ${privilege_label}snap remove $name --revision=$rev"
-    "${privilege_prefix[@]}" \
-      snap remove "$name" --revision="$rev" >&2 2>/dev/null || {
-        local -i removal_rc=$?
-        _sys_error "Failed to remove $name revision $rev."
-        if (( removal_rc == 130 || removal_rc == 143 )); then
-          if (( revision_index < ${#snap_records} )); then
-            _sys_label "Not run:" "${(j:, :)${(@V)snap_records[revision_index+1,-1]}}"
-          fi
-          return $removal_rc
+    if "${privilege_prefix[@]}" snap remove "$name" --revision="$rev" >&2; then
+      (( ++removed ))
+      _sys_success "$name revision $rev removed."
+    else
+      local -i removal_rc=$?
+      _sys_error "Failed to remove $name revision $rev."
+      if (( removal_rc == 130 || removal_rc == 143 )); then
+        if (( revision_index < ${#snap_records} )); then
+          _sys_label "Not run:" "${(j:, :)${(@V)snap_records[revision_index+1,-1]}}"
         fi
-        (( failures++ ))
-      }
+        reply=("$removed" "$(( failures + 1 ))" "$refused")
+        return $removal_rc
+      fi
+      (( failures++ ))
+    fi
   done
-  (( failures == 0 ))
+  reply=("$removed" "$failures" "$refused")
+  (( failures == 0 && refused == 0 ))
 }
 
 _sys_clean_step_apt_cache() {
@@ -1029,47 +1041,6 @@ _sys_clean_step_homebrew() {
     _sys_brew_askpass_release "$askpass_program" \
       || _sys_warn "Could not remove the private askpass script: $askpass_program"
   }
-}
-
-_sys_clean_step_snap_revisions() {
-  if ! command -v snap &>/dev/null; then
-    _sys_info "Snap not installed, skipping."
-    return 0
-  fi
-
-  if ! _sys_snap_ready; then
-    _sys_warn "snapd is not available — skipping disabled snap cleanup."
-    _sys_dim "This avoids hangs in WSL environments without a running snapd."
-    return 0
-  fi
-
-  local disabled_snaps
-  disabled_snaps=$(_sys_disabled_snap_revisions)
-  local rc=$?
-  if (( rc == 130 || rc == 143 )); then
-    _sys_warn "Snap revision inspection interrupted (status $rc)."
-    return $rc
-  elif (( rc == 124 )); then
-    _sys_warn "Timed out while listing disabled snap revisions."
-    return 124
-  elif (( rc != 0 )); then
-    _sys_warn "Could not inspect disabled snap revisions."
-    return 1
-  fi
-  disabled_snaps=$(_sys_validate_disabled_snap_revisions "$disabled_snaps") \
-    || return 1
-
-  if [[ -z "$disabled_snaps" ]]; then
-    _sys_report_result current "no disabled revisions" \
-      "No disabled snap revisions to remove."
-    return 0
-  fi
-
-  _sys_dim "May take several minutes if many snap revisions are pending removal."
-  _sys_remove_disabled_snap_revisions "$disabled_snaps" || return $?
-  local REPLY
-  _sys_count_noun "${#${(f)disabled_snaps}}" revision
-  _sys_report_result done "$REPLY removed"
 }
 
 _sys_clean_step_npm_cache() {
@@ -1604,6 +1575,17 @@ _sys_clean_plan_cache() {
   print -r -- "$label|$cache_dir"
 }
 
+# Print one static target, or one named warning when validation refuses it.
+_sys_clean_plan_static() {
+  local label="$1" target="$2" REPLY
+  if _sys_clean_validate_user_path --quiet "$target"; then
+    print -r -- "$label|$REPLY"
+  else
+    _sys_warn "Skipping $label: $REPLY"
+  fi
+  return 0
+}
+
 _sys_clean_plan() {
   local REPLY
   local -a reply=()
@@ -1637,9 +1619,7 @@ _sys_clean_plan() {
   fi
   if _sys_tool_available cargo \
     && [[ -d "${CARGO_HOME:-$HOME/.cargo}/registry/cache" ]]; then
-    _sys_clean_validate_user_path \
-      "${CARGO_HOME:-$HOME/.cargo}/registry/cache" || return 1
-    print -r -- "Cargo registry cache|$REPLY"
+    _sys_clean_plan_static "Cargo registry cache" "${CARGO_HOME:-$HOME/.cargo}/registry/cache"
   fi
   # Superseded versions are planned by name only when some exist; execution
   # removes a planned name only while it is still superseded.
@@ -1681,12 +1661,10 @@ _sys_clean_plan() {
   _sys_has_systemd \
     && print -r -- "Journal logs|journal entries older than 3 days"
   if [[ -d "$HOME/.cache/thumbnails" ]]; then
-    _sys_clean_validate_user_path "$HOME/.cache/thumbnails" || return 1
-    print -r -- "Thumbnail cache|$REPLY"
+    _sys_clean_plan_static "Thumbnail cache" "$HOME/.cache/thumbnails"
   fi
   if [[ -d "$HOME/.cache/tmp" ]]; then
-    _sys_clean_validate_user_path "$HOME/.cache/tmp" || return 1
-    print -r -- "Temporary files|$REPLY"
+    _sys_clean_plan_static "Temporary files" "$HOME/.cache/tmp"
   fi
 
   if [[ "$mode" == "deep" ]]; then
@@ -1694,9 +1672,7 @@ _sys_clean_plan() {
       && print -r -- "Homebrew cleanup|brew cleanup --prune=all"
     if _sys_tool_available rustup \
       && [[ -d "${RUSTUP_HOME:-$HOME/.rustup}/downloads" ]]; then
-      _sys_clean_validate_user_path \
-        "${RUSTUP_HOME:-$HOME/.rustup}/downloads" || return 1
-      print -r -- "Rust downloads|$REPLY"
+      _sys_clean_plan_static "Rust downloads" "${RUSTUP_HOME:-$HOME/.rustup}/downloads"
     fi
     _sys_tool_available go \
       && _sys_clean_plan_cache "Go module cache" _sys_clean_go_cache_dir \
@@ -2031,11 +2007,18 @@ _sys_clean_system_main() {
       _sys_dim "Use quick mode if you want a fast cleanup with lower risk of long waits."
     fi
     _sys_blank
-    _sys_confirm "Proceed with this exact ${mode} cleanup plan?" || {
-      _sys_blank
-      _sys_info "Cancelled."
-      return 0
-    }
+    local -i confirmation_rc=0
+    _sys_confirm "Proceed with this exact ${mode} cleanup plan?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1)
+        _sys_blank
+        _sys_info "Cancelled."
+        return 0
+        ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
     _sys_blank
   fi
 
@@ -2120,10 +2103,17 @@ clean-journal() {
       _sys_error "Non-interactive journal cleanup requires --yes."
       return 1
     fi
-    _sys_confirm "Vacuum this exact journal scope?" || {
-      _sys_info "Cancelled."
-      return 0
-    }
+    local -i confirmation_rc=0
+    _sys_confirm "Vacuum this exact journal scope?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1)
+        _sys_info "Cancelled."
+        return 0
+        ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
   _sys_info "Vacuuming logs older than 3 days..."
@@ -2185,8 +2175,6 @@ clean-snaps() {
     _sys_report_not_applicable clean-snaps "snapd is not running"
     return
   fi
-  _sys_header "Cleaning Disabled Snap Revisions"
-
   local disabled_snaps
   disabled_snaps=$(_sys_disabled_snap_revisions)
   local rc=$?
@@ -2208,19 +2196,21 @@ clean-snaps() {
     return 0
   fi
 
-  local -a snap_lines=( "${(@f)disabled_snaps}" )
-  local REPLY
-  _sys_count_noun "${#snap_lines}" "disabled revision"
-  _sys_info "Found $REPLY:"
-  local line name rev
+  local -a snap_lines=("${(@f)disabled_snaps}") reply=() plan_rows=()
+  local REPLY scope line name rev
+  local -i plan_index=0 total=${#snap_lines}
+  _sys_count_noun "$total" "disabled revision"
+  scope="$REPLY"
+  _sys_header "Snap Cleanup Plan"
   for line in "${snap_lines[@]}"; do
-    read -r name rev <<<"$line"
-    _sys_dim "$name (rev $rev)"
+    read -r name rev <<< "$line"
+    (( ++plan_index ))
+    plan_rows+=("$plan_index"$'\t'"$name"$'\t'"$rev")
   done
+  _sys_table $'#\tSnap\tRevision' "${plan_rows[@]}"
 
-  _sys_blank
   if (( dry_run )); then
-    _sys_info "Dry run complete; no Snap revision was removed."
+    _sys_info "Dry run: $total planned; nothing was removed."
     return 0
   fi
   if (( ! assume_yes )); then
@@ -2228,15 +2218,45 @@ clean-snaps() {
       _sys_error "Non-interactive snap cleanup requires --yes."
       return 1
     fi
-    _sys_confirm "Remove these exact disabled revisions?" || {
-      _sys_info "Cancelled."
-      return 0
-    }
-    _sys_blank
+    local -i confirmation_rc=0
+    _sys_confirm "Remove $scope?" || confirmation_rc=$?
+    case "$confirmation_rc" in
+      0) ;;
+      1) _sys_info "Cancelled: nothing was removed."; return 0 ;;
+      130|143) return "$confirmation_rc" ;;
+      *) return 1 ;;
+    esac
   fi
 
-  _sys_remove_disabled_snap_revisions "$disabled_snaps" || return $?
-  _sys_success "Disabled snap revisions cleaned."
+  local -i removal_rc=0
+  _sys_remove_disabled_snap_revisions "$disabled_snaps" || removal_rc=$?
+  (( removal_rc == 130 || removal_rc == 143 )) && return "$removal_rc"
+  if (( ${#reply} != 3 )) \
+    || [[ "${reply[1]:-}" != <-> || "${reply[2]:-}" != <-> \
+      || "${reply[3]:-}" != <-> ]]; then
+    return 1
+  fi
+  local -i removed=${reply[1]} failures=${reply[2]} refused=${reply[3]}
+  if (( refused > 0 )); then
+    _sys_error "Snap cleanup could not complete: $refused of $scope refused before removal."
+    if (( removed > 0 )); then
+      typeset -f _zdx_timed_mark_partial &>/dev/null \
+        && _zdx_timed_mark_partial || true
+    fi
+    return 1
+  fi
+  if (( removal_rc == 0 && removed == total && failures == 0 )); then
+    _sys_success "Snap cleanup completed: $scope removed."
+    return 0
+  fi
+  if (( removed > 0 && failures > 0 )); then
+    _sys_error "Snap cleanup completed with partial failures: $failures of $scope failed."
+    typeset -f _zdx_timed_mark_partial &>/dev/null \
+      && _zdx_timed_mark_partial || true
+  elif (( failures > 0 )); then
+    _sys_error "Snap cleanup failed: $failures of $scope failed."
+  fi
+  return 1
 }
 
 clean-system() {

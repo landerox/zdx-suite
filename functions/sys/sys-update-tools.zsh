@@ -842,9 +842,12 @@ update-pipx() {
 
 # Reports the Node.js LTS result from the versions before and after. An
 # optional note, such as migrated global packages, extends the detail.
-# Usage: _sys_update_report_node <before> <after> [note]
+# Usage: _sys_update_report_node <before> <after> [note] [previous-default]
 _sys_update_report_node() {
   local before="${1:-}" after="${2:-}" note="${3:+; $3}"
+  local previous_default="${4:-}"
+  [[ -n "$before" || "$previous_default" != "$after" ]] \
+    || before="$previous_default"
   if [[ -n "$before" && "$before" == "$after" ]]; then
     _sys_report_result current "$after (default)$note" \
       "Node.js LTS ($after) is already installed and active as the default."
@@ -852,8 +855,8 @@ _sys_update_report_node() {
     _sys_report_result updated "$before → $after (default)$note" \
       "Node.js LTS ($after) installed and set as default (was $before)."
   else
-    _sys_report_result updated "$after (default)$note" \
-      "Node.js LTS ($after) installed and set as default."
+    _sys_report_result done "$after (default)$note" \
+      "Node.js LTS ($after) is active and selected as the default."
   fi
 }
 
@@ -1070,7 +1073,8 @@ update-node() {
         && "${${nvm_previous_default#v}%%.*}" == "${${lts_version#v}%%.*}" ]]; then
         _sys_dim "clean-system removes $nvm_previous_default once nothing needs it."
       fi
-      _sys_update_report_node "$nvm_before" "$lts_version" "$migration_note"
+      _sys_update_report_node "$nvm_before" "$lts_version" "$migration_note" \
+        "$nvm_previous_default"
     else
       local -i mutation_rc=$?
       _sys_error "nvm failed to install Node.js LTS."

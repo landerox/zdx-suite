@@ -1200,6 +1200,22 @@ through `sudo`, or a keepalive outlives its operation.
   recorders cover refusals and safe controls; these pathname observations
   retain final replacement races and do not establish native host acceptance.
 
+- System confirmation consumers distinguish deliberate decline, operational
+  prompt failure and returned interruptions before mutation. Snap refresh
+  discovery bounds stdout and stderr independently, counts only a complete
+  successful data inventory, and uses the existing capture policy for failure
+  diagnostics. Core-loaded default logging escapes and redacts them; verbose
+  and standalone output retain their existing streaming behavior. The private capture directory and
+  files retain owner-only modes and their recorded identities through final
+  consumption. These pathname checks retain final replacement races, and the
+  existing standalone watchdog mixed-lifetime residual remains unchanged.
+  Static unsafe cleanup targets are omitted individually; dynamic inventory
+  failures still refuse work. Snap and telemetry plans name every target,
+  preserve dry-run identities, and report actual effects separately from
+  refusals and commands that failed. Confined finite fixtures and a Linux PTY
+  exercise these controls; they do not establish native package transactions
+  or physical signal acceptance.
+
 - System update-lock release scopes the fallback descriptor-close stderr
   redirect. Failure cannot silently discard later session diagnostics, and
   the owned descriptor state is cleared. `sys_session_safety.bats` exercises
@@ -3242,4 +3258,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-14.
+Last reviewed: 2026-11-15.
