@@ -219,7 +219,8 @@ git-status() {
   done
 
   local ahead="" behind=""
-  if [[ -n "$upstream" ]]; then
+  # A fetched upstream can exist before the first local commit.
+  if [[ -n "$upstream" && "$head" != unborn ]]; then
     local counts
     counts=$(command git rev-list --left-right --count \
       "HEAD...$upstream" 2>/dev/null) || {

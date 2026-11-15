@@ -210,6 +210,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Git: resolve file previews from raw row identities, derive authentication
+  workspace facts from the repository root, and preserve path at-signs while
+  masking URL userinfo. Status handles unborn HEAD with a fetched upstream,
+  and recovery excludes every live stash's index and untracked-parent objects.
+
 - Git: clean temporary fetch refs after interruption, report exact unrun
   targets and observed cleanup state, and distinguish current remote refs
   from upstream-only configuration. Plans use shared headings, exact counts

@@ -1175,8 +1175,25 @@ _git_recover_candidates() {
 
   local deep="$1"
   local listing="" reflog_record="" object_id="" reflog_selector=""
-  local -a reflog_refs=(HEAD) ordered_oids=() candidate_pairs=()
+  local -a reflog_refs=(HEAD) ordered_oids=() candidate_pairs=() live_stash_roots=()
   local -A reflog_sources=() unreachable_oids=()
+  reply=()
+
+  # Every current stack entry is live, including its index and untracked
+  # parents. A failed or malformed inventory cannot establish their absence.
+  listing=$(command git stash list --no-show-signature --format=%H 2>/dev/null) || {
+    _git_error "Unable to inspect the live stash stack."
+    return 1
+  }
+  if [[ -n "$listing" ]]; then
+    for object_id in "${(@f)listing}"; do
+      _git_validate_oid "$object_id" || {
+        _git_error "Git returned an invalid live stash object ID."
+        return 1
+      }
+      live_stash_roots+=("$object_id")
+    done
+  fi
 
   listing=$(command git for-each-ref --count="$_GIT_BRANCH_LIST_LIMIT" \
     --format='%(refname)' refs/heads 2>/dev/null) || {
@@ -1197,22 +1214,6 @@ _git_recover_candidates() {
     ordered_oids+=("$object_id")
   done
 
-  if (( ${#ordered_oids[@]} > 0 )); then
-    listing=$(print -rl -- "${ordered_oids[@]}" |
-      command git rev-list --stdin --not --branches --tags --remotes \
-        2>/dev/null) || {
-      _git_error "Unable to compute which reflog commits are unreachable."
-      return 1
-    }
-    for object_id in "${(@f)listing}"; do
-      [[ -n "$object_id" ]] && unreachable_oids[$object_id]=1
-    done
-    for object_id in "${ordered_oids[@]}"; do
-      (( ${+unreachable_oids[$object_id]} )) || continue
-      candidate_pairs+=("$object_id" "${reflog_sources[$object_id]}")
-    done
-  fi
-
   if [[ "$deep" == "yes" ]]; then
     local fsck_output="" fsck_line=""
     local -i fsck_code=0
@@ -1231,7 +1232,25 @@ _git_recover_candidates() {
       _git_validate_oid "$object_id" || continue
       (( ${+reflog_sources[$object_id]} )) && continue
       reflog_sources[$object_id]="dangling commit"
-      candidate_pairs+=("$object_id" "dangling commit")
+      ordered_oids+=("$object_id")
+    done
+  fi
+
+  # Filter the complete reflog/deep union before the public list cap. The
+  # negative live roots exclude their full ancestry, including stash parents.
+  if (( ${#ordered_oids[@]} > 0 )); then
+    listing=$(print -rl -- "${ordered_oids[@]}" |
+      command git rev-list --stdin --not --branches --tags --remotes \
+        "${live_stash_roots[@]}" 2>/dev/null) || {
+      _git_error "Unable to compute which recovery commits are unreachable."
+      return 1
+    }
+    for object_id in "${(@f)listing}"; do
+      [[ -n "$object_id" ]] && unreachable_oids[$object_id]=1
+    done
+    for object_id in "${ordered_oids[@]}"; do
+      (( ${+unreachable_oids[$object_id]} )) || continue
+      candidate_pairs+=("$object_id" "${reflog_sources[$object_id]}")
     done
   fi
 

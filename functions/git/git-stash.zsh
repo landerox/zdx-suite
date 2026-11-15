@@ -808,6 +808,7 @@ _git_stash_browse_files() {
   local -a all_files=()
   local -a all_kinds=()
   local -a picker_rows=()
+  local -a preview_paths=()
   local -a reply=()
   local REPLY=""
   local color_mode="never"
@@ -844,45 +845,83 @@ _git_stash_browse_files() {
     picker_rows+=(
       "${item_index}"$'\t'"${all_kinds[item_index]}"$'\t'"${(V)all_files[item_index]}"$'\t'"${(r:label_width:)change_label}  ${(V)all_files[item_index]}"
     )
+    preview_paths+=("$item_index" "${all_files[item_index]}")
   done
 
-  # The program is constant apart from validated hexadecimal object IDs; fzf
-  # quotes the kind and path placeholders.
-  local preview_program="case {2} in"
-  preview_program+=" untracked) git --literal-pathspecs --no-pager diff --no-ext-diff --no-textconv --color=${color_mode} ${(qq)empty_tree_oid} ${(qq)stash_oid}^3 -- {3} ;;"
-  preview_program+=" *) git --literal-pathspecs --no-pager diff --no-ext-diff --no-textconv --color=${color_mode} ${(qq)stash_oid}^1 ${(qq)stash_oid} -- {3} ;;"
-  preview_program+=" esac"
-  local -a picker_options=(
-    "--preview=${preview_program}"
-    --height=80%
-    '--preview-window=right:50%:wrap,<120(down:8:wrap)'
-    '--bind=ctrl-/:toggle-preview'
-  )
-  local header_text="Stash: ${stash_selector} | Files: ${#all_files[@]}"
-  header_text+=$'\n''Type to filter | Enter page diff | Esc back | Ctrl-/ details'
+  local -a _git_preview_paths_handle=()
+  local -x _ZDX_GIT_PREVIEW_PATH_DIR=""
+  local -i preview_cleanup_rc=0 browse_rc=0 _git_preview_paths_operation_rc=0 preview_create_rc=0
+  setopt localtraps
+  {
+    trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=130; return $_git_preview_paths_operation_rc' INT
+    trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=143; return $_git_preview_paths_operation_rc' TERM HUP
+    _git_preview_paths_create _git_preview_paths_handle "${preview_paths[@]}" || preview_create_rc=$?
+    (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+    (( preview_create_rc == 0 )) || return $preview_create_rc
+    _ZDX_GIT_PREVIEW_PATH_DIR="${_git_preview_paths_handle[1]}"
+    _git_preview_paths_read_program "${_git_preview_paths_handle[1]}" "${_git_preview_paths_handle[2]}" || preview_create_rc=$?
+    (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+    (( preview_create_rc == 0 )) || return $preview_create_rc
+    local preview_reader="$REPLY"
+    # The program is constant apart from validated hexadecimal object IDs; fzf
+    # quotes the kind and ID placeholders; raw paths stay in the private index.
+    local preview_program="$preview_reader case {2} in"
+    preview_program+=" untracked) git --literal-pathspecs --no-optional-locks --no-pager diff --no-ext-diff --no-textconv --color=${color_mode} ${(qq)empty_tree_oid} ${(qq)stash_oid}^3 -- \"\$path\" ;;"
+    preview_program+=" *) git --literal-pathspecs --no-optional-locks --no-pager diff --no-ext-diff --no-textconv --color=${color_mode} ${(qq)stash_oid}^1 ${(qq)stash_oid} -- \"\$path\" ;;"
+    preview_program+=" esac"
+    local -a picker_options=(
+      "--preview=${preview_program}"
+      --height=80%
+      '--preview-window=right:50%:wrap,<120(down:8:wrap)'
+      '--bind=ctrl-/:toggle-preview'
+    )
+    local header_text="Stash: ${stash_selector} | Files: ${#all_files[@]}"
+    header_text+=$'\n''Type to filter | Enter page diff | Esc back | Ctrl-/ details'
 
-  local file_name=""
-  while true; do
-    _git_select_ids "${stash_selector} files" "$header_text" 4 no \
-      picker_rows picker_options || return 1
-    (( ${#reply[@]} > 0 )) || return 0
+    local file_name=""
+    while true; do
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      _git_select_ids "${stash_selector} files" "$header_text" 4 no \
+        picker_rows picker_options || browse_rc=$?
+      # Preserve recognized empty picker cancellation after a foreground INT.
+      if (( _git_preview_paths_operation_rc == 130 && browse_rc == 0 && ${#reply[@]} == 0 )); then
+        _git_preview_paths_operation_rc=0
+      fi
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( browse_rc == 0 )) || break
+      (( ${#reply[@]} > 0 )) || break
 
-    item_index="${reply[1]}"
-    file_name="${all_files[item_index]}"
-    command git cat-file -e "${stash_oid}^{commit}" 2>/dev/null || {
-      _git_error "The selected stash object is no longer available."
-      return 1
-    }
-    if [[ "${all_kinds[item_index]}" == "untracked" ]]; then
-      _git_stash_page_git \
-        diff "--color=$color_mode" --no-ext-diff --no-textconv \
-        "$empty_tree_oid" "${stash_oid}^3" -- "$file_name" || return $?
-    else
-      _git_stash_page_git \
-        diff "--color=$color_mode" --no-ext-diff --no-textconv \
-        "${stash_oid}^1" "$stash_oid" -- "$file_name" || return $?
+      item_index="${reply[1]}"
+      file_name="${all_files[item_index]}"
+      command git cat-file -e "${stash_oid}^{commit}" 2>/dev/null || {
+        _git_error "The selected stash object is no longer available."
+        browse_rc=1
+        break
+      }
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      if [[ "${all_kinds[item_index]}" == "untracked" ]]; then
+        _git_stash_page_git \
+          diff "--color=$color_mode" --no-ext-diff --no-textconv \
+          "$empty_tree_oid" "${stash_oid}^3" -- "$file_name" || browse_rc=$?
+      else
+        _git_stash_page_git \
+          diff "--color=$color_mode" --no-ext-diff --no-textconv \
+          "${stash_oid}^1" "$stash_oid" -- "$file_name" || browse_rc=$?
+      fi
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( browse_rc == 0 )) || break
+    done
+  } always {
+    trap - INT TERM HUP
+    if (( ${#_git_preview_paths_handle[@]} >= 2 )); then
+      _git_preview_paths_cleanup "${_git_preview_paths_handle[@]}" || preview_cleanup_rc=$?
     fi
-  done
+    (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+  }
+  (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+  (( browse_rc == 0 )) || return $browse_rc
+  (( preview_cleanup_rc == 0 )) || return 1
+  return 0
 }
 
 # --- Save ---------------------------------------------------------------------
