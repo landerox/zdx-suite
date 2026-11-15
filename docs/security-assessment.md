@@ -241,7 +241,12 @@ included in a backup, or exposed through an error log.
   other dispatch is denied, so no personal repository or host state changes.
 - `git-auth` reports identity, remote alignment, and authentication state
   without printing tokens. Git remote rendering strips URL user information,
-  query strings, and fragments before the value reaches UI output. Inside the
+  query strings, and fragments before the value reaches UI output. Userinfo
+  and hostname parsing operate on the authority, preserving literal at-signs
+  in repository paths. Ambiguous non-URI credential-shaped values remain
+  conservatively masked even when they do not describe a valid transport.
+  Workspace facts require the repository root below an
+  absolute, nonroot base and its platform/identity directory. Inside the
   `WS_BASE_DIR` layout it also shows the workspace SSH alias and only the
   public key's fingerprint. `git-identity-check`, its `--json` document, and
   the opt-in guard name mismatching identity fields with email addresses and
@@ -365,8 +370,18 @@ snippet and executes unintended code.
   stash action dialogs, and the `git-pull` mode dialog) and the branch pickers
   (`git-switch` with its change dialog, and `git-recover`) use the same
   foreground private capture and snapshot check, and their previews are
-  constant programs that receive only fzf-quoted placeholders and hexadecimal
-  object IDs. `git-identity-check` splits `core.sshCommand` into words with
+  constant programs that receive fzf-quoted placeholders, hexadecimal object
+  IDs and validated private snapshot paths. Unstage, discard and stash-file
+  previews map numeric row IDs to raw paths in an invocation-owned mode-700
+  directory with mode-600 files below the trusted temporary root. The snapshot
+  directory reaches the fixed preview through scoped environment data, so
+  literal fzf placeholders in that path are not template text. The snapshot
+  stays alive while its foreground picker uses it; a successful read plus a
+  sentinel preserves trailing newlines without decoding display labels.
+  Missing, linked or empty entries fail before Git receives a pathspec.
+  Cleanup checks owned directory and file identities before removal and
+  retains replacements rather than following them. `git-identity-check`
+  splits `core.sshCommand` into words with
   Zsh's `(z)` flag to find the selected key and never runs it. The nested
   identity and scope, pull-request, tag, tag-action, branch-cleanup,
   sync-action, and `git-undo-commit` reset-mode pickers and the No/Yes

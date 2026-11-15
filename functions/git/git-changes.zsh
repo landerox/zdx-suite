@@ -539,6 +539,7 @@ git-unstage() {
     target_letters=("${staged_letters[@]}")
   else
     local -a picker_rows=()
+    local -a preview_paths=()
     _git_count_noun "${#staged_files[@]}" file
     picker_rows+=("1"$'\t'"all"$'\t'"All staged files ($REPLY)")
     local -i row_id=1
@@ -546,29 +547,67 @@ git-unstage() {
     for staged_file in "${staged_files[@]}"; do
       (( row_id++ ))
       picker_rows+=("$row_id"$'\t'"file"$'\t'"${(V)staged_file}")
+      preview_paths+=("$row_id" "$staged_file")
     done
 
-    # A constant read-only preview of the staged change each row removes.
-    local color_mode="never"
-    [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] && color_mode="always"
-    local preview_program='case {2} in'
-    preview_program+=" all) git --no-optional-locks --no-pager diff --cached --stat --color=${color_mode} -- ;;"
-    preview_program+=" file) git --literal-pathspecs --no-optional-locks --no-pager diff --cached --color=${color_mode} --no-ext-diff --no-textconv -- {3} ;;"
-    preview_program+=' esac'
-    local -a picker_options=(
-      "--preview=${preview_program}"
-      --height=80%
-      '--preview-window=right:50%:wrap,<120(down:8:wrap)'
-      '--bind=ctrl-/:toggle-preview'
-    )
+    local -a selected_ids=()
+    local -i preview_rc=0
+    () {
+      local -a _git_preview_paths_handle=()
+      local -x _ZDX_GIT_PREVIEW_PATH_DIR=""
+      local -i preview_cleanup_rc=0 _git_preview_paths_operation_rc=0 preview_create_rc=0 preview_picker_rc=0
+      setopt localtraps
+      {
+        trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=130; return $_git_preview_paths_operation_rc' INT
+        trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=143; return $_git_preview_paths_operation_rc' TERM HUP
+        _git_preview_paths_create _git_preview_paths_handle "${preview_paths[@]}" || preview_create_rc=$?
+        (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+        (( preview_create_rc == 0 )) || return $preview_create_rc
+        _ZDX_GIT_PREVIEW_PATH_DIR="${_git_preview_paths_handle[1]}"
+        _git_preview_paths_read_program "${_git_preview_paths_handle[1]}" "${_git_preview_paths_handle[2]}" || preview_create_rc=$?
+        (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+        (( preview_create_rc == 0 )) || return $preview_create_rc
+        local preview_reader="$REPLY"
+        # A constant read-only preview of the staged change each row removes.
+        local color_mode="never"
+        [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] && color_mode="always"
+        local preview_program='case {2} in'
+        preview_program+=" all) git --no-optional-locks --no-pager diff --cached --stat --color=${color_mode} -- ;;"
+        preview_program+=" file) ${preview_reader} git --literal-pathspecs --no-optional-locks --no-pager diff --cached --color=${color_mode} --no-ext-diff --no-textconv -- \"\$path\" ;;"
+        preview_program+=' esac'
+        local -a picker_options=(
+          "--preview=${preview_program}"
+          --height=80%
+          '--preview-window=right:50%:wrap,<120(down:8:wrap)'
+          '--bind=ctrl-/:toggle-preview'
+        )
 
-    _git_changes_context_line
-    local header_text="$REPLY | Staged: ${#staged_files[@]}"
-    header_text+=$'\n''Type to filter | Enter unstage | Esc cancel | Ctrl-/ details'
-    header_text+=$'\n''Tab mark several files'
-    _git_select_ids "git unstage" "$header_text" 3 yes \
-      picker_rows picker_options || return 1
-    local -a selected_ids=("${reply[@]}")
+        _git_changes_context_line
+        local header_text="$REPLY | Staged: ${#staged_files[@]}"
+        header_text+=$'\n''Type to filter | Enter unstage | Esc cancel | Ctrl-/ details'
+        header_text+=$'\n''Tab mark several files'
+        (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+        _git_select_ids "git unstage" "$header_text" 3 yes \
+          picker_rows picker_options || preview_picker_rc=$?
+        # Empty cancellation is a successful selector result, even when Ctrl-C
+        # also reaches this owner while the foreground picker is active.
+        if (( _git_preview_paths_operation_rc == 130 && preview_picker_rc == 0 && ${#reply[@]} == 0 )); then
+          _git_preview_paths_operation_rc=0
+        fi
+        (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+        (( preview_picker_rc == 0 )) || return 1
+        selected_ids=("${reply[@]}")
+      } always {
+        trap - INT TERM HUP
+        if (( ${#_git_preview_paths_handle[@]} >= 2 )); then
+          _git_preview_paths_cleanup "${_git_preview_paths_handle[@]}" || preview_cleanup_rc=$?
+        fi
+        (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      }
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( preview_cleanup_rc == 0 )) || return 1
+    } || preview_rc=$?
+    (( preview_rc == 0 )) || return $preview_rc
     (( ${#selected_ids[@]} > 0 )) || return 0
 
     # The picker showed that inventory; a change made while it was open
@@ -831,6 +870,7 @@ _git_discard_interactive() {
   local -a picker_rows=()
   local -a row_kinds=()
   local -a row_files=()
+  local -a preview_paths=()
   local -i row_id=0
   if (( tracked_count > 0 )); then
     (( row_id++ ))
@@ -853,33 +893,70 @@ _git_discard_interactive() {
     picker_rows+=("$row_id"$'\t'"file"$'\t'"${(V)file_name}")
     row_kinds+=(file)
     row_files+=("$file_name")
+    preview_paths+=("$row_id" "$file_name")
   done
 
-  # A constant read-only preview: it shows what each row would discard. fzf
-  # quotes the kind and path placeholders.
-  local color_mode="never"
-  [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] && color_mode="always"
-  local preview_program='case {2} in'
-  preview_program+=" all|all-untracked) printf 'Reset to the last commit:\n'; git --no-optional-locks --no-pager diff --stat --color=${color_mode} --ignore-submodules=all HEAD -- ;;"
-  preview_program+=' esac; case {2} in'
-  preview_program+=" all-untracked) printf '\nDelete untracked files:\n'; git --no-optional-locks ls-files --others --exclude-standard | grep -v '/\$' ;;"
-  preview_program+=" file) git --literal-pathspecs --no-optional-locks --no-pager diff --color=${color_mode} --no-ext-diff --no-textconv -- {3} ;;"
-  preview_program+=' esac'
-  local -a picker_options=(
-    "--preview=${preview_program}"
-    --height=80%
-    '--preview-window=right:50%:wrap,<120(down:8:wrap)'
-    '--bind=ctrl-/:toggle-preview'
-  )
+  local -a selected_ids=()
+  local -i preview_rc=0
+  () {
+    local -a _git_preview_paths_handle=()
+    local -x _ZDX_GIT_PREVIEW_PATH_DIR=""
+    local -i preview_cleanup_rc=0 _git_preview_paths_operation_rc=0 preview_create_rc=0 preview_picker_rc=0
+    setopt localtraps
+    {
+      trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=130; return $_git_preview_paths_operation_rc' INT
+      trap '(( _git_preview_paths_operation_rc != 0 )) || _git_preview_paths_operation_rc=143; return $_git_preview_paths_operation_rc' TERM HUP
+      _git_preview_paths_create _git_preview_paths_handle "${preview_paths[@]}" || preview_create_rc=$?
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( preview_create_rc == 0 )) || return $preview_create_rc
+      _ZDX_GIT_PREVIEW_PATH_DIR="${_git_preview_paths_handle[1]}"
+      _git_preview_paths_read_program "${_git_preview_paths_handle[1]}" "${_git_preview_paths_handle[2]}" || preview_create_rc=$?
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( preview_create_rc == 0 )) || return $preview_create_rc
+      local preview_reader="$REPLY"
+      # A constant read-only preview: it shows what each row would discard. fzf
+      # quotes the kind and ID placeholders.
+      local color_mode="never"
+      [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] && color_mode="always"
+      local preview_program='case {2} in'
+      preview_program+=" all|all-untracked) printf 'Reset to the last commit:\n'; git --no-optional-locks --no-pager diff --stat --color=${color_mode} --ignore-submodules=all HEAD -- ;;"
+      preview_program+=' esac; case {2} in'
+      preview_program+=" all-untracked) printf '\nDelete untracked files:\n'; git --no-optional-locks ls-files --others --exclude-standard | grep -v '/\$' ;;"
+      preview_program+=" file) ${preview_reader} git --literal-pathspecs --no-optional-locks --no-pager diff --color=${color_mode} --no-ext-diff --no-textconv -- \"\$path\" ;;"
+      preview_program+=' esac'
+      local -a picker_options=(
+        "--preview=${preview_program}"
+        --height=80%
+        '--preview-window=right:50%:wrap,<120(down:8:wrap)'
+        '--bind=ctrl-/:toggle-preview'
+      )
 
-  _git_changes_context_line
-  local header_text="$REPLY | Staged: ${#staged_files[@]}"
-  header_text+=" | Modified: ${#modified_files[@]} | Untracked: ${#untracked_files[@]}"
-  header_text+=$'\n''Type to filter | Enter review | Esc cancel | Ctrl-/ details'
-  header_text+=$'\n''Tab mark several files'
-  _git_select_ids "git discard" "$header_text" 3 yes picker_rows picker_options ||
-    return 1
-  local -a selected_ids=("${reply[@]}")
+      _git_changes_context_line
+      local header_text="$REPLY | Staged: ${#staged_files[@]}"
+      header_text+=" | Modified: ${#modified_files[@]} | Untracked: ${#untracked_files[@]}"
+      header_text+=$'\n''Type to filter | Enter review | Esc cancel | Ctrl-/ details'
+      header_text+=$'\n''Tab mark several files'
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      _git_select_ids "git discard" "$header_text" 3 yes picker_rows picker_options ||
+        preview_picker_rc=$?
+      # Preserve recognized empty picker cancellation after a foreground INT.
+      if (( _git_preview_paths_operation_rc == 130 && preview_picker_rc == 0 && ${#reply[@]} == 0 )); then
+        _git_preview_paths_operation_rc=0
+      fi
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+      (( preview_picker_rc == 0 )) || return 1
+      selected_ids=("${reply[@]}")
+    } always {
+      trap - INT TERM HUP
+      if (( ${#_git_preview_paths_handle[@]} >= 2 )); then
+        _git_preview_paths_cleanup "${_git_preview_paths_handle[@]}" || preview_cleanup_rc=$?
+      fi
+      (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+    }
+    (( _git_preview_paths_operation_rc == 0 )) || return $_git_preview_paths_operation_rc
+    (( preview_cleanup_rc == 0 )) || return 1
+  } || preview_rc=$?
+  (( preview_rc == 0 )) || return $preview_rc
   (( ${#selected_ids[@]} > 0 )) || return 0
 
   # An all-changes row covers every file row, so the broadest choice wins.

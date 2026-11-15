@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # Loaded by git-menu.zsh before every module under functions/git/.
-# Private Git helpers shared by the Git modules.
+# Shared Git helpers and the read-only git-auth public command.
 #
 
 if [[ -n "${_GIT_COMMON_SOURCED:-}" ]]; then
@@ -126,12 +126,19 @@ _git_redact_remote_url() {
     suffix=" (query or fragment redacted)"
     remote_url="${remote_url%%[\?\#]*}"
   fi
-  if [[ "$remote_url" == *://*'@'* ]]; then
+  if [[ "$remote_url" == *://* ]]; then
     local scheme="${remote_url%%://*}"
     local remainder="${remote_url#*://}"
-    remainder="${remainder##*@}"
-    print -r -- "${scheme}://***@${remainder}${suffix}"
-  elif [[ "$remote_url" == *@*:* ]]; then
+    local authority="${remainder%%/*}"
+    local remote_path="${remainder#"$authority"}"
+    [[ "$authority" == *@* ]] && authority="***@${authority##*@}"
+    print -r -- "${scheme}://${authority}${remote_path}${suffix}"
+  elif [[ "$remote_url" == *:* && "${remote_url%%:*}" == *@* ]]; then
+    local authority="${remote_url%%:*}"
+    print -r -- "***@${authority##*@}:${remote_url#*:}${suffix}"
+  elif [[ "$remote_url" == *@*:* && "${remote_url%%@*}" != */* ]]; then
+    # An ambiguous non-URI value can still contain user:password@host data.
+    # Retain conservative masking rather than expose it as a literal path.
     print -r -- "***@${remote_url##*@}${suffix}"
   else
     print -r -- "${remote_url}${suffix}"
@@ -692,10 +699,6 @@ _git_picker_capture() {
 }
 # <<< zdx-primitive picker-capture
 
-# Sets REPLY to the repository root and returns 0 when the current directory
-# is inside the work tree but is not its root. Path-oriented commands then run
-# themselves again from the root in a subshell, so the caller's directory is
-# unchanged. Returns 1 at the root or outside a repository.
 # git ls-remote matches patterns against the tail of each ref, so refs such as
 # refs/heads/ci/refs/tags/v1 also match refs/tags/*. Accept only refs that match
 # from the start: an exact ref, or a literal prefix followed by a trailing *.
@@ -709,6 +712,10 @@ _git_ls_remote_ref_matches() {
   fi
 }
 
+# Sets REPLY to the repository root and returns 0 when the current directory
+# is inside the work tree but is not its root. Path-oriented commands then run
+# themselves again from the root in a subshell, so the caller's directory is
+# unchanged. Returns 1 at the root or outside a repository.
 _git_path_command_needs_root() {
   REPLY=""
   # Parsing is complete, but the command's Git check has not run yet. Avoid
@@ -1143,6 +1150,181 @@ _git_capture_nul() {
   }
 
   return command_code
+}
+
+# Preview paths are raw data keyed by the same opaque IDs as the picker rows.
+# The named local array receives directory, directory identity, then
+# ID:file-identity records before ownership can leave this function. Callers
+# register its cleanup before invoking creation. No display label is decoded.
+_git_preview_paths_create() {
+  emulate -L zsh
+  setopt localoptions no_aliases noclobber
+
+  REPLY=""
+  reply=()
+  local handle_name="${1-}"
+  [[ "$handle_name" == _git_preview_paths_[A-Za-z_]* \
+    && "$handle_name" != *[^A-Za-z0-9_]* ]] || return 1
+  shift
+  set -A "$handle_name"
+  (( $# % 2 == 0 )) || return 1
+  local -a path_pairs=("$@") handle=()
+  local -A seen_ids=() directory_state=() file_state=()
+  local -i pair_index=0 create_rc=0 create_complete=0 preview_fd=-1
+  local item_id="" raw_path="" temp_root="" directory="" old_umask=""
+  for (( pair_index=1; pair_index<=$#; pair_index+=2 )); do
+    item_id="${path_pairs[pair_index]}"
+    raw_path="${path_pairs[pair_index + 1]}"
+    [[ ${#item_id} -le 9 && "$item_id" == <-> && "$item_id" != 0* \
+      && -n "$raw_path" ]] || return 1
+    (( ${+seen_ids[$item_id]} == 0 )) || return 1
+    seen_ids[$item_id]=1
+  done
+  _git_temp_parent_safe "${TMPDIR:-/tmp}" || {
+    _git_error "Unsafe preview path temporary directory."
+    return 1
+  }
+  temp_root="$REPLY"
+  REPLY=""
+  old_umask=$(umask)
+  directory=$(umask 077; command mktemp -d \
+    "$temp_root/zdx-git-preview-paths.XXXXXX" 2>/dev/null) || {
+    _git_error "Unable to create a private preview path directory."
+    return 1
+  }
+  {
+    if [[ "$directory" != "${directory:a}" || "$directory" != "${directory:A}" \
+      || "${directory:h}" != "$temp_root" \
+      || "${directory:t}" != zdx-git-preview-paths.?????? \
+      || ! -d "$directory" || -L "$directory" ]] \
+      || ! zstat -LH directory_state -- "$directory" 2>/dev/null \
+      || (( directory_state[uid] != EUID \
+        || (directory_state[mode] & 8#777) != 8#700 )); then
+      _git_error "Refusing an unsafe preview path directory."
+      return 1
+    fi
+    handle=("$directory" \
+      "${directory_state[device]}:${directory_state[inode]}:${directory_state[mode]}:${directory_state[uid]}")
+    set -A "$handle_name" "${handle[@]}"
+    umask 077
+    case "${_git_preview_paths_operation_rc-0}" in
+      130|143) create_rc="$_git_preview_paths_operation_rc"; return $create_rc ;;
+    esac
+    for (( pair_index=1; pair_index<=${#path_pairs[@]}; pair_index+=2 )); do
+      case "${_git_preview_paths_operation_rc-0}" in
+        130|143) create_rc="$_git_preview_paths_operation_rc"; break ;;
+      esac
+      item_id="${path_pairs[pair_index]}"
+      raw_path="${path_pairs[pair_index + 1]}"
+      exec {preview_fd}> "$directory/$item_id" || { create_rc=1; break; }
+      file_state=()
+      if [[ ! -f "$directory/$item_id" || -L "$directory/$item_id" ]] \
+        || ! zstat -LH file_state -- "$directory/$item_id" 2>/dev/null \
+        || (( file_state[uid] != EUID || file_state[nlink] != 1 \
+          || (file_state[mode] & 8#777) != 8#600 )); then
+        create_rc=1
+        break
+      fi
+      handle+=("${item_id}:${file_state[device]}:${file_state[inode]}:${file_state[mode]}:${file_state[uid]}:${file_state[nlink]}")
+      set -A "$handle_name" "${handle[@]}"
+      case "${_git_preview_paths_operation_rc-0}" in
+        130|143) create_rc="$_git_preview_paths_operation_rc"; break ;;
+      esac
+      print -rn -- "$raw_path" >&$preview_fd || create_rc=1
+      case "${_git_preview_paths_operation_rc-0}" in
+        130|143) create_rc="$_git_preview_paths_operation_rc" ;;
+      esac
+      exec {preview_fd}>&-
+      preview_fd=-1
+      (( create_rc == 0 )) || break
+    done
+    (( create_rc == 0 )) && create_complete=1
+  } always {
+    (( preview_fd < 0 )) || exec {preview_fd}>&-
+    umask "$old_umask"
+    if (( ! create_complete )); then
+      if (( ${#handle[@]} >= 2 )); then
+        _git_preview_paths_cleanup "${handle[@]}" || :
+      fi
+      set -A "$handle_name"
+    fi
+  }
+  (( create_rc != 130 && create_rc != 143 )) || return $create_rc
+  (( create_rc == 0 )) || {
+    _git_error "Unable to prepare preview paths."
+    return 1
+  }
+  reply=("${handle[@]}")
+  REPLY="$directory"
+  return 0
+}
+
+_git_preview_paths_directory_matches() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local directory="$1" expected_identity="$2"
+  local -A directory_state=()
+  [[ -d "$directory" && ! -L "$directory" \
+    && "$directory" == "${directory:a}" && "$directory" == "${directory:A}" ]] \
+    && zstat -LH directory_state -- "$directory" 2>/dev/null \
+    && (( directory_state[uid] == EUID \
+      && (directory_state[mode] & 8#777) == 8#700 )) \
+    && [[ "${directory_state[device]}:${directory_state[inode]}:${directory_state[mode]}:${directory_state[uid]}" == "$expected_identity" ]]
+}
+
+# Remove only the exact resources created by this invocation. A replacement
+# directory, linked file, or changed identity is retained rather than followed.
+_git_preview_paths_cleanup() {
+  emulate -L zsh
+  local directory="$1" expected_identity="$2"
+  shift 2
+  local entry="" item_id="" file_identity=""
+  local -i cleanup_rc=0
+  local -A file_state=()
+  _git_preview_paths_directory_matches "$directory" "$expected_identity" || {
+    _git_error "The preview path directory changed; cleanup was refused."
+    return 1
+  }
+  for entry in "$@"; do
+    item_id="${entry%%:*}"
+    file_identity="${entry#*:}"
+    file_state=()
+    if [[ "$item_id" == <-> && "$item_id" != 0* && ${#item_id} -le 9 \
+      && -f "$directory/$item_id" && ! -L "$directory/$item_id" ]] \
+      && _git_preview_paths_directory_matches "$directory" "$expected_identity" \
+      && zstat -LH file_state -- "$directory/$item_id" 2>/dev/null \
+      && (( file_state[uid] == EUID && file_state[nlink] == 1 \
+        && (file_state[mode] & 8#777) == 8#600 )) \
+      && [[ "${file_state[device]}:${file_state[inode]}:${file_state[mode]}:${file_state[uid]}:${file_state[nlink]}" == "$file_identity" ]]; then
+      command rm -f -- "$directory/$item_id" 2>/dev/null || cleanup_rc=1
+    else
+      cleanup_rc=1
+    fi
+  done
+  if _git_preview_paths_directory_matches "$directory" "$expected_identity"; then
+    command rmdir -- "$directory" 2>/dev/null || cleanup_rc=1
+  else
+    cleanup_rc=1
+  fi
+  (( cleanup_rc == 0 )) || _git_error "Preview path cleanup could not be verified."
+  return $cleanup_rc
+}
+
+# The sentinel preserves trailing newlines in the raw path. Only a validated
+# numeric ID enters the constant POSIX program; its path stays quoted data.
+_git_preview_paths_read_program() {
+  emulate -L zsh
+  local directory="$1" expected_identity="$2"
+  REPLY=""
+  _git_preview_paths_directory_matches "$directory" "$expected_identity" || return 1
+  [[ "${_ZDX_GIT_PREVIEW_PATH_DIR-}" == "$directory" ]] || return 1
+  REPLY='id={1}; case "$id" in ""|*[!0-9]*|0*) exit 1 ;; esac; '
+  REPLY+='[ -n "$_ZDX_GIT_PREVIEW_PATH_DIR" ] || exit 1; '
+  REPLY+='entry="$_ZDX_GIT_PREVIEW_PATH_DIR/$id"; '
+  REPLY+='[ -f "$entry" ] && [ ! -L "$entry" ] || exit 1; '
+  REPLY+='path=$(cat "$entry" && printf ".") || exit; path=${path%.}; '
+  REPLY+='[ -n "$path" ] || exit 1; '
+  return 0
 }
 
 # Sets reply to flat status/path pairs from git diff --name-status, with
@@ -2103,20 +2285,6 @@ _git_hostname() {
   print -r -- "$hostname"
 }
 
-_git_detect_workspace() {
-  local base="${WS_BASE_DIR:A}"
-  local cwd="${PWD:A}"
-  [[ "$cwd" == "$base"/* ]] || return 1
-
-  local relative="${cwd#$base/}"
-  local platform="${relative%%/*}"
-  local remainder="${relative#*/}"
-  local identity="${remainder%%/*}"
-  [[ -n "$platform" && -n "$identity" \
-    && -d "$base/$platform/$identity" ]] || return 1
-  print -r -- "$platform/$identity"
-}
-
 # Sets reply to (platform identity) when PATH lies strictly below an existing
 # $WS_BASE_DIR/<platform>/<identity> directory; returns 1 otherwise. Both paths
 # are compared in canonical form, and the identity directory itself is not a
@@ -2147,12 +2315,12 @@ _git_remote_hostname() {
   local hostname=""
   if [[ "$remote_url" == *://* ]]; then
     local remainder="${remote_url#*://}"
-    remainder="${remainder##*@}"
-    hostname="${remainder%%/*}"
+    local authority="${remainder%%[/?#]*}"
+    hostname="${authority##*@}"
     hostname="${hostname%%:*}"
-  elif [[ "$remote_url" == *@*:* ]]; then
-    hostname="${remote_url#*@}"
-    hostname="${hostname%%:*}"
+  elif [[ "$remote_url" == *:* && "${remote_url%%:*}" == *@* ]]; then
+    local authority="${remote_url%%:*}"
+    hostname="${authority##*@}"
   fi
   [[ "$hostname" =~ '^[A-Za-z0-9.-]+$' ]] || hostname="unknown"
   print -r -- "$hostname"
@@ -2162,6 +2330,7 @@ _git_auth_collect() {
   _git_require_repo || return 1
 
   local root remote remote_url workspace platform identity workspace_dir
+  local -a reply=()
   local hostname host_alias ssh_key_path ssh_key_fingerprint
   local git_name git_email gh_state="unavailable"
 
@@ -2170,13 +2339,14 @@ _git_auth_collect() {
   [[ -n "$remote" ]] \
     && remote_url=$(command git remote get-url --push "$remote" 2>/dev/null) \
     || remote_url=""
-  workspace=$(_git_detect_workspace 2>/dev/null) || workspace=""
-  platform="${workspace%%/*}"
-  identity="${workspace#*/}"
-  [[ "$workspace" == */* ]] || {
-    platform=""
-    identity=""
-  }
+  workspace=""
+  platform=""
+  identity=""
+  if _git_workspace_layout "$root"; then
+    platform="${reply[1]}"
+    identity="${reply[2]}"
+    workspace="$platform/$identity"
+  fi
 
   if [[ -n "$workspace" ]]; then
     workspace_dir="$WS_BASE_DIR/$workspace"

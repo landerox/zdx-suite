@@ -405,6 +405,19 @@ core-package and optional-tool success/failure/not-run totals.
 
 ### Git coverage
 
+`git_preview_paths.bats` executes the actual fixed preview programs against
+raw filename snapshots, with independent content and selected-target checks
+for escaped display collisions and trailing newlines. Resource tests cover
+the preview snapshot's trusted temporary root and invocation lifetime.
+`git_auth_facts.bats` covers invalid workspace bases, the identity-directory
+boundary, repository-root facts from subdirectories, authority-only hostname
+and userinfo handling, literal path at-signs and retained secret masking.
+`git_recovery_facts.bats` compares actual text and JSON statuses for an unborn
+HEAD with a fetched upstream, and excludes visited live stash, index and
+untracked-parent objects while retaining ordinary lost and dropped commits.
+These fixtures are disposable repositories and read-only preview recorders,
+not native terminal or credential acceptance.
+
 `git_probe_cli.bats` covers probe-free help and invalid input, empty-argument
 diagnostics, dispatcher option isolation, fixed 30-second remote and GitHub
 probe deadlines and producer statuses, and completion with ambiguous branches,

@@ -624,7 +624,10 @@ ZDX allows you to define multiple git profiles (e.g., Personal vs. Work) with di
 - **Workspace layout**: Inside an existing
   `$WS_BASE_DIR/<platform>/<identity>/<repository>` layout (default
   `~/workspaces`), `git-auth` also shows the workspace, its SSH alias such as
-  `github-personal`, and the fingerprint of its `.ssh/id_ed25519` key. The Git
+  `github-personal`, and the fingerprint of its `.ssh/id_ed25519` key. Facts
+  come from the repository root, including when called from a subdirectory.
+  The base must be absolute and nonroot, and the identity directory itself
+  does not count as a repository location. The Git
   suite only reads this layout; the Workspace suite owns it and creates
   workspace directories only in a reviewed `ws-clone` plan. Git `includeIf`
   rules and SSH aliases you already have keep applying the matching identity.
@@ -694,21 +697,27 @@ you manage with `git-menu`:
   status without displaying credentials or tokens.
 - `git-status [--json]` — Show branch, upstream, changes, stashes, and any
   operation in progress; `--json` writes one `zdx.git-status.v1` document for
-  scripts, with ahead and behind counts from local refs.
+  scripts, with ahead and behind counts from local refs. Before the first
+  commit, text mode still succeeds with a fetched upstream and JSON reports
+  null comparison counts.
 - `git-switch [BRANCH|-]` — Switch to a local branch, the previous branch, or
   a branch that exists only on a remote (its local tracking branch is created);
   without BRANCH, pick one. A clean tree switches at once. With uncommitted
   changes you review the plan and choose to carry them (`--carry`) or stash
   them first (`--stash`, saved as `zdx git-switch: <from> -> <to>`);
   `--dry-run` shows the plan.
-- `git-recover [--deep]` — Pick a commit that no branch or tag reaches any
-  more, such as one left behind by a reset, and restore it as a new
-  `recover/<short-sha>` branch; `--deep` also finds dropped stashes. Nothing
-  else is moved or deleted.
+- `git-recover [--deep]` — Pick a commit that no branch, tag or live stash
+  reaches, such as one left behind by a reset, and restore it as a new
+  `recover/<short-sha>` branch; `--deep` also finds dropped stashes. Live
+  stashes and their index/untracked-parent commits and ancestors stay excluded
+  even after visiting them in detached HEAD. Nothing else is moved or deleted.
 - `git-identity-check [--json|--quiet]` — Compare a workspace repository with
   its identity profile; see above.
 - `git-unstage [--all]` — Remove chosen files, or every staged file, from the
   next commit; working-tree files never change.
+  File previews use the row's original filename even when its display label
+  escapes tabs, newlines or backslashes; discard and stash-file previews use
+  the same raw-path boundary.
 - `git-stash` — Save current changes from the first row, or choose a stash to
   apply, pop, inspect, branch from, or drop; `Tab` marks several to drop.
   Direct: `git-stash save [-u] [-m TEXT]`, `git-stash apply|pop [TARGET]`

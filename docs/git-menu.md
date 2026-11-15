@@ -365,6 +365,11 @@ command again to review the new state. The batch is one index write
 (`git restore --staged`, or `git rm --cached` before the first commit), so
 every target or none is unstaged. Conflicted paths are not offered.
 
+The unstage, discard and stash-file previews resolve each numeric row ID to
+the invocation's raw path snapshot. Escaped display labels are never decoded
+or passed back to Git as pathspecs. This preserves previews for tabs,
+backslashes and newlines, including a newline at the end of a filename.
+
 ### Stashes
 
 `git-stash` without an action opens the stash manager. Its first row saves the
@@ -535,10 +540,15 @@ printed with the `git-stash pop` command that restores it.
 ### Recovering lost commits
 
 `git-recover` lists the commits named by the HEAD and local-branch reflogs that
-no local branch, remote-tracking branch, or tag reaches any more, newest
+no local branch, remote-tracking branch, tag or live stash reaches, newest
 first, with the short object ID, author date, author, subject, and the reflog
-entry. Live stashes are never listed. `--deep` adds the dangling commits that
-`git fsck --connectivity-only` reports, such as dropped stashes, bounded to 60
+entry. Every entry in the live stash stack and its index and untracked-parent
+commits and ancestors are excluded, including objects visited through HEAD's
+reflog. Filtering precedes the candidate limit, so live objects do not crowd
+out genuinely lost work. A successful empty stash inventory permits recovery;
+a failed or malformed inventory refuses it rather than assuming no live stash.
+`--deep` adds the dangling commits that `git fsck --connectivity-only`
+reports, such as dropped stashes, bounded to 60
 seconds by the core timeout service; a timeout or fsck error is a warning, and
 the reflog candidates stay listed. Lists are capped at 500 commits. The
 preview is a constant `git show --stat` of the row's hexadecimal object ID.
@@ -557,6 +567,18 @@ an alias to another ref. No existing branch is moved, reset, or deleted, and
 HEAD does not change.
 
 ## Workspace identity
+
+`git-auth` derives workspace facts from the repository root through the same
+layout predicate as `git-identity-check`. The configured base must be absolute
+and resolve to a nonroot directory; the root must lie strictly below its
+`<platform>/<identity>` directory. An empty, unset or relative base and a
+repository at the identity directory itself provide no workspace facts.
+Invoking from a repository subdirectory preserves the root's workspace.
+Remote URL redaction removes user information only from the authority;
+literal `@` characters in repository paths remain data. Query strings and
+fragments stay redacted, and hostname detection uses the authority alone.
+Ambiguous non-URI values shaped like `user:password@host:path` retain
+conservative masking rather than exposing a possible credential as path text.
 
 Identity status and switch plans display the SSH program and a configured or
 default identity label while masking every SSH argument and initial environment
@@ -620,11 +642,12 @@ unavailable value is `null`, and the first key names the schema.
 `zdx.git-status.v1` holds `repository` (the absolute root), `branch` (`null`
 when detached), `detached`, `head` (`null` before the first commit),
 `upstream`, `ahead` and `behind` (from local refs only; `null` without an
-upstream), `operation` (`null`, `merge`, `rebase`, `cherry-pick`, `revert`,
-or `bisect`), `changes` with `staged`, `unstaged`, `untracked`, and
+upstream or before the first commit), `operation` (`null`, `merge`, `rebase`,
+`cherry-pick`, `revert`, or `bisect`), `changes` with `staged`, `unstaged`, `untracked`, and
 `conflicted` path counts (a conflicted path counts only as conflicted),
 `stashes`, and `workspace` (`{platform, identity}`, or `null` outside the
-layout). Text mode is unchanged.
+layout). Text mode also succeeds before the first commit with a fetched
+upstream, and omits synchronization counts until HEAD exists.
 
 `zdx.git-identity-check.v1` holds `applicable`, `reason` (why it does not
 apply, else `null`), `repository`, `platform`, `identity`, `profile`,
