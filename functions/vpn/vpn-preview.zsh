@@ -4,6 +4,8 @@
 # =============================================================================
 #
 # Loaded by vpn-menu.zsh after vpn-common.zsh and vpn-state.zsh.
+# Rendering also requires vpn-mtu.zsh constants at invocation time.
+# That module loads later.
 # Safe to re-source; defines functions only.
 #
 # The menu specification forbids substituting a selected record into preview

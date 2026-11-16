@@ -245,14 +245,19 @@ functions/vpn-menu.zsh          public loader, router, menu model, manager loop
     -> functions/vpn/vpn-profile.zsh  create, import, rename, remove
 ```
 
-Load order is explicit in the entrypoint: the state, WSL, and macOS
-primitives load before the modules that consume them. The platform-dispatching
-helpers in `vpn-common.zsh` call into `vpn-darwin.zsh` only after
-`_vpn_platform_is darwin`.
+The entrypoint loads these definitions in the explicit order shown above.
+Runtime workflows start only after every mandatory module has loaded, so
+callable bodies can refer to later providers: the state snapshot uses the
+default-policy helper from `vpn-wsl.zsh`, connection control uses detail
+sections from `vpn-info.zsh`, and previews read constants from `vpn-mtu.zsh`.
+Module headers distinguish earlier prerequisites from these call-time
+requirements. The platform-dispatching helpers in `vpn-common.zsh` call into
+`vpn-darwin.zsh` only after `_vpn_platform_is darwin`.
 
 The state snapshot that `vpn-info.zsh` and `vpn-config.zsh` consume lives in
-`vpn-state.zsh`, not in the entrypoint, so no feature module depends on the
-entrypoint and the modules can be sourced standalone.
+`vpn-state.zsh`, not in the entrypoint. Feature definitions do not depend on
+private entrypoint helpers; invoking them still requires their named provider
+modules. Standalone suite loading supplies the same complete module order.
 
 ## Public command surface
 
