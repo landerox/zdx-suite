@@ -8,6 +8,13 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: refuse active or unknown `SaveConfig` profile mutations, bind tool
+  execution and timeout backends to WSL eligibility, retain unsafe private
+  directory modes unchanged, and place DNS hooks inside the actual Interface
+  section. Diagnostics retain DNS findings after public-IP failure, cold
+  macOS completion bounds prefix discovery, MTU JSON discards failed partial
+  output, and create/import offer editing once.
+
 - VPN: bound local diagnostic and protected-read programs, retain returned
   interruption statuses, disable provider URL globbing, and clean verified
   owned oversized report stages without relaxing the publication limit.

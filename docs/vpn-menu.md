@@ -110,12 +110,24 @@ workarounds.
 
 ### Linux and WSL
 
-WSL is detected by one rule, `_vpn_is_wsl`: a Linux kernel with
-`WSL_DISTRO_NAME` set or a Microsoft kernel in `/proc/version`. The platform
+WSL is detected by one rule, `_vpn_is_wsl`, which requires Linux `OSTYPE` and
+at least one of: a nonempty `WSL_DISTRO_NAME` or `WSL_INTEROP`, a Microsoft
+release read through a builtin from `/proc/sys/kernel/osrelease`, or a
+`WSLInterop` or
+`WSLInterop-late` marker under `/proc/sys/fs/binfmt_misc`. The platform
 check, the IPv6 rewrite, the import's DNS-hardening offer, and the report all
 use it through `_vpn_platform`, so a WSL session without `WSL_DISTRO_NAME`
 (a service or `su` session) is still WSL, and the variable alone does not
 make another kernel WSL.
+
+Tool selection uses this builtin evidence without invoking the executable
+being selected. On confirmed WSL, a logical or resolved executable path below
+`/mnt/<drive-letter>/` is unavailable. Availability and actual execution apply
+the same eligibility policy. Each execution freezes its selected program and
+timeout backend; an eligible `gtimeout` never authorizes an ineligible
+`timeout`. This tool policy is
+separate from cache/report path ownership and modes. It does not classify
+every executable's ABI or reject all mounted filesystems.
 
 The IPv6 compatibility rewrite exists because WSL's NAT networking cannot
 carry IPv6. Under mirrored networking with an IPv6 default route, stripping
@@ -131,6 +143,10 @@ fallback still applies. Only a successful empty route read proves absence.
 An indeterminate route omits the automatic rewrite and leaves connection
 startup using the original profile. Returned `130`/`143` stops the gate,
 state refresh and its callers before later observations or mutations.
+
+The menu compares the effective IPv6 fix with the default computed from the
+same mode and route observations. It shows an override only when they are
+proven different; an unknown route does not prove an absent route.
 
 The DNS hooks pin `/etc/resolv.conf` with `chattr +i`. On a filesystem without
 Linux file attributes, such as WSL1's, or without `chattr`, hardening warns
@@ -151,7 +167,13 @@ macOS is supported with Homebrew `wireguard-tools`, which installs
   accepted only as a root-owned system alias inside a root-owned directory
   that group and other users cannot write, so `VPN_CONFIG_DIR=/etc/wireguard`
   resolves through `/etc -> private/etc`; the canonical path is used
-  everywhere afterwards. The completion mirrors both rules.
+  everywhere afterwards. The completion mirrors both rules. Before the runtime
+  is loaded, its callback can query a frozen absolute `brew --prefix` after
+  explicit/system precedence, with a three-second bound, at most 1024 raw
+  bytes, closed stdin and hidden diagnostics. Only a complete successful
+  result supplies its first line; independent prefix fallbacks remain.
+  Completion does not source the runtime, probe at source time, install a
+  backend or cache a stale prefix.
 - **Profiles and devices.** wg-quick runs one `wireguard-go` per tunnel on a
   `utunN` device and records it in `/var/run/wireguard/<profile>.name`
   (root, mode `0400`) beside the device's `<device>.sock`. wg-quick pairs the
@@ -377,7 +399,12 @@ prints its recommendations.
   `platform`, `path_mtu`, `exact`, `egress_interface`, `egress_mtu`,
   `through_tunnel`, `tunnel_interface`, `tunnel_mtu`, `probes`, `duration_ms`,
   `recommendations` (strings), and `reason`; unknown values are `null`. Without
-  `jq`, `--json` fails on stderr with status `1` and prints nothing.
+  `jq`, `--json` fails on stderr with status `1` and prints nothing. Every JSON
+  branch captures the complete compact monochrome renderer result before
+  printing. Renderer failure discards partial output and returns `1`, while
+  returned `130`/`143` remain interrupted. Valid finding documents still print
+  with status `1`, including when bounded observation has no backend.
+  Formatting intentional JSON input requires no new timeout backend.
 - **Statuses.** `0` when a path MTU was measured, exactly or as a lower bound;
   `1` when the host is not Linux, WSL, or macOS (not applicable, with no
   heading), when `ping` is missing or unsupported, or when the target does not
@@ -404,6 +431,25 @@ before authentication, then revalidated. Failed undo rename compensates
 earlier moves only when their identities match and original targets remain
 vacant. An interruption during backup or undo removal stops later undo or
 saved-choice mutations and reports the partial result.
+
+Rename and removal inspect the live profile's Interface `SaveConfig` value;
+restore inspects both the live profile, when present, and its selected incoming
+backup. An enabled value requires a successful inactive-tunnel observation.
+Active or unknown state refuses before an executable mutation plan,
+disconnect, mutation authorization or file/pointer changes, including
+`--dry-run` and `--yes`. Disconnect first when active; make the observation
+readable and verify inactivity before retrying when state is unknown. The
+reader never authenticates. Disabled or absent `SaveConfig` retains ordinary
+unknown-state consent. Enabled values also require an inactive recheck after
+authorization, before the first family/pointer mutation.
+
+This narrow reader accepts comments, whitespace, CRLF and ASCII section/key
+case. Interface booleans are `true` or `false`; the last valid assignment
+applies, while any malformed or invalid assignment refuses. Quoted booleans
+are not normalized. Reads are complete, capped at 1 MiB, bounded by the local
+observation service and checked against directory/file identities before and
+after reading. These checks do not provide an atomic snapshot, require Peer
+sections or reject reviewed lifecycle hooks in retained files.
 
 Restore discloses replacement of an existing undo copy before publishing a
 new one; failure to publish that copy prevents replacing the live profile.
@@ -561,6 +607,12 @@ contents can be fingerprinted. Disconnecting an active interface without a
 safe corresponding profile fails explicitly; it does not fall back to a
 similarly named profile in `/etc/wireguard` or another directory.
 
+A successful unprivileged observation that an explicitly named tunnel is
+inactive makes `vpn-off PROFILE` refuse with `1` before a privileged-operation
+announcement or authentication. Bare `vpn-off` without an active tunnel stays
+a successful no-op. Unknown observations keep their existing access flow;
+active targets are still revalidated after authentication.
+
 Default connection and last-profile reconnection require a successful live
 interface query before deciding whether a tunnel is inactive. When live state
 requires privileges, they first use the existing access/authentication flow.
@@ -605,6 +657,13 @@ an atomic rename without any privilege, and a root-owned profile is read and
 reinstalled through the announced `install -m 600 -o 0 -g 0` path. A failed
 publication keeps the edited copy and names it. The editor needs a terminal.
 Linux keeps `sudoedit` for every directory.
+
+Create and import own their optional editing offer and workflow heading.
+Accepting invokes the existing validated nonroot editor path once, without a
+nested heading or second consent. An optional editor failure after publication
+keeps the installed profile and public success. Direct edit retains its own
+consent and failure status. Failed requested WSL hardening after import is a
+separate nonzero outcome.
 
 ### Imported profiles cannot introduce root hooks
 
@@ -675,7 +734,11 @@ through it, so the user is told to set `generateResolvConf = false` and replace
 the link first. A parse or
 validation failure therefore leaves the live profile untouched. An existing
 sentinel is idempotent only when the exact complete generated hook block follows
-it; a partial or imitated sentinel is refused. The separate WSL IPv6
+it inside Interface. New hooks are inserted at that section's end, before the
+next section or EOF, including profiles whose Peer appears first. A missing
+Interface, misplaced, partial or imitated block is refused. `wg-quick strip`
+does not validate arbitrary configuration keys or prove tunnel startup.
+The separate WSL IPv6
 compatibility rewrite keeps a one-time `.bak-vpn-menu` safety copy, and a
 connect fails before `wg-quick up` if the rewrite cannot retain the required
 IPv4 values. If requested DNS hardening fails after a validated import, the
@@ -752,6 +815,13 @@ mutations and interactive `sudo -v` do not acquire diagnostic deadlines.
 The core supplies the portable timeout implementation. A standalone source
 requires a supported timeout backend and refuses a bounded read without one.
 
+A failed public-IP lookup, including missing curl or jq, still reaches local
+resolver and applicable DNS-leak diagnostics once. The report describes
+eligible `wg-quick` presence separately from the WireGuard version, without
+unsupported `wg-quick --version` or an unused Python probe. Access status reads
+numeric mode, owner and group through `zstat`, without external stat dialects
+or changing the caller's stat function or alias.
+
 The private info and Darwin captures retain ordinary failure `1`, timeout
 `124`, and returned `130`/`143` as distinct outcomes. Failed or oversized
 captures publish no data. These captures measure raw bytes before removing
@@ -806,6 +876,10 @@ Both user-owned directories are validated on **every** use by
   itself may traverse a symlink (for example `/home -> var/home`), and the
   canonical path is used;
 - directories are created mode `700` and files mode `600`.
+
+An existing cache/report directory with unsafe permissions, such as `0755`
+or `0750`, is refused unchanged. Writers do not chmod it or publish entries;
+the existing ownership, path, link and identity checks still apply.
 
 Cache entry names are an internal allowlist (`last-iface`, `default-iface`),
 never user input. Writes into invocation-created temporaries use `>|`, so a

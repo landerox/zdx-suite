@@ -654,6 +654,24 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_diagnostic_platform_facts.bats` covers DNS diagnostics after optional
+public-IP failure, eligible external and timeout selection, deferred cold
+Homebrew completion with private precedence/fallback directories and raw UTF-8
+byte limits, numeric builtin access metadata, all MTU JSON rendering branches,
+coherent WSL default facts, version/presence reporting, and platform refusal
+before plans. Returned renderer failures and interruptions are finite models;
+intentional JSON formatting also runs without Core or a timeout backend.
+
+`vpn_profile_policy.bats` covers live/incoming Interface `SaveConfig`, complete
+reader data and rejected partial/failed/replaced observations, true-only
+activity revalidation after authorization, single-consent optional editing,
+inactive disconnect before credentials, unchanged unsafe cache/report modes,
+and DNS hook ownership at actual Interface boundaries. Credential snapshots
+retain all typed files, identities and pointers; activity-change fixtures
+exclude only their one exact activity field. Private tool/authorization models
+do not establish root privileges, physical signals, native deadline or child
+lifetime acceptance, protected-reader coverage, or owner-host VPN behavior.
+
 `vpn_interrupt_bounds.bats` covers returned profile, MTU-context and WSL
 interruptions; ordinary and absent observations; exact local deadline,
 producer argv and closed-input routing; callback/empty-result behavior;
@@ -1018,6 +1036,14 @@ The shared helper clears inherited Homebrew retry, analytics, auto-update, and
 askpass controls. A test that exercises those boundaries exports its hostile
 values explicitly after setup rather than depending on the developer or runner
 environment.
+
+Platform fixtures may opt in to `TEST_ZSH_OSTYPE` after setup with exactly
+`linux-gnu`, `darwin-test` or `freebsd-test`. `run_zsh` assigns this model after
+`emulate -R zsh` and before loading Core; an invalid value refuses with `2`.
+Setup clears inherited models. `vpn_pin_kernel` pairs this enum with its
+Linux, Darwin or FreeBSD `uname` fixture. The default keeps the child Zsh's
+actual `OSTYPE`; direct Zsh/zpty programs do not acquire this model
+automatically. These are portable test contexts, not native host acceptance.
 
 The helper also pins the locale and the terminal, because the product
 degrades on purpose under a C or POSIX locale, under `TERM=dumb`, and under

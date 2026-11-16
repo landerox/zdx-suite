@@ -95,33 +95,8 @@ _vpn_state_prepare() {
     }
   fi
 
-  local identity_before
-  identity_before=$(
-    _vpn_private_dir_identity "$resolved" "$label directory"
-  ) 2>/dev/null
-  if [[ -z "$identity_before" ]]; then
-    zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
-    local -A metadata=()
-    zstat -H metadata -- "$resolved" 2>/dev/null || return 1
-    if (( metadata[uid] != EUID )); then
-      _vpn_error "Refusing a $label directory owned by another account."
-      return 1
-    fi
-    identity_before="${metadata[device]}:${metadata[inode]}"
-  fi
-
-  command chmod -- 700 "$resolved" 2>/dev/null || {
-    _vpn_error "Could not restrict permissions on $resolved"
-    return 1
-  }
-  local identity_after
-  identity_after=$(
-    _vpn_private_dir_identity "$resolved" "$label directory"
-  ) || return 1
-  [[ "$identity_after" == "$identity_before" ]] || {
-    _vpn_error "$label directory changed while permissions were applied."
-    return 1
-  }
+  # Existing unsafe roots are refused, never repaired into publishable state.
+  _vpn_private_dir_identity "$resolved" "$label directory" >/dev/null || return 1
 
   print -r -- "$resolved"
 }
@@ -677,6 +652,8 @@ typeset -g _VPN_MENU_WG_ACCESS_STATE=""
 typeset -g _VPN_MENU_DEFAULT_IFACE=""
 typeset -g _VPN_MENU_LAST_IFACE=""
 typeset -g _VPN_MENU_PLATFORM=""
+typeset -gi _VPN_MENU_WSL_DEFAULT_KNOWN=0
+typeset -gi _VPN_MENU_WSL_DEFAULT_FIX=0
 
 _vpn_state_load() {
   _VPN_MENU_CONFIGS=()
@@ -690,6 +667,8 @@ _vpn_state_load() {
   _VPN_MENU_BACKUP_UNKNOWN_COUNT=0
   _VPN_MENU_SUDO_UNLOCKED=0
   _VPN_MENU_WSL_FIX=0
+  _VPN_MENU_WSL_DEFAULT_KNOWN=1
+  _VPN_MENU_WSL_DEFAULT_FIX=0
   _VPN_MENU_DEFAULT_IFACE=""
   _VPN_MENU_LAST_IFACE=""
 
@@ -708,11 +687,20 @@ _vpn_state_load() {
     snapshot_status=$?
     (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
   fi
-  if _vpn_should_apply_wsl_ipv6_fix; then
-    _VPN_MENU_WSL_FIX=1
-  else
-    snapshot_status=$?
-    (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  snapshot_status=0
+  _vpn_wsl_default_ipv6_fix || snapshot_status=$?
+  (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  case "$snapshot_status" in
+    0) _VPN_MENU_WSL_DEFAULT_FIX=1 ;;
+    1) ;;
+    *) _VPN_MENU_WSL_DEFAULT_KNOWN=0 ;;
+  esac
+  if [[ "$_VPN_MENU_PLATFORM" != darwin ]]; then
+    case "${VPN_MENU_WSL_IPV6_FIX:-}" in
+      0) ;;
+      1) _VPN_MENU_WSL_FIX=1 ;;
+      *) _VPN_MENU_WSL_FIX=$_VPN_MENU_WSL_DEFAULT_FIX ;;
+    esac
   fi
 
   local raw

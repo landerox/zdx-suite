@@ -699,6 +699,20 @@ _vpn_run_with_timeout() {
   return "$observed_rc"
 }
 
+# MODEL: route the new external-adapter protocol to the same qualified finite
+# recorder. Actual native backend selection is covered by the F512 controls.
+if (( ${+functions[_vpn_external_exec]} )); then
+  _vpn_external_exec() {
+    local seconds="${1-}" REPLY=""
+    (( $# >= 2 )) || return 2
+    shift
+    _vpn_cmd_path "$1" || return 127
+    local program="$REPLY"
+    shift
+    _vpn_run_with_timeout "$seconds" "$program" "$@"
+  }
+fi
+
 ZSH
 }
 

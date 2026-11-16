@@ -66,10 +66,10 @@ _vpn_info_capture_bounded() {
     collector=(_vpn_readonly_exec 3 "${collector[@]}")
   fi
 
-  local head_program="" captured=""
+  local head_program="" captured="" REPLY=""
   local -i capture_status=0
-  head_program=$(whence -p -- head 2>/dev/null) || return 1
-  [[ "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
+  _vpn_cmd_path head || return 1
+  head_program="$REPLY"
   captured=$(
     local -i pipeline_status=0
     "${collector[@]}" </dev/null 2>/dev/null \
@@ -122,8 +122,8 @@ vpn-summary() {
     *) _vpn_error "vpn-summary accepts no arguments."; return 2 ;;
   esac
 
-  _vpn_header "VPN Summary"
   _vpn_require_platform || return 1
+  _vpn_header "VPN Summary"
 
   local -i state_status=0
   _vpn_state_load || state_status=$?
@@ -445,80 +445,77 @@ vpn-ip-info() {
     _vpn_label "Default route" "${route:-unknown ($route_tool unavailable)}"
   fi
 
+  local info="" ip="" city="" region="" country="" org="" provider=""
   if ! _vpn_have_ip_stack; then
     _vpn_warn "jq or curl not available; skipping public IP lookup."
-    return 0
-  fi
-
-  _vpn_info "Querying public IP providers..."
-
-  local info ip city region country org provider
-  info=$(_vpn_get_ip_info)
-  if [[ -z "$info" ]]; then
-    _vpn_warn "Could not fetch public IP from any provider."
-    _vpn_dim "JSON tried:  $(_vpn_provider_summary _vpn_ipinfo_json_providers)"
-    _vpn_dim "Plain tried: $(_vpn_provider_summary _vpn_ipinfo_plain_providers)"
-    _vpn_dim "Trace tried: $(_vpn_provider_summary _vpn_ipinfo_trace_providers)"
-    _vpn_dim "Override via VPN_MENU_IPINFO_URLS / VPN_MENU_IPINFO_PLAIN_URLS / VPN_MENU_IPINFO_TRACE_URLS."
-    return 0
-  fi
-
-  # zsh's `read` collapses consecutive whitespace IFS chars, losing empty
-  # TSV fields. Use the (@s) splitting operator, which preserves them.
-  local -a info_fields
-  info_fields=("${(@s:	:)info}")
-  ip="${info_fields[1]:-}"
-  city="${info_fields[2]:-}"
-  region="${info_fields[3]:-}"
-  country="${info_fields[4]:-}"
-  org="${info_fields[5]:-}"
-  provider="${info_fields[6]:-}"
-
-  _vpn_label "IP" "${ip:-(unknown)}"
-
-  local -a loc_parts=()
-  [[ -n "$city" ]] && loc_parts+=("$city")
-  [[ -n "$region" && "$region" != "$city" ]] && loc_parts+=("$region")
-  [[ -n "$country" ]] && loc_parts+=("$country")
-  if (( ${#loc_parts[@]} > 0 )); then
-    _vpn_label "Location" "${(j:, :)loc_parts}"
   else
-    _vpn_label "Location" "(not reported)"
-  fi
-
-  [[ -n "$org" ]] && _vpn_label "ISP / org" "$org"
-  _vpn_label "Provider" "$provider"
-
-  # --- Cross-check (opt-in) ------------------------------------------------
-  if [[ "${VPN_MENU_IP_CROSSCHECK:-0}" == 1 ]]; then
-    _vpn_info "Cross-checking the exit IP across providers..."
-    local cc_raw p_host p_ip marker
-    local -a cc_rows=()
-    local -i differs=0
-    cc_raw=$(_vpn_get_ip_crosscheck)
-    while IFS=$'\t' read -r p_host p_ip; do
-      [[ -n "$p_ip" ]] || continue
-      if [[ "$p_ip" == "$ip" ]]; then
-        marker="match"
-      else
-        marker="differs"
-        (( differs += 1 ))
-      fi
-      cc_rows+=("$p_host"$'\t'"$p_ip"$'\t'"$marker")
-    done <<< "$cc_raw"
-    if (( ${#cc_rows[@]} == 0 )); then
-      _vpn_warn "Cross-check: no providers answered."
+    _vpn_info "Querying public IP providers..."
+    info=$(_vpn_get_ip_info)
+    if [[ -z "$info" ]]; then
+      _vpn_warn "Could not fetch public IP from any provider."
+      _vpn_dim "JSON tried:  $(_vpn_provider_summary _vpn_ipinfo_json_providers)"
+      _vpn_dim "Plain tried: $(_vpn_provider_summary _vpn_ipinfo_plain_providers)"
+      _vpn_dim "Trace tried: $(_vpn_provider_summary _vpn_ipinfo_trace_providers)"
+      _vpn_dim "Override via VPN_MENU_IPINFO_URLS / VPN_MENU_IPINFO_PLAIN_URLS / VPN_MENU_IPINFO_TRACE_URLS."
     else
-      _vpn_blank
-      _vpn_table $'Provider\tIP\tResult' "${cc_rows[@]}"
-      if (( differs > 0 )); then
-        local REPLY=""
-        _vpn_count_noun "$differs" provider
-        _vpn_warn "Cross-check: $REPLY reported a different exit IP."
+      # zsh's `read` collapses consecutive whitespace IFS chars, losing empty
+      # TSV fields. Use the (@s) splitting operator, which preserves them.
+      local -a info_fields
+      info_fields=("${(@s:	:)info}")
+      ip="${info_fields[1]:-}"
+      city="${info_fields[2]:-}"
+      region="${info_fields[3]:-}"
+      country="${info_fields[4]:-}"
+      org="${info_fields[5]:-}"
+      provider="${info_fields[6]:-}"
+
+      _vpn_label "IP" "${ip:-(unknown)}"
+
+      local -a loc_parts=()
+      [[ -n "$city" ]] && loc_parts+=("$city")
+      [[ -n "$region" && "$region" != "$city" ]] && loc_parts+=("$region")
+      [[ -n "$country" ]] && loc_parts+=("$country")
+      if (( ${#loc_parts[@]} > 0 )); then
+        _vpn_label "Location" "${(j:, :)loc_parts}"
+      else
+        _vpn_label "Location" "(not reported)"
+      fi
+
+      [[ -n "$org" ]] && _vpn_label "ISP / org" "$org"
+      _vpn_label "Provider" "$provider"
+
+      # --- Cross-check (opt-in) ------------------------------------------------
+      if [[ "${VPN_MENU_IP_CROSSCHECK:-0}" == 1 ]]; then
+        _vpn_info "Cross-checking the exit IP across providers..."
+        local cc_raw p_host p_ip marker
+        local -a cc_rows=()
+        local -i differs=0
+        cc_raw=$(_vpn_get_ip_crosscheck)
+        while IFS=$'\t' read -r p_host p_ip; do
+          [[ -n "$p_ip" ]] || continue
+          if [[ "$p_ip" == "$ip" ]]; then
+            marker="match"
+          else
+            marker="differs"
+            (( differs += 1 ))
+          fi
+          cc_rows+=("$p_host"$'\t'"$p_ip"$'\t'"$marker")
+        done <<< "$cc_raw"
+        if (( ${#cc_rows[@]} == 0 )); then
+          _vpn_warn "Cross-check: no providers answered."
+        else
+          _vpn_blank
+          _vpn_table $'Provider\tIP\tResult' "${cc_rows[@]}"
+          if (( differs > 0 )); then
+            local REPLY=""
+            _vpn_count_noun "$differs" provider
+            _vpn_warn "Cross-check: $REPLY reported a different exit IP."
+          fi
+        fi
+      else
+        _vpn_dim "Cross-check off. Set VPN_MENU_IP_CROSSCHECK=1 to verify the IP against all providers."
       fi
     fi
-  else
-    _vpn_dim "Cross-check off. Set VPN_MENU_IP_CROSSCHECK=1 to verify the IP against all providers."
   fi
 
   # --- DNS resolvers -------------------------------------------------------
@@ -689,30 +686,27 @@ vpn-report() {
   # --- Environment ---------------------------------------------------------
   _vpn_info "Collecting environment..."
 
-  local wg_ver wgquick_ver curl_ver jq_ver py_ver
-  wg_ver=$(_vpn_info_capture_bounded 1024 command wg --version) || wg_ver=""
-  wg_ver="${wg_ver%%$'\n'*}"
-  wgquick_ver=$(
-    _vpn_info_capture_bounded 1024 command wg-quick --version
-  ) || wgquick_ver=""
-  wgquick_ver="${wgquick_ver%%$'\n'*}"
+  local wg_ver="(not installed)" wgquick_state="(not installed)"
+  local curl_ver="" jq_ver="" wg_program=""
+  if _vpn_cmd_path wg; then
+    wg_program="$REPLY"
+    wg_ver=$(_vpn_info_capture_bounded 1024 "$wg_program" --version) || wg_ver=""
+    wg_ver="${wg_ver%%$'\n'*}"
+    [[ -n "$wg_ver" ]] || wg_ver="(unavailable)"
+  fi
+  _vpn_check_cmd wg-quick && wgquick_state=installed
   curl_ver=$(
     _vpn_info_capture_bounded 1024 command curl --version
   ) || curl_ver=""
   curl_ver="${curl_ver%%$'\n'*}"
   jq_ver=$(_vpn_info_capture_bounded 1024 command jq --version) || jq_ver=""
   jq_ver="${jq_ver%%$'\n'*}"
-  py_ver=$(
-    _vpn_info_capture_bounded 1024 command python3 --version
-  ) || py_ver=""
-  py_ver="${py_ver%%$'\n'*}"
 
   _vpn_rpt_h2 "Environment"
-  _vpn_rpt_kv "wg" "${wg_ver:-(not installed)}"
-  _vpn_rpt_kv "wg-quick" "${wgquick_ver:-(not installed)}"
+  _vpn_rpt_kv "wg" "$wg_ver"
+  _vpn_rpt_kv "wg-quick" "$wgquick_state"
   _vpn_rpt_kv "curl" "${curl_ver:-(not installed)}"
   _vpn_rpt_kv "jq" "${jq_ver:-(not installed)}"
-  _vpn_rpt_kv "python3" "${py_ver:-(not installed)}"
   _vpn_rpt_kv "Non-interactive sudo" \
     "$(_vpn_have_sudo_cache \
       && print -r -- available || print -r -- unavailable)"
@@ -1102,12 +1096,12 @@ _vpn_curl_bounded() {
   local url="$1"
   local max_time="${2:-5}" connect_timeout="${3:-3}"
   _vpn_validate_provider_url "$url" || return 1
-  local curl_program="" head_program="" captured=""
+  local curl_program="" head_program="" captured="" REPLY=""
   local -i capture_status=0
-  curl_program=$(whence -p -- curl 2>/dev/null) || return 1
-  head_program=$(whence -p -- head 2>/dev/null) || return 1
-  [[ "$curl_program" == /* && -f "$curl_program" && -x "$curl_program" \
-    && "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
+  _vpn_cmd_path curl || return 1
+  curl_program="$REPLY"
+  _vpn_cmd_path head || return 1
+  head_program="$REPLY"
   # URL configuration is private stdin data, never argv or a retained file.
   local config_url="${url//\\/\\\\}"
   config_url="${config_url//\"/\\\"}"
@@ -1171,6 +1165,8 @@ _vpn_provider_authority() {
 #   ip \t city \t region \t country \t org \t provider_host
 _vpn_get_ip_info() {
   local url raw parsed host
+  local REPLY="" jq_program="" awk_program=""
+  _vpn_cmd_path jq && jq_program="$REPLY"
   local -a json_providers plain_providers trace_providers
   local -a reply=()
   _vpn_load_provider_urls _vpn_ipinfo_json_providers \
@@ -1183,11 +1179,12 @@ _vpn_get_ip_info() {
     && trace_providers=("${reply[@]}")
 
   for url in "${json_providers[@]}"; do
+    [[ -n "$jq_program" ]] || break
     raw=$(_vpn_curl_bounded "$url" 5 3 2>/dev/null) || continue
     [[ -n "$raw" ]] || continue
     # A missing field must stay an empty column: `empty` would shift every
     # later value into the wrong position.
-    parsed=$(print -r -- "$raw" | command 'jq' -r '
+    parsed=$(print -r -- "$raw" | command "$jq_program" -r '
       [
         .ip // "",
         .city // "",
@@ -1215,17 +1212,19 @@ _vpn_get_ip_info() {
   done
 
   local trace_ip trace_loc trace_colo org_note
+  _vpn_cmd_path awk || return 1
+  awk_program="$REPLY"
   for url in "${trace_providers[@]}"; do
     raw=$(_vpn_curl_bounded "$url" 4 2 2>/dev/null) || continue
     [[ -n "$raw" ]] || continue
-    trace_ip=$(print -r -- "$raw" | command 'awk' -F= '$1 == "ip" { print $2; exit }')
+    trace_ip=$(print -r -- "$raw" | command "$awk_program" -F= '$1 == "ip" { print $2; exit }')
     trace_ip="${trace_ip//$'\r'/}"
     trace_ip="${trace_ip//[[:space:]]/}"
     _vpn_validate_ip_literal "$trace_ip" || continue
-    trace_loc=$(print -r -- "$raw" | command 'awk' -F= '$1 == "loc" { print $2; exit }')
+    trace_loc=$(print -r -- "$raw" | command "$awk_program" -F= '$1 == "loc" { print $2; exit }')
     trace_loc="${trace_loc//$'\r'/}"
     trace_loc="${trace_loc//[[:space:]]/}"
-    trace_colo=$(print -r -- "$raw" | command 'awk' -F= '$1 == "colo" { print $2; exit }')
+    trace_colo=$(print -r -- "$raw" | command "$awk_program" -F= '$1 == "colo" { print $2; exit }')
     trace_colo="${trace_colo//$'\r'/}"
     trace_colo="${trace_colo//[[:space:]]/}"
     org_note=""
@@ -1244,13 +1243,16 @@ _vpn_crosscheck_provider() {
   local provider_type="$1"
   local url="$2"
   local raw ip host
+  local REPLY="" parser_program=""
 
   raw=$(_vpn_curl_bounded "$url" 4 2 2>/dev/null) || return 1
   [[ -n "$raw" ]] || return 1
 
   case "$provider_type" in
     json)
-      ip=$(print -r -- "$raw" | command 'jq' -r '.ip // empty' 2>/dev/null) \
+      _vpn_cmd_path jq || return 1
+      parser_program="$REPLY"
+      ip=$(print -r -- "$raw" | command "$parser_program" -r '.ip // empty' 2>/dev/null) \
         || return 1
       ;;
     plain)
@@ -1259,8 +1261,10 @@ _vpn_crosscheck_provider() {
       ip="${ip//[[:space:]]/}"
       ;;
     trace)
+      _vpn_cmd_path awk || return 1
+      parser_program="$REPLY"
       ip=$(print -r -- "$raw" \
-        | command awk -F= '$1 == "ip" { print $2; exit }')
+        | command "$parser_program" -F= '$1 == "ip" { print $2; exit }')
       ip="${ip//$'\r'/}"
       ip="${ip//[[:space:]]/}"
       ;;

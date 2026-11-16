@@ -526,6 +526,13 @@ moving them into their destination.
   File, Environment, VPN, Python, and Workspace suites resolve the program to an absolute path and,
   without the core, require `timeout` or `gtimeout` and fail closed without
   either.
+- An owned suite adapter that excludes an ineligible native timeout backend
+  MAY call the existing `_zdx_timeout_watchdog <seconds> <command...>` when
+  the core is loaded. It MUST require a positive interval and freeze an
+  eligible absolute external executable first. The adapter owns its streams.
+  This is an internal core dependency, not plugin API v1; it does not change
+  the generic selector, watchdog, child environment or cleanup semantics.
+  A standalone adapter without an eligible native backend fails closed.
 - Owned core external probes use `_zdx_probe_resolve`, `_zdx_probe_tool`, and
   `_zdx_probe_clt_placeholder`. These are private helpers, not plugin API v1
   services. Their runner requires a positive interval, a frozen native

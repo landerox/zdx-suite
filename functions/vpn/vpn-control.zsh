@@ -172,6 +172,15 @@ _vpn_tunnel_down() {
   local iface="$1"
   local planned_device="${2:-}" planned_record="${3:-}"
   _vpn_validate_iface_name "$iface" || return 2
+  local -a reply=()
+  local -i initial_activity_status=0
+  _vpn_active_interfaces || initial_activity_status=$?
+  (( initial_activity_status == 130 || initial_activity_status == 143 )) && return "$initial_activity_status"
+  if (( initial_activity_status == 0 )) && [[ " ${reply[*]} " != *" $iface "* ]]; then
+    _vpn_error "Tunnel $iface is not active; no command was run."
+    return 1
+  fi
+
   _vpn_check_wg_quick || return 1
 
   local conf_file directory_identity profile_fingerprint
@@ -352,6 +361,8 @@ vpn-off() {
   (( parse_status == 3 )) && return 0
   (( parse_status != 0 )) && return $parse_status
 
+  _vpn_require_platform || return $?
+
   local iface="$_vpn_opt_iface"
 
   if [[ -z "$iface" ]]; then
@@ -429,6 +440,8 @@ vpn-off-all() {
     esac
     shift
   done
+
+  _vpn_require_platform || return $?
 
   _vpn_ensure_wg_access || return $?
 

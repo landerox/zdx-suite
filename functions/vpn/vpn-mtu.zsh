@@ -118,17 +118,20 @@ _vpn_mtu_capture() {
   local streams="$1"
   shift
   REPLY=""
-  local captured="" started="${EPOCHREALTIME:-$SECONDS}"
+  local captured="" started="${EPOCHREALTIME:-$SECONDS}" head_program=""
   local -i capture_status=0
+  _vpn_cmd_path head || return 1
+  head_program="$REPLY"
+  REPLY=""
   if [[ "$streams" == all ]]; then
     captured=$(
-      _vpn_run_with_timeout "$_VPN_MTU_PROBE_SECONDS" "$@" </dev/null 2>&1 \
-        | command head -c 4096
+      _vpn_external_exec "$_VPN_MTU_PROBE_SECONDS" "$@" </dev/null 2>&1 \
+        | command "$head_program" -c 4096
     ) || capture_status=$?
   else
     captured=$(
-      _vpn_run_with_timeout "$_VPN_MTU_PROBE_SECONDS" "$@" \
-        </dev/null 2>/dev/null | command head -c 4096
+      _vpn_external_exec "$_VPN_MTU_PROBE_SECONDS" "$@" \
+        </dev/null 2>/dev/null | command "$head_program" -c 4096
     ) || capture_status=$?
   fi
   _vpn_mtu_account "$started"
@@ -708,7 +711,11 @@ _vpn_mtu_render_json() {
   done
   local -i probes="${mtu[probes]:-0}" duration_ms="${mtu[duration_ms]:-0}"
 
-  command jq -c -n \
+  local REPLY="" jq_program="" document=""
+  local -i render_status=0
+  _vpn_cmd_path jq || return 1
+  jq_program="$REPLY"
+  document=$(command "$jq_program" -cMn \
     --arg schema "$_VPN_MTU_SCHEMA" \
     --argjson applicable "${flags[applicable]}" \
     --argjson supported "${flags[supported]}" \
@@ -750,7 +757,13 @@ _vpn_mtu_render_json() {
       recommendations:
         (if $recommendations == "" then [] else ($recommendations | split("\n")) end),
       reason: ($reason | nz)
-    }'
+    }') || render_status=$?
+  if (( render_status != 0 )); then
+    (( render_status == 130 || render_status == 143 )) && return "$render_status"
+    return 1
+  fi
+  [[ -n "$document" ]] || return 1
+  print -r -- "$document"
 }
 
 # Prints the measured facts, the advice, and one verdict line on stderr.
@@ -970,14 +983,18 @@ vpn-mtu-probe() {
     mtu[applicable]=false
     mtu[reason]="the probe supports Linux, WSL, and macOS"
     _vpn_error "vpn-mtu-probe is not applicable on this host: ${mtu[reason]}."
-    (( json )) && _vpn_mtu_render_json
+    if (( json )); then
+      _vpn_mtu_render_json || return $?
+    fi
     return 1
   fi
 
   if ! _vpn_bounded_ready; then
     mtu[supported]=false
     mtu[reason]="timeout or gtimeout is required without the ZDX core"
-    (( json )) && _vpn_mtu_render_json
+    if (( json )); then
+      _vpn_mtu_render_json || return $?
+    fi
     return 1
   fi
 
@@ -1006,13 +1023,15 @@ vpn-mtu-probe() {
 
   if (( measure_status != 0 )); then
     _vpn_mtu_render_failure
-    (( json )) && _vpn_mtu_render_json
+    if (( json )); then
+      _vpn_mtu_render_json || return $?
+    fi
     return 1
   fi
 
   _vpn_mtu_recommend
   if (( json )); then
-    _vpn_mtu_render_json || return 1
+    _vpn_mtu_render_json || return $?
   else
     _vpn_mtu_render_text
   fi

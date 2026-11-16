@@ -306,9 +306,17 @@ vpn-profile-create() {
 
   _vpn_offer_set_default_profile "$iface"
 
-  local outcome
+  local outcome edit_directory="" edit_fingerprint=""
+  edit_directory=$(_vpn_config_dir_identity) \
+    && edit_fingerprint=$(_vpn_profile_file_fingerprint "$conf_file" "$iface profile") || {
+    _vpn_warn "The profile was created, but its editor target could not be reviewed."
+    return 0
+  }
   outcome=$(_vpn_confirm_outcome "Open ${iface}.conf now?")
-  [[ "$outcome" == "confirmed" ]] && vpn-config-edit "$iface"
+  if [[ "$outcome" == confirmed ]]; then
+    _vpn_edit_confirmed "$conf_file" "$edit_fingerprint" "$edit_directory" \
+      || _vpn_warn "The profile was created; the optional editor did not complete."
+  fi
   return 0
 }
 
@@ -477,9 +485,17 @@ vpn-profile-import() {
 
   _vpn_offer_set_default_profile "$iface"
 
-  local edit_outcome
-  edit_outcome=$(_vpn_confirm_outcome "Open ${iface}.conf now?")
-  [[ "$edit_outcome" == "confirmed" ]] && vpn-config-edit "$iface"
+  local edit_outcome edit_directory="" edit_fingerprint=""
+  if edit_directory=$(_vpn_config_dir_identity) \
+    && edit_fingerprint=$(_vpn_profile_file_fingerprint "$conf_file" "$iface profile"); then
+    edit_outcome=$(_vpn_confirm_outcome "Open ${iface}.conf now?")
+    if [[ "$edit_outcome" == confirmed ]]; then
+      _vpn_edit_confirmed "$conf_file" "$edit_fingerprint" "$edit_directory" \
+        || _vpn_warn "The profile was imported; the optional editor did not complete."
+    fi
+  else
+    _vpn_warn "The profile was imported, but its editor target could not be reviewed."
+  fi
   (( hardening_failed == 0 ))
 }
 
@@ -636,6 +652,16 @@ vpn-profile-rename() {
     (( active_status == 130 || active_status == 143 )) && return "$active_status"
   fi
 
+  local REPLY=""
+  local -i saveconfig_enabled=0 saveconfig_status=0
+  _vpn_profile_saveconfig "$old_conf" "$directory_identity" "$old_fingerprint" || saveconfig_status=$?
+  (( saveconfig_status == 130 || saveconfig_status == 143 )) && return "$saveconfig_status"
+  (( saveconfig_status == 0 )) || { _vpn_error "Could not safely inspect SaveConfig for $old_iface."; return 1; }
+  if [[ "$REPLY" == true ]]; then
+    saveconfig_enabled=1
+    _vpn_saveconfig_activity_guard "$old_iface" "$active_known" "$old_active" || return 1
+  fi
+
   _vpn_header "Rename VPN Profile"
   local REPLY="" planned="" nothing="nothing was renamed."
   local -a plan_rows=()
@@ -766,6 +792,9 @@ vpn-profile-rename() {
     (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
     return 1
   }
+  if (( saveconfig_enabled )); then
+    _vpn_revalidate_saveconfig_inactive "$old_iface" || return $?
+  fi
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
   local current_fingerprint
@@ -1057,6 +1086,16 @@ vpn-profile-remove() {
     (( active_status == 130 || active_status == 143 )) && return "$active_status"
   fi
 
+  local REPLY=""
+  local -i saveconfig_enabled=0 saveconfig_status=0
+  _vpn_profile_saveconfig "$conf_file" "$directory_identity" "$profile_fingerprint" || saveconfig_status=$?
+  (( saveconfig_status == 130 || saveconfig_status == 143 )) && return "$saveconfig_status"
+  (( saveconfig_status == 0 )) || { _vpn_error "Could not safely inspect SaveConfig for $iface."; return 1; }
+  if [[ "$REPLY" == true ]]; then
+    saveconfig_enabled=1
+    _vpn_saveconfig_activity_guard "$iface" "$active_known" "$profile_active" || return 1
+  fi
+
   _vpn_header "Remove VPN Profile"
   local REPLY="" planned="" nothing="nothing was removed."
   local -a plan_rows=()
@@ -1156,6 +1195,9 @@ vpn-profile-remove() {
     (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
     return 1
   }
+  if (( saveconfig_enabled )); then
+    _vpn_revalidate_saveconfig_inactive "$iface" || return $?
+  fi
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
   local current_fingerprint

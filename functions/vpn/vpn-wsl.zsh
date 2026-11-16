@@ -30,9 +30,11 @@ _vpn_wsl_networking_mode() {
   setopt LOCAL_OPTIONS PIPE_FAIL
   local mode=""
   local -i mode_status=0
-  if command -v wslinfo &>/dev/null; then
+  local REPLY="" head_program=""
+  if _vpn_check_cmd wslinfo && _vpn_cmd_path head; then
+    head_program="$REPLY"
     mode=$(_vpn_readonly_exec 3 wslinfo --networking-mode \
-      | command head -c 64) || mode_status=$?
+      | "$head_program" -c 64) || mode_status=$?
     (( mode_status == 130 || mode_status == 143 )) && return "$mode_status"
     (( mode_status == 0 )) || mode=""
   fi
@@ -46,11 +48,14 @@ _vpn_wsl_networking_mode() {
 # when that cannot be determined.
 _vpn_ipv6_default_route_absent() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-  command -v ip &>/dev/null || return 2
+  _vpn_check_cmd ip || return 2
+  local REPLY="" head_program=""
+  _vpn_cmd_path head || return 2
+  head_program="$REPLY"
   local routes=""
   local -i route_status=0
   routes=$(_vpn_readonly_exec 3 ip -6 route show default \
-    | command head -c 4096) || route_status=$?
+    | "$head_program" -c 4096) || route_status=$?
   (( route_status == 130 || route_status == 143 )) && return "$route_status"
   (( route_status == 0 )) || return 2
   [[ -z "${routes//[[:space:]]/}" ]]
@@ -62,10 +67,7 @@ _vpn_ipv6_default_route_absent() {
 # wslinfo reports NAT or the host has no IPv6 default route.
 # VPN_MENU_WSL_IPV6_FIX=1 forces it on Linux and WSL, 0 disables it, and macOS
 # never applies it (vpn-on refuses the forced setting there).
-_vpn_should_apply_wsl_ipv6_fix() {
-  [[ "${VPN_MENU_WSL_IPV6_FIX:-}" == 0 ]] && return 1
-  _vpn_platform_is darwin && return 1
-  [[ "${VPN_MENU_WSL_IPV6_FIX:-}" == 1 ]] && return 0
+_vpn_wsl_default_ipv6_fix() {
   _vpn_platform_is wsl || return 1
   local mode=""
   local -i mode_status=0
@@ -75,6 +77,12 @@ _vpn_should_apply_wsl_ipv6_fix() {
   _vpn_ipv6_default_route_absent
 }
 
+_vpn_should_apply_wsl_ipv6_fix() {
+  [[ "${VPN_MENU_WSL_IPV6_FIX:-}" == 0 ]] && return 1
+  _vpn_platform_is darwin && return 1
+  [[ "${VPN_MENU_WSL_IPV6_FIX:-}" == 1 ]] && return 0
+  _vpn_wsl_default_ipv6_fix
+}
 # --- resolv.conf preflight --------------------------------------------------
 
 # Separate so tests on hosts whose resolver is a symlink (systemd-resolved) can
@@ -166,13 +174,22 @@ _vpn_wsl_hook_lines() {
 # suite owns. Status 0 means valid and idempotent, 1 means absent, and 2 means a
 # sentinel-like or incomplete block that must be reviewed instead of trusted.
 _vpn_wsl_existing_hook_state() {
+  setopt LOCAL_OPTIONS EXTENDED_GLOB
+  local LC_ALL=C
   local content="$1"
   REPLY=""
 
   local -a lines=("${(@f)content}")
   local -i index sentinel_count=0 sentinel_index=0
+  local key="" section=other
   for (( index = 1; index <= ${#lines[@]}; ++index )); do
+    key="${(L)${${lines[index]%%\#*}%%=*}}"
+    case "$key" in
+      [[:space:]]#'[interface]'[[:space:]]#) section=interface ;;
+      [[:space:]]#'['*) section=other ;;
+    esac
     if [[ "${lines[index]}" == "$_VPN_DNS_HOOK_SENTINEL" ]]; then
+      [[ "$section" == interface ]] || return 2
       (( ++sentinel_count ))
       sentinel_index=$index
     fi
@@ -325,14 +342,21 @@ _vpn_apply_wsl_dns_hooks() {
   {
     local -a lines=("${(@f)content}")
     local line data key section=other comment
-    local -i inserted=0
+    local -i inserted=0 have_interface=0
     local -a output=()
 
     for line in "${lines[@]}"; do
       data="${line%%\#*}"
       key="${(L)${data%%=*}}"
+      # Close the actual Interface before any following section, not only Peer.
+      if [[ "$section" == interface && "$key" == [[:space:]]#'['* ]] && (( ! inserted )); then
+        output+=("${(@f)$(_vpn_wsl_hook_lines \
+          "$tunnel_dns" "$VPN_DNS_FALLBACK_PRIMARY" \
+          "$VPN_DNS_FALLBACK_SECONDARY")}")
+        inserted=1
+      fi
       case "$key" in
-        [[:space:]]#'[interface]'[[:space:]]#) section=interface ;;
+        [[:space:]]#'[interface]'[[:space:]]#) section=interface; have_interface=1 ;;
         [[:space:]]#'['*) section=other ;;
       esac
       # The declared DNS is replaced by the hooks, so drop the original line.
@@ -344,18 +368,18 @@ _vpn_apply_wsl_dns_hooks() {
         fi
         continue
       fi
-      if (( ! inserted )) && _vpn_wsl_line_opens_peer "$line"; then
-        output+=("${(@f)$(_vpn_wsl_hook_lines \
-          "$tunnel_dns" "$VPN_DNS_FALLBACK_PRIMARY" \
-          "$VPN_DNS_FALLBACK_SECONDARY")}")
-        inserted=1
-      fi
       output+=("$line")
     done
 
-    if (( ! inserted )); then
-      _vpn_error "The profile has no [Peer] section; refusing to patch it."
+    if (( ! have_interface )); then
+      _vpn_error "The profile has no [Interface] section; refusing to patch it."
       return 1
+    fi
+    if [[ "$section" == interface ]] && (( ! inserted )); then
+      output+=("${(@f)$(_vpn_wsl_hook_lines \
+        "$tunnel_dns" "$VPN_DNS_FALLBACK_PRIMARY" \
+        "$VPN_DNS_FALLBACK_SECONDARY")}")
+      inserted=1
     fi
 
     print -rl -- "${output[@]}" >| "$temp_file" || {

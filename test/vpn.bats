@@ -11,6 +11,50 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "vpn: kernel fixture sets child OSTYPE and refuses an invalid model" {
+  local work="$HOME/ostype-model" native_status=0 default_status=0 invalid_status=0 model_status=0
+  local kernel expected
+  mkdir -m 700 "$work" || return 1
+  cd "$work" || return 1
+
+  unset TEST_ZSH_OSTYPE
+  zsh -f -c 'emulate -R zsh; print -r -- "$OSTYPE"' \
+    </dev/null > native.expected 2> native.stderr || native_status=$?
+  printf '%s\n' "$native_status" > native.status || return 1
+  run_zsh 'print -r -- "$OSTYPE"' > default.stdout 2> default.stderr || default_status=$?
+  printf '%s\n' "$default_status" > default.status || return 1
+
+  for kernel in Linux Darwin FreeBSD; do
+    vpn_pin_kernel "$kernel" || return 1
+    case "$kernel" in Linux) expected=linux-gnu ;; Darwin) expected=darwin-test ;; FreeBSD) expected=freebsd-test ;; esac
+    printf '%s\n%s\n' "$expected" "$kernel" > "$kernel.expected" || return 1
+    model_status=0
+    run_zsh 'print -r -- "$OSTYPE"; command uname -s' \
+      > "$kernel.stdout" 2> "$kernel.stderr" || model_status=$?
+    printf '%s\n' "$model_status" > "$kernel.status" || return 1
+  done
+
+  export TEST_ZSH_OSTYPE=invalid-model
+  run_zsh 'print -r -- reached > "$HOME/ostype-model/action.reached"' \
+    > invalid.stdout 2> invalid.stderr || invalid_status=$?
+  printf '%s\n' "$invalid_status" > invalid.status || return 1
+  printf '%s\n' 'test_helper: invalid TEST_ZSH_OSTYPE' > invalid.expected || return 1
+
+  # All five model calls have returned before assertions begin.
+  [[ "$native_status" == 0 && "$default_status" == 0 ]] || return 1
+  [[ ! -s native.stderr && ! -s default.stderr ]] || return 1
+  cmp native.expected default.stdout || return 1
+  for kernel in Linux Darwin FreeBSD; do
+    [[ $(cat "$kernel.status") == 0 && ! -s "$kernel.stderr" ]] || return 1
+    cmp "$kernel.expected" "$kernel.stdout" || return 1
+  done
+  [[ "$invalid_status" == 2 && ! -s invalid.stdout ]] || return 1
+  cmp invalid.expected invalid.stderr || return 1
+  [[ ! -e action.reached && ! -L action.reached ]] || return 1
+  # This observes the rejected action; Core-before/after-source order is a
+  # separate static property of run_zsh, not a source sentinel proved here.
+}
+
 @test "vpn: vpn-menu.zsh and vpn-common.zsh source cleanly" {
   run run_zsh "echo SOURCED"
   [ "$status" -eq 0 ]
@@ -127,40 +171,36 @@ teardown() {
 }
 
 @test "vpn: _vpn_is_wsl detects WSL correctly" {
-  # _vpn_is_wsl calls `command grep` on purpose, so a shell function named grep
-  # cannot intercept it. The mock therefore models the external binary, which is
-  # the boundary docs/testing.md asks tests to replace.
-  install_proc_version_grep() {
-    cat > "$TEST_MOCK_BIN/grep" <<EOF
-#!/usr/bin/env bash
-for arg in "\$@"; do
-  if [[ "\$arg" == "/proc/version" ]]; then
-    exit ${1}
-  fi
-done
-exec /usr/bin/grep "\$@"
-EOF
-    chmod +x "$TEST_MOCK_BIN/grep"
-  }
+  # Qualify a finite forbidden-grep recorder, then prove the builtin detector
+  # never calls it. These are session/OS models, not another host's kernel.
+  export VPN_WSL_DETECTOR_GREP_CALLS="$HOME/wsl-detector-grep.calls"
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/grep" || return 1
+  cat >> "$TEST_MOCK_BIN/grep" <<'MOCK'
+printf '%s\0' "$#" "$0" "$@" >> "$VPN_WSL_DETECTOR_GREP_CALLS" || exit 98
+exit 97
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/grep" || return 1
+  run "$TEST_MOCK_BIN/grep" fixture-control
+  [ "$status" -eq 97 ] || return 1
+  [[ -s "$VPN_WSL_DETECTOR_GREP_CALLS" ]] || return 1
+  rm -- "$VPN_WSL_DETECTOR_GREP_CALLS" || return 1
 
-  # Case 1: WSL_DISTRO_NAME is set, so /proc/version is never consulted.
-  install_proc_version_grep 1
-  run run_zsh "WSL_DISTRO_NAME='Ubuntu' _vpn_is_wsl"
+  # Linux model plus a distro marker; no kernel file needs to be simulated.
+  run run_zsh "unset WSL_INTEROP; WSL_DISTRO_NAME='Ubuntu'; _vpn_is_wsl"
   [ "$status" -eq 0 ]
 
-  # Case 2: no WSL_DISTRO_NAME, but /proc/version reports a Microsoft kernel.
-  install_proc_version_grep 0
-  run run_zsh "unset WSL_DISTRO_NAME; _vpn_is_wsl"
+  # A service session may have interop evidence without a distro variable.
+  run run_zsh "unset WSL_DISTRO_NAME; WSL_INTEROP=fixture-interop; _vpn_is_wsl"
   [ "$status" -eq 0 ]
 
-  # Case 3: neither signal is present.
-  install_proc_version_grep 1
-  run run_zsh "unset WSL_DISTRO_NAME; _vpn_is_wsl"
+  # Non-Linux OS evidence cannot be overridden by WSL-looking variables.
+  # This is not a claim about a Linux kernel with no WSL evidence.
+  vpn_pin_kernel Darwin
+  run run_zsh "WSL_DISTRO_NAME=Ubuntu; WSL_INTEROP=fixture-interop; _vpn_is_wsl"
   [ "$status" -eq 1 ]
-
-  rm -f "$TEST_MOCK_BIN/grep"
+  [[ ! -e "$VPN_WSL_DETECTOR_GREP_CALLS" ]] || return 1
+  rm -- "$TEST_MOCK_BIN/grep" || return 1
 }
-
 @test "vpn: _vpn_apply_wsl_dns_hooks patches configuration correctly and is idempotent" {
   run run_zsh "
     export MOCK_SUDO_WRITE_ETC_RESOLV_CONF=1

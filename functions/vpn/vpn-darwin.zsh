@@ -51,8 +51,9 @@ _vpn_darwin_capture() {
 
   local head_program="" captured=""
   local -i capture_status=0
-  head_program=$(whence -p -- head 2>/dev/null) || return 1
-  [[ "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
+  local REPLY=""
+  _vpn_cmd_path head || return 1
+  head_program="$REPLY"
   captured=$(
     local -i pipeline_status=0
     "${collector[@]}" </dev/null 2>/dev/null \
@@ -84,7 +85,8 @@ _vpn_darwin_brew_prefix() {
   fi
 
   local prefix="" brew_path=""
-  if brew_path=$(whence -p brew 2>/dev/null) && [[ "$brew_path" == /* ]]; then
+  if _vpn_cmd_path brew; then
+    brew_path="$REPLY"
     prefix=$(_vpn_darwin_capture 1024 "$brew_path" --prefix) || prefix=""
     prefix="${prefix%%$'\n'*}"
   fi
@@ -141,10 +143,7 @@ _vpn_darwin_require_trusted() {
 # REPLY: the absolute wg-quick on PATH.
 _vpn_darwin_wg_quick() {
   REPLY=""
-  local found=""
-  found=$(whence -p wg-quick 2>/dev/null) || return 1
-  [[ "$found" == /* ]] || return 1
-  REPLY="$found"
+  _vpn_cmd_path wg-quick
 }
 
 # REPLY: an executable Bash 4 or newer for wg-quick; macOS /bin/bash is 3.2.
@@ -162,7 +161,8 @@ _vpn_darwin_bash4() {
 
   local -A tried=()
   for candidate in "${candidates[@]}"; do
-    [[ "$candidate" == /* && -f "$candidate" && -x "$candidate" ]] || continue
+    _vpn_cmd_path "$candidate" || continue
+    candidate="$REPLY"
     [[ -z "${tried[${candidate:A}]-}" ]] || continue
     tried[${candidate:A}]=1
     major=$(_vpn_darwin_capture 16 "$candidate" -c "$_VPN_DARWIN_BASH_PROBE") \
@@ -196,16 +196,15 @@ _vpn_darwin_wireguard_go() {
   _vpn_darwin_wg_quick || return 1
   local candidate="${REPLY:h:A}/wireguard-go"
   REPLY=""
-  [[ -f "$candidate" && -x "$candidate" ]] || return 1
-  REPLY="$candidate"
+  _vpn_cmd_path "$candidate"
 }
 
 # REPLY: a validated absolute wg for privileged state reads.
 _vpn_darwin_wg_tool() {
   REPLY=""
   local found=""
-  found=$(whence -p wg 2>/dev/null) || return 1
-  [[ "$found" == /* ]] || return 1
+  _vpn_cmd_path wg || return 1
+  found="$REPLY"
   _vpn_darwin_require_trusted wg "$found" || return 1
   REPLY="$found"
 }

@@ -396,6 +396,7 @@ teardown() {
   run run_zsh '
     _vpn_menu_have() { return 0; }
     _VPN_MENU_PLATFORM=linux _VPN_MENU_WSL_FIX=1
+    _VPN_MENU_WSL_DEFAULT_KNOWN=1 _VPN_MENU_WSL_DEFAULT_FIX=0
     _VPN_MENU_WG_ACCESS_STATE=direct _VPN_MENU_ACTIVE_KNOWN=1
     _VPN_MENU_ACTIVE_IFACES=(alpha bravo)
     _VPN_MENU_CONFIG_ACCESS_STATE=direct _VPN_MENU_CONFIGS_KNOWN=1

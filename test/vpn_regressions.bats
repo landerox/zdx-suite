@@ -125,11 +125,12 @@ EOF
   run run_zsh '
     local valid
     valid=$(_vpn_wsl_hook_lines 10.0.0.53 1.1.1.1 9.9.9.9)
+    valid="[Interface]"$'"'"'\n'"'"'"$valid"
     _vpn_wsl_existing_hook_state "$valid" || return 10
     [[ "$REPLY" == "10.0.0.53" ]] || return 11
 
     _vpn_wsl_existing_hook_state \
-      "$_VPN_DNS_HOOK_SENTINEL"$'"'"'\n'"'"'"PostUp = incomplete"
+      "[Interface]"$'"'"'\n'"'"'"$_VPN_DNS_HOOK_SENTINEL"$'"'"'\n'"'"'"PostUp = incomplete"
     (( $? == 2 )) || return 20
 
     _vpn_wsl_existing_hook_state \
