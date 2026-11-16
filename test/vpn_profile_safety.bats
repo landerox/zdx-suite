@@ -326,7 +326,7 @@ mv -- $VPN_CONFIG_DIR/office.conf $VPN_CONFIG_DIR/wg0.conf" ]
     vpn-profile-rename wg0 office --yes > "$VPN_SAFETY_STDOUT"
   '
   [ "$status" -eq 1 ] || profile_safety_failure
-  [[ "$output" == *"Rename completed, but 2 saved choices could not be updated."* ]]
+  [[ "$output" == *"Rename completed with partial failures: 2 of 4 changes failed."* ]]
   [ -L "$VPN_CACHE_DIR" ]
   cmp "$HOME/expected/live" "$VPN_CONFIG_DIR/office.conf"
   cmp "$HOME/expected/backup" "$VPN_CONFIG_DIR/office.conf.bak-vpn-menu"

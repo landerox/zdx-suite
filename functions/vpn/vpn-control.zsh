@@ -322,6 +322,9 @@ vpn-on() {
         "The required WSL IPv6 compatibility tweak failed; the tunnel was not started."
       return 1
     }
+  else
+    local -i gate_status=$?
+    (( gate_status == 130 || gate_status == 143 )) && return "$gate_status"
   fi
 
   _vpn_tunnel_up "$iface" || return $?

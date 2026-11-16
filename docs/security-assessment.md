@@ -165,10 +165,13 @@ included in a backup, or exposed through an error log.
   private/preshared material, including commented and split assignments.
   Backup and undo copies remain private credentials: reviewed removal can
   include both, rename follows both, restore discloses undo replacement and
-  safe orphan names are visible without contents. New protected orphan reads
-  are bounded/nonprompting and publish no partial inventory; broader protected
-  probe deadlines remain a residual gap. Strict private fixtures cover these
-  controls without native host or real-key acceptance.
+  safe orphan names are visible without contents. Protected orphan reads
+  keep their existing explicit bounds and publish no partial inventory.
+  Default protected reads and cached-access queries bound each selected
+  local external program to three seconds without requesting credentials.
+  Strict private fixtures cover these controls without native host or
+  real-key acceptance. Provider globbing is disabled and literal path/query
+  glob syntax is refused without rejecting bracketed IPv6 authorities.
 
 - Git identity status and review plans show only the SSH program and an
   identity-selection label from the configured command. SSH arguments and
@@ -2296,9 +2299,13 @@ unintended targets.
   atomic replacement; a publication failure preserves the prior pointer.
   Reports are staged privately and published under unique no-clobber names, so
   simultaneous same-second runs do not overwrite one another. A failed report
-  clears its invocation-local target and removes the staged file. Cache entries
-  are capped at 128 bytes, preview panes at 64 KiB, and completed reports at
-  1 MiB; external diagnostic sections are bounded before publication.
+  clears its invocation-local target. Cleanup revalidates the creation
+  directory and original stage device/inode, ownership, mode and link count
+  before removing an owned stage, independently of content-size acceptance;
+  detected replacements and links are retained. This is not an atomic
+  unlink-by-identity guarantee. Cache entries are capped at 128 bytes,
+  preview panes at 64 KiB, and completed reports at 1 MiB; external diagnostic
+  sections are bounded before publication.
 - `VPN_CONFIG_DIR` must be absolute, must not contain traversal, controls,
   protected roots, or symlink components other than a root-owned system alias
   inside a root-owned directory nobody else can write (macOS
@@ -2801,7 +2808,23 @@ memory or CPU during inspection.
   propagates discovery failure, caps inventories at 512 files, and batches
   backends in groups of at most 64 paths.
 - VPN profile and active-interface inventories, profile bytes, preview panes,
-  cache entries, and report output have fixed suite limits.
+  cache entries, and report output have fixed suite limits. Owned info and
+  Darwin collectors, WireGuard access, local routing/resolver observations,
+  report metadata and default nonprompting sudo reads use three-second
+  per-program bounds. Info, Darwin and provider captures reject data when
+  their complete read fails or exceeds its raw-byte cap; private timeout and
+  returned interruption outcomes stay distinct. WireGuard's existing
+  ordinary-failure warm-cache fallback keeps its raw stream composition:
+  successful fallback does not independently validate each attempt's output.
+  Intentional stdout callbacks keep their protocol, while their owned
+  external leaves are bounded. Binary retained-copy transport keeps its
+  explicit five-second budgets without scalar/newline conversion. WSL mode
+  failure stays unknown and only a successful route read proves absence;
+  returned stops cut off later gate/snapshot/connection work. Platform/advice
+  bootstrap and bounded-buffer formatting/identity policies remain separate;
+  these controls do not claim one deadline for a whole diagnostic or native
+  child lifetime. Interactive authentication and tunnel mutations keep their
+  existing execution policy.
   Exit-IP providers must be bounded HTTPS URLs; curl restricts protocol,
   response bytes, redirect protocol, connect time, and total time, and returned
   public addresses are validated semantically before display or persistence.
@@ -3288,4 +3311,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-15.
+Last reviewed: 2026-11-16.

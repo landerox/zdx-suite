@@ -654,6 +654,16 @@ Line Tools behavior, a WSL1 distribution, or a project on a DrvFs drive. See
 
 ### VPN coverage
 
+`vpn_interrupt_bounds.bats` covers returned profile, MTU-context and WSL
+interruptions; ordinary and absent observations; exact local deadline,
+producer argv and closed-input routing; callback/empty-result behavior;
+byte-exact NUL data; provider glob/privacy/size controls; counted partial
+rename; and real oversized report publication with owned-stage cleanup.
+Typed filesystem observations distinguish links, dangling links, nonregular
+objects, true absence and observation errors. Snapshot companions use finite
+helper-protocol models for the manager, summary, report and restore callers.
+These models do not establish physical signals or owner-host acceptance.
+
 `vpn_cli_picker_contract.bats` covers directory decline versus confirmation
 failure, nonterminal advice, canonical profile capture and complete snapshot
 membership through seven public owners, unsafe temporary-root refusal and

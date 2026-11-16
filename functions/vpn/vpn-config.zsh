@@ -540,7 +540,9 @@ vpn-config-restore() {
     return 2
   fi
 
-  _vpn_state_load
+  local -i state_status=0
+  _vpn_state_load || state_status=$?
+  (( state_status == 130 || state_status == 143 )) && return "$state_status"
 
   if [[ -z "$iface" ]]; then
     if (( ! _VPN_MENU_CONFIGS_KNOWN )); then

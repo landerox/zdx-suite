@@ -49,20 +49,43 @@ _vpn_rpt_kv()          {
 }
 _vpn_rpt_bullet()      { _vpn_rpt "- $(_vpn_rpt_escape "$1")"; }
 
-# Captures a read-only collector without allowing hostile or broken tooling to
-# make a diagnostic unbounded. stdout remains data for the caller.
+# Captures one complete read-only diagnostic observation. External leaves
+# have deadlines; intentional callbacks retain their stdout data protocol.
+# Failed or oversized complete captures emit no data.
 _vpn_info_capture_bounded() {
   setopt LOCAL_OPTIONS PIPE_FAIL
-
   local -i max_bytes="${1:-0}"
   shift
   (( max_bytes > 0 && $# > 0 )) || return 2
+  local -a collector=("$@")
+  if [[ "${collector[1]}" == command ]]; then
+    collector=("${collector[@]:1}")
+    (( ${#collector[@]} > 0 )) || return 2
+    collector=(_vpn_readonly_exec 3 "${collector[@]}")
+  elif [[ "${collector[1]}" == /* ]]; then
+    collector=(_vpn_readonly_exec 3 "${collector[@]}")
+  fi
 
-  local captured
+  local head_program="" captured=""
+  local -i capture_status=0
+  head_program=$(whence -p -- head 2>/dev/null) || return 1
+  [[ "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
   captured=$(
-    "$@" 2>/dev/null | command head -c "$(( max_bytes + 1 ))"
-  ) || return 1
-  (( ${#captured} <= max_bytes )) || return 1
+    local -i pipeline_status=0
+    "${collector[@]}" </dev/null 2>/dev/null \
+      | "$head_program" -c "$(( max_bytes + 1 ))" 2>/dev/null || pipeline_status=$?
+    builtin print -rn -- . || { (( pipeline_status != 0 )) || pipeline_status=1; }
+    return "$pipeline_status"
+  ) || capture_status=$?
+  # Account raw bytes before the historical trailing-LF normalization. These
+  # options change only after the collector has returned and stay local.
+  unsetopt MULTIBYTE
+  (( capture_status == 130 || capture_status == 143 || capture_status == 124 )) \
+    && return "$capture_status"
+  [[ "$captured" == *. ]] || return 1
+  captured="${captured%.}"
+  (( ${#captured} <= max_bytes && capture_status == 0 )) || return 1
+  captured="$(builtin print -rn -- "$captured")" || return 1
   print -r -- "$captured"
 }
 
@@ -102,7 +125,9 @@ vpn-summary() {
   _vpn_header "VPN Summary"
   _vpn_require_platform || return 1
 
-  _vpn_state_load
+  local -i state_status=0
+  _vpn_state_load || state_status=$?
+  (( state_status == 130 || state_status == 143 )) && return "$state_status"
 
   local REPLY=""
   _vpn_command_display "$(_vpn_config_dir)"
@@ -610,6 +635,8 @@ vpn-report() {
 
   local report_dir="${report_temp:h}"
   local report_file="$report_temp"
+  local report_directory_identity="" report_stage_identity=""
+  local -A report_stage=()
   local _VPN_REPORT_TARGET="$report_temp"
   local -i _VPN_REPORT_WRITE_FAILED=0
 
@@ -617,6 +644,16 @@ vpn-report() {
   _vpn_label "Report directory" "$REPLY"
 
   {
+  # The owned staging inode may grow beyond the publication cap. Cleanup
+  # tracks the created resource, independently of content-size acceptance.
+  report_directory_identity=$(
+    _vpn_private_dir_identity "$report_dir" "report directory"
+  ) || return 1
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  _vpn_state_validate_file "$report_temp" "$report_dir" "report temporary" \
+    "$_VPN_MAX_REPORT_BYTES" || return 1
+  zstat -LH report_stage -- "$report_temp" 2>/dev/null || return 1
+  report_stage_identity="${report_stage[device]}:${report_stage[inode]}"
 
   # --- Header --------------------------------------------------------------
   local host_full user kernel is_wsl platform
@@ -642,7 +679,7 @@ vpn-report() {
     _vpn_error "Could not initialize the report content."
     return 1
   }
-  _vpn_rpt_kv "Generated" "$(command 'date' '+%Y-%m-%d %H:%M:%S %Z')"
+  _vpn_rpt_kv "Generated" "$(_vpn_readonly_exec 3 date '+%Y-%m-%d %H:%M:%S %Z')"
   _vpn_rpt_kv "Host" "$host_full"
   _vpn_rpt_kv "User" "$user"
   _vpn_rpt_kv "Kernel" "$kernel"
@@ -681,10 +718,19 @@ vpn-report() {
       && print -r -- available || print -r -- unavailable)"
   _vpn_rpt_kv "Profile access" "$(_vpn_configs_access_state)"
   _vpn_rpt_kv "Tunnel access" "$(_vpn_wg_access_state)"
+  local -i wsl_status=0
   if [[ "$platform" == wsl ]]; then
-    _vpn_rpt_kv "WSL networking" "$(_vpn_wsl_networking_mode)"
+    local networking_mode=""
+    networking_mode=$(_vpn_wsl_networking_mode) || wsl_status=$?
+    (( wsl_status == 130 || wsl_status == 143 )) && return "$wsl_status"
+    _vpn_rpt_kv "WSL networking" "$networking_mode"
   fi
-  _vpn_should_apply_wsl_ipv6_fix && _vpn_rpt_kv "WSL IPv6 fix" "enabled"
+  if _vpn_should_apply_wsl_ipv6_fix; then
+    _vpn_rpt_kv "WSL IPv6 fix" "enabled"
+  else
+    wsl_status=$?
+    (( wsl_status == 130 || wsl_status == 143 )) && return "$wsl_status"
+  fi
   if [[ "$platform" == darwin ]]; then
     # wg-quick on macOS runs through an explicit Bash 4 or newer.
     local bash_used="(missing: Bash 4 or newer)"
@@ -699,7 +745,9 @@ vpn-report() {
   _vpn_info "Collecting profile inventory..."
 
   _vpn_rpt_h2 "Profiles"
-  _vpn_state_load
+  local -i state_status=0
+  _vpn_state_load || state_status=$?
+  (( state_status == 130 || state_status == 143 )) && return "$state_status"
   if [[ "$_VPN_MENU_CONFIG_ACCESS_STATE" == "missing" ]]; then
     _vpn_rpt_bullet "WireGuard profile directory is missing: $(_vpn_config_dir)"
   elif (( !_VPN_MENU_CONFIGS_KNOWN )); then
@@ -911,7 +959,7 @@ vpn-report() {
 
   # --- Closing -------------------------------------------------------------
   _vpn_rpt_h2 "Closing"
-  _vpn_rpt_kv "Finished" "$(command 'date' '+%Y-%m-%d %H:%M:%S %Z')"
+  _vpn_rpt_kv "Finished" "$(_vpn_readonly_exec 3 date '+%Y-%m-%d %H:%M:%S %Z')"
   _vpn_rpt_bullet "Host: **$host_full**"
   [[ "$platform" == wsl && -n "${WSL_DISTRO_NAME-}" ]] \
     && _vpn_rpt_bullet "WSL distro: **${WSL_DISTRO_NAME}**"
@@ -938,11 +986,17 @@ vpn-report() {
   return 0
   } always {
     _VPN_REPORT_TARGET=""
-    if [[ -n "$report_temp" && -e "$report_temp" && ! -L "$report_temp" ]] \
-      && _vpn_state_validate_file \
-        "$report_temp" "$report_dir" "report temporary cleanup" \
-        "$_VPN_MAX_REPORT_BYTES" 2>/dev/null; then
-      command rm -f -- "$report_temp" 2>/dev/null
+    if [[ -n "$report_temp" && -n "$report_stage_identity" \
+      && -n "$report_directory_identity" && -e "$report_temp" && ! -L "$report_temp" ]] \
+      && _vpn_assert_private_dir_identity "$report_dir" "report directory" \
+        "$report_directory_identity" 2>/dev/null \
+      && _vpn_state_validate_file "$report_temp" "$report_dir" \
+        "report temporary cleanup" 0 2>/dev/null; then
+      report_stage=()
+      if zstat -LH report_stage -- "$report_temp" 2>/dev/null \
+        && [[ "${report_stage[device]}:${report_stage[inode]}" == "$report_stage_identity" ]]; then
+        command rm -f -- "$report_temp" 2>/dev/null
+      fi
     fi
   }
 }
@@ -1044,22 +1098,43 @@ _vpn_load_provider_urls() {
 
 _vpn_curl_bounded() {
   emulate -L zsh
+  setopt PIPE_FAIL
   local url="$1"
-  local max_time="${2:-5}"
-  local connect_timeout="${3:-3}"
+  local max_time="${2:-5}" connect_timeout="${3:-3}"
   _vpn_validate_provider_url "$url" || return 1
-
-  # Quoted curl config data stays on stdin, never in the process argument list
-  # or a retained file. Disable ambient curlrc diagnostics that could echo it.
+  local curl_program="" head_program="" captured=""
+  local -i capture_status=0
+  curl_program=$(whence -p -- curl 2>/dev/null) || return 1
+  head_program=$(whence -p -- head 2>/dev/null) || return 1
+  [[ "$curl_program" == /* && -f "$curl_program" && -x "$curl_program" \
+    && "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
+  # URL configuration is private stdin data, never argv or a retained file.
   local config_url="${url//\\/\\\\}"
   config_url="${config_url//\"/\\\"}"
-  print -r -- "url = \"$config_url\"" | command curl -q -fsS \
-    --proto '=https' \
-    --proto-redir '=https' \
-    --max-filesize "$_VPN_MAX_NETWORK_BYTES" \
-    --max-time "$max_time" \
-    --connect-timeout "$connect_timeout" \
-    --config - 2>/dev/null
+  captured=$(
+    local -i pipeline_status=0
+    print -r -- "url = \"$config_url\"" | "$curl_program" -q -fsS --globoff \
+      --proto '=https' --proto-redir '=https' \
+      --max-filesize "$_VPN_MAX_NETWORK_BYTES" --max-time "$max_time" \
+      --connect-timeout "$connect_timeout" --config - 2>/dev/null \
+      | "$head_program" -c "$(( _VPN_MAX_NETWORK_BYTES + 1 ))" 2>/dev/null || pipeline_status=$?
+    builtin print -rn -- . || { (( pipeline_status != 0 )) || pipeline_status=1; }
+    return "$pipeline_status"
+  ) || capture_status=$?
+  unsetopt MULTIBYTE
+  (( capture_status == 124 || capture_status == 130 || capture_status == 143 )) \
+    && return "$capture_status"
+  if [[ "$captured" != *. ]]; then
+    (( capture_status == 0 )) || return "$capture_status"
+    return 1
+  fi
+  captured="${captured%.}"
+  if (( capture_status != 0 )); then
+    (( capture_status == 141 && ${#captured} > _VPN_MAX_NETWORK_BYTES )) && return 1
+    return "$capture_status"
+  fi
+  (( ${#captured} <= _VPN_MAX_NETWORK_BYTES )) || return 1
+  print -rn -- "$captured"
 }
 
 # stdout: validated provider authorities only, without path/query/fragment.

@@ -125,6 +125,13 @@ IPv6 default route (`ip -6 route show default`, which also covers WSL builds
 without `wslinfo`). `VPN_MENU_WSL_IPV6_FIX=1` forces it on Linux and WSL, and
 `VPN_MENU_WSL_IPV6_FIX=0` disables it.
 
+The mode and route observations each have a three-second bound. Missing,
+failed or timed-out mode reads become `unknown`; the independent route
+fallback still applies. Only a successful empty route read proves absence.
+An indeterminate route omits the automatic rewrite and leaves connection
+startup using the original profile. Returned `130`/`143` stops the gate,
+state refresh and its callers before later observations or mutations.
+
 The DNS hooks pin `/etc/resolv.conf` with `chattr +i`. On a filesystem without
 Linux file attributes, such as WSL1's, or without `chattr`, hardening warns
 that the pin cannot hold; the hooks still rewrite the resolver on each
@@ -403,8 +410,9 @@ new one; failure to publish that copy prevents replacing the live profile.
 `vpn-config-dir` lists safe orphaned backup/undo names and kinds without
 contents. Its new protected-directory enumeration is nonprompting and bound
 by time, bytes and records; failed or incomplete reads publish no partial
-inventory. This narrow deadline does not change the general protected-probe
-deadline gap recorded below.
+inventory. Retained-copy enumeration keeps its existing five-second command
+budgets. Default protected reads and cached-access queries use the local
+observation bounds described below; interactive authentication is separate.
 
 `vpn-default-clear` accepts `--yes` because it removes a saved pointer, but it
 is a single small reversible state change rather than a broad operation and
@@ -733,6 +741,38 @@ its private preview state, and does not pause or open another picker. Picker
 cancellation still returns `0`, and ordinary action failures remain visible
 before the manager refreshes.
 
+## Local observation bounds
+
+Owned WireGuard, interface/routing, resolver, version and report-metadata
+reads use three seconds for each newly bounded local external program.
+Programs are resolved to absolute executable files; existing platform and
+privileged-argument validation remains in force. Existing explicit
+retained-copy, ping and provider-request budgets are unchanged. Tunnel
+mutations and interactive `sudo -v` do not acquire diagnostic deadlines.
+The core supplies the portable timeout implementation. A standalone source
+requires a supported timeout backend and refuses a bounded read without one.
+
+The private info and Darwin captures retain ordinary failure `1`, timeout
+`124`, and returned `130`/`143` as distinct outcomes. Failed or oversized
+captures publish no data. These captures measure raw bytes before removing
+trailing newlines and preserve their existing one-newline result framing.
+Intentional stdout callbacks remain supported, with their owned external
+observations bounded underneath. Curl preserves the exact successful body,
+including trailing newlines. Privileged data transports such as the
+retained-copy NUL inventory stay byte-exact streams.
+
+WireGuard keeps its existing ordinary-failure warm-cache fallback and raw
+stdout transport. If that composite read succeeds, it does not independently
+validate output from each attempt. Returned timeout or interruption stops it
+before fallback; this is separate from the scalar captures' failure policy.
+
+MTU context, profile access, active-state inspection, authentication and
+disconnect stops retain `130`/`143` before later selected work. Ordinary
+unknown active-state disclosure and confirmation keep their existing policy.
+When a rename moves three credential files but both matching saved-choice
+updates fail, its verdict counts two of five changes as failed, returns `1`,
+and marks the outer timing result as a partial failure.
+
 ## Persisted state
 
 Provider requests pass escaped URL configuration on curl stdin with leading
@@ -744,7 +784,10 @@ filter private/preshared key lines even when a backend ignores the setting.
 Excerpts and preview panes also filter commented or whitespace-split key
 assignments. Caller state is restored, and interrupted live reads retain
 their status. Installed tools remain trusted; returned statuses are distinct
-from terminal-signal acceptance.
+from terminal-signal acceptance. Curl globbing is disabled; literal glob
+syntax in the URL path or query is refused after authority validation, while
+bracketed IPv6 authorities and percent-encoded literals remain supported.
+A local byte cap also rejects oversized successful provider responses.
 
 | Variable | Default | Contents |
 | --- | --- | --- |
@@ -783,10 +826,14 @@ same-second reports receive distinct no-clobber names rather than overwriting
 one another. After each successful publication, the validated
 `VPN_MENU_REPORT_RETENTION` bound (integer `0..1000`, default `20`, `0`
 disables) keeps the newest reports, always protecting the one just published
-and never deleting an entry that fails owner-only validation. Failed report generation removes its staged output and clears the
-invocation-local target. Cache entries are capped at 128 bytes; preview panes
-at 64 KiB; and a completed report at 1 MiB. External `wg`, routing, resolver,
-and provider output is bounded before it reaches a report.
+and never deleting an entry that fails owner-only validation. Failed report
+generation clears the invocation-local target. Cleanup revalidates the
+creation directory and stage identity, ownership, mode and single-link shape
+before removing its owned stage, independently of the completed-report size
+cap. Replaced or linked stages detected by validation are retained. Cache
+entries are capped at 128 bytes, preview panes at 64 KiB, and a completed
+report at 1 MiB. External `wg`, routing, resolver and provider output is
+bounded before it reaches a report.
 
 Retention admits only the reserved ASCII naming grammar with fixed-width
 timestamp fields, a 1–64 character hostname and an optional `.1` through
@@ -858,6 +905,7 @@ not establish native WireGuard, DNS or privileged-host acceptance.
 | File | Covered boundary |
 | --- | --- |
 | `vpn_cli_picker_contract.bats` | Directory decisions and valid nonterminal advice, canonical profile capture and exact snapshot membership through all seven owners, unsafe temporary-root refusal, grammar before runtime and sudo, privilege metadata and optional authentication, separate editor streams, and the existing isolated PTY foreground procedure |
+| `vpn_interrupt_bounds.bats` | Returned profile/MTU/WSL interruptions, qualified local timeout routing and byte limits, exact external argv and NUL transport, provider glob/privacy controls, counted partial rename, and oversized report cleanup with replacement/link controls |
 | `vpn.bats` | Shared helpers: resolv.conf preflight including symlink refusal, directory writability, name validation, cache pointers, WSL detection, DNS hook idempotency, and hardening of the lower-case and indented headers import accepts |
 | `vpn_contract.bats` | The frozen 22-command fixture, six-way parity including exact dispatcher arms and direct completion bindings, a host-independent command set, dispatcher coverage, cancellation, timing label, argument forwarding, invalid-argument statuses |
 | `vpn_interface.bats` | Double sourcing, standalone sourcing without the core runtime, loader failure without a false sentinel, one derived module root, stream separation, `${(V)}` label escaping, `NO_COLOR`, four-field records, `fzf` options, foreground process-group ownership in a pseudo-terminal, the index-only preview, pane permissions and cleanup, selection and target revalidation, the second-iteration loop-local reprint regression, per-command `--help` and bad-option status, lazy/eager parity, `emulate -L zsh` on every entry point with safe paths and a clean import that behave alike from default, hostile-option, and `emulate sh` callers, the header context block, canonical unavailable marks, and em-dash profile notes |

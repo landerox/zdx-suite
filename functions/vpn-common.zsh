@@ -452,6 +452,24 @@ _vpn_check_ip_stack() {
 
 # --- Bounded execution ------------------------------------------------------
 
+# Runs a suite-owned read-only external leaf. Data streams keep their existing
+# protocol; the capture owner validates status and bounds before consuming it.
+# Arbitrary shell callbacks and mutating commands do not use this adapter.
+_vpn_readonly_exec() {
+  local seconds="${1-}"
+  shift 2>/dev/null
+  [[ "$seconds" == <1-600> && ${#seconds} -le 3 ]] && (( $# > 0 )) \
+    || return 2
+  local program="$1"
+  shift
+  if [[ "$program" != /* ]]; then
+    program=$(whence -p -- "$program" 2>/dev/null) || return 127
+  fi
+  [[ "$program" == /* && "$program" != *[[:cntrl:]]* \
+    && -f "$program" && -x "$program" ]] || return 127
+  _vpn_run_with_timeout "$seconds" "$program" "$@" </dev/null 2>/dev/null
+}
+
 # Runs one external program with a deadline: status 124 on timeout, 2 for
 # invalid arguments, and 127 when the program is not on PATH. The program is
 # resolved to its absolute path, so a shell function or alias of the same name
@@ -1404,7 +1422,7 @@ _vpn_have_sudo_cache() {
   command -v sudo &>/dev/null || return 1
   local -a reply=()
   _vpn_privileged_argv true || return 1
-  command sudo -n "${reply[@]}" &>/dev/null
+  _vpn_readonly_exec 3 sudo -n "${reply[@]}" &>/dev/null
 }
 
 # Authenticates once, interactively, after printing why it is needed.
@@ -1462,36 +1480,37 @@ _vpn_sudo_exec() {
 # to reporting an unknown state rather than escalating.
 _vpn_sudo_probe() {
   (( $# > 0 )) || return 2
-  # This bounded mode is used only for the retained-copy inventory. Existing
-  # probes keep their established protocol until their owning change.
+  local probe_seconds=3 sudo_program=""
+  local -i explicit_timeout=0
+  # Retained-copy inventories keep their explicitly reviewed longer budget
+  # and raw data transport, including NUL-delimited find output.
   if [[ "$1" == --timeout ]]; then
     (( $# >= 3 )) || return 2
-    local probe_seconds="$2" sudo_program=""
+    probe_seconds="$2"
+    explicit_timeout=1
     [[ "$probe_seconds" == <1-600> && ${#probe_seconds} -le 3 ]] || return 2
     shift 2
     _vpn_bounded_ready || return 1
-    sudo_program=$(whence -p -- sudo 2>/dev/null) || return 1
-    [[ "$sudo_program" == /* && -f "$sudo_program" && -x "$sudo_program" ]] || return 1
-    local -a reply=() cache_argv=() probe_argv=()
-    _vpn_privileged_argv true || return 1
-    cache_argv=("${reply[@]}")
-    _vpn_privileged_argv "$@" || return 1
-    probe_argv=("${reply[@]}")
-    _vpn_run_with_timeout "$probe_seconds" "$sudo_program" -n \
-      "${cache_argv[@]}" </dev/null >/dev/null 2>&1 || return $?
-    _vpn_run_with_timeout "$probe_seconds" "$sudo_program" -n -- \
-      "${probe_argv[@]}" </dev/null 2>/dev/null
-    return $?
   fi
-  local -a reply=()
+  if (( ! explicit_timeout )); then
+    command -v sudo &>/dev/null || return 1
+  fi
+  sudo_program=$(whence -p -- sudo 2>/dev/null) || return 1
+  [[ "$sudo_program" == /* && "$sudo_program" != *[[:cntrl:]]* \
+    && -f "$sudo_program" && -x "$sudo_program" ]] || return 1
+  local -a reply=() cache_argv=() probe_argv=()
+  _vpn_privileged_argv true || return 1
+  cache_argv=("${reply[@]}")
   _vpn_privileged_argv "$@" || return 1
-  local -a privileged_argv=("${reply[@]}")
-  _vpn_have_sudo_cache || {
+  probe_argv=("${reply[@]}")
+  _vpn_readonly_exec "$probe_seconds" "$sudo_program" -n \
+    "${cache_argv[@]}" >/dev/null || {
     local -i cache_status=$?
-    (( cache_status == 130 || cache_status == 143 )) && return "$cache_status"
+    (( explicit_timeout || cache_status == 124 || cache_status == 130 || cache_status == 143 )) \
+      && return "$cache_status"
     return 1
   }
-  command sudo -n -- "${privileged_argv[@]}" 2>/dev/null
+  _vpn_readonly_exec "$probe_seconds" "$sudo_program" -n -- "${probe_argv[@]}"
 }
 
 # Announces the exact privileged operation before credentials are requested.
@@ -1699,7 +1718,7 @@ _vpn_wg_access_state() {
     return
   fi
 
-  if command wg show interfaces >/dev/null 2>&1; then
+  if _vpn_readonly_exec 3 wg show interfaces >/dev/null; then
     print -r -- "direct"
     return 0
   else
@@ -1901,11 +1920,11 @@ _vpn_run_wg() {
   local -x WG_HIDE_KEYS=always
   command -v wg &>/dev/null || return 1
 
-  if command wg "$@" 2>/dev/null; then
+  if _vpn_readonly_exec 3 wg "$@"; then
     return 0
   else
     local -i probe_status=$?
-    (( probe_status == 130 || probe_status == 143 )) && return "$probe_status"
+    (( probe_status == 124 || probe_status == 130 || probe_status == 143 )) && return "$probe_status"
   fi
 
   # macOS keeps the caller's PATH under sudo, so root runs only a validated
@@ -2263,7 +2282,9 @@ _vpn_iface_internal_addrs() {
     return
   fi
   command -v ip &>/dev/null || return 1
-  command ip -o addr show dev "$REPLY" 2>/dev/null | command awk '
+  local output=""
+  output=$(_vpn_readonly_exec 3 ip -o addr show dev "$REPLY") || return $?
+  print -r -- "$output" | command awk '
     {
       for (i = 1; i <= NF; i++) {
         if ($i == "inet" || $i == "inet6") {
@@ -2276,22 +2297,25 @@ _vpn_iface_internal_addrs() {
 _vpn_iface_endpoint() {
   local iface="${1:-}" REPLY=""
   _vpn_tunnel_device "$iface" || return 1
-  _vpn_run_wg show "$REPLY" endpoints 2>/dev/null \
-    | command awk 'NF >= 2 && $2 != "(none)" { print $2; exit }'
+  local output=""
+  output=$(_vpn_run_wg show "$REPLY" endpoints 2>/dev/null) || return $?
+  print -r -- "$output" | command awk 'NF >= 2 && $2 != "(none)" { print $2; exit }'
 }
 
 _vpn_iface_latest_handshake() {
   local iface="${1:-}" REPLY=""
   _vpn_tunnel_device "$iface" || return 1
-  _vpn_run_wg show "$REPLY" latest-handshakes 2>/dev/null \
-    | command awk '{ if ($2 + 0 > max) max = $2 + 0 } END { print max + 0 }'
+  local output=""
+  output=$(_vpn_run_wg show "$REPLY" latest-handshakes 2>/dev/null) || return $?
+  print -r -- "$output" | command awk '{ if ($2 + 0 > max) max = $2 + 0 } END { print max + 0 }'
 }
 
 _vpn_iface_transfer() {
   local iface="${1:-}" REPLY=""
   _vpn_tunnel_device "$iface" || return 1
-  _vpn_run_wg show "$REPLY" transfer 2>/dev/null \
-    | command awk '{ rx += $2; tx += $3 } END { printf "%d\t%d\n", rx + 0, tx + 0 }'
+  local output=""
+  output=$(_vpn_run_wg show "$REPLY" transfer 2>/dev/null) || return $?
+  print -r -- "$output" | command awk '{ rx += $2; tx += $3 } END { printf "%d\t%d\n", rx + 0, tx + 0 }'
 }
 
 _vpn_default_route() {
@@ -2300,7 +2324,9 @@ _vpn_default_route() {
     return
   fi
   command -v ip &>/dev/null || return 1
-  command ip route get 1.1.1.1 2>/dev/null | command head -1
+  local output=""
+  output=$(_vpn_readonly_exec 3 ip route get 1.1.1.1) || return $?
+  print -r -- "${output%%$'\n'*}"
 }
 
 # stdout: one system resolver address per line.
@@ -2310,7 +2336,7 @@ _vpn_dns_resolvers() {
     return
   fi
   [[ -r /etc/resolv.conf ]] || return 1
-  command awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf 2>/dev/null
+  _vpn_readonly_exec 3 awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf
 }
 
 # stdout: where the system resolvers come from, for reports and hints.
@@ -2344,7 +2370,7 @@ _vpn_human_bytes() {
 _vpn_human_age() {
   local ts=${1:-0}
   local now age
-  now=$(command date +%s 2>/dev/null) || {
+  now=$(_vpn_readonly_exec 3 date +%s) || {
     print -r -- "(unknown)"
     return 0
   }
@@ -2925,6 +2951,8 @@ _vpn_validate_provider_url() {
   [[ -n "$authority" && ${#authority} -le 320 \
     && "$authority" != *'@'* ]] || return 1
 
+  local suffix="${rest#"$authority"}"
+  [[ "$suffix" != *[\[\]\{\}]* ]] || return 1
   local host="$authority"
   local port=""
   if [[ "$authority" == \[* ]]; then

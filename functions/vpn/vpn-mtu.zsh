@@ -229,7 +229,7 @@ _vpn_mtu_egress_device() {
   local -a words=()
   if [[ "$_VPN_PLATFORM" == darwin ]]; then
     _vpn_check_cmd route || return 1
-    _vpn_mtu_capture out route -n get "$address" || return 1
+    _vpn_mtu_capture out route -n get "$address" || return $?
     local line=""
     for line in "${(@f)REPLY}"; do
       words=(${=line})
@@ -239,7 +239,7 @@ _vpn_mtu_egress_device() {
     done
   else
     _vpn_check_cmd ip || return 1
-    _vpn_mtu_capture out ip -4 route get "$address" || return 1
+    _vpn_mtu_capture out ip -4 route get "$address" || return $?
     words=(${=REPLY})
     local -i index=${words[(i)dev]}
     device="${words[index + 1]-}"
@@ -257,10 +257,10 @@ _vpn_mtu_device_mtu() {
   _vpn_mtu_validate_device "$device" || return 1
   if [[ "$_VPN_PLATFORM" == darwin ]]; then
     _vpn_check_cmd ifconfig || return 1
-    _vpn_mtu_capture out ifconfig "$device" || return 1
+    _vpn_mtu_capture out ifconfig "$device" || return $?
   else
     _vpn_check_cmd ip || return 1
-    _vpn_mtu_capture out ip -o link show dev "$device" || return 1
+    _vpn_mtu_capture out ip -o link show dev "$device" || return $?
   fi
   local -a words=(${=${REPLY%%$'\n'*}})
   local -i index=${words[(i)mtu]}
@@ -277,7 +277,7 @@ _vpn_mtu_wireguard_devices() {
   reply=()
   _vpn_check_cmd wg || return 1
   local REPLY=""
-  _vpn_mtu_capture out wg show interfaces || return 1
+  _vpn_mtu_capture out wg show interfaces || return $?
   local device
   for device in ${=REPLY}; do
     _vpn_mtu_validate_device "$device" || continue
@@ -447,9 +447,16 @@ _vpn_mtu_measure() {
   fi
   [[ -n "${mtu[address]}" ]] && mtu[probe_target]="${mtu[address]}"
 
-  if [[ -n "${mtu[address]}" ]] && _vpn_mtu_egress_device "${mtu[address]}"; then
-    mtu[egress_interface]="$REPLY"
-    _vpn_mtu_device_mtu "$REPLY" && mtu[egress_mtu]="$REPLY"
+  local -i context_status=0
+  if [[ -n "${mtu[address]}" ]]; then
+    _vpn_mtu_egress_device "${mtu[address]}" || context_status=$?
+    (( context_status == 130 || context_status == 143 )) && return "$context_status"
+    if (( context_status == 0 )); then
+      mtu[egress_interface]="$REPLY"
+      _vpn_mtu_device_mtu "$REPLY" || context_status=$?
+      (( context_status == 130 || context_status == 143 )) && return "$context_status"
+      (( context_status != 0 )) || mtu[egress_mtu]="$REPLY"
+    fi
   fi
 
   # Tunnel context from the unprivileged device list. A profile names a
@@ -472,11 +479,15 @@ _vpn_mtu_measure() {
     if [[ -z "${mtu[tunnel_interface]}" ]] && (( ${#wg_devices[@]} > 0 )); then
       mtu[tunnel_interface]="${wg_devices[1]}"
     fi
-    if [[ -n "${mtu[tunnel_interface]}" ]] \
-      && _vpn_mtu_device_mtu "${mtu[tunnel_interface]}"; then
-      mtu[tunnel_mtu]="$REPLY"
+    if [[ -n "${mtu[tunnel_interface]}" ]]; then
+      context_status=0
+      _vpn_mtu_device_mtu "${mtu[tunnel_interface]}" || context_status=$?
+      (( context_status == 130 || context_status == 143 )) && return "$context_status"
+      (( context_status != 0 )) || mtu[tunnel_mtu]="$REPLY"
     fi
   else
+    context_status=$?
+    (( context_status == 130 || context_status == 143 )) && return "$context_status"
     mtu[wg_unavailable]=1
   fi
 

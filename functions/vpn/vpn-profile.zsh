@@ -532,7 +532,11 @@ vpn-profile-rename() {
   fi
 
   _vpn_require_platform || return 1
-  _vpn_ensure_profile_access || return 1
+  _vpn_ensure_profile_access || {
+    local -i boundary_status=$?
+    (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+    return 1
+  }
 
   if [[ -z "$old_iface" ]]; then
     local picked
@@ -627,6 +631,9 @@ vpn-profile-rename() {
   if _vpn_active_interfaces; then
     active_known=1
     [[ " ${reply[*]} " == *" $old_iface "* ]] && old_active=1
+  else
+    local -i active_status=$?
+    (( active_status == 130 || active_status == 143 )) && return "$active_status"
   fi
 
   _vpn_header "Rename VPN Profile"
@@ -748,9 +755,17 @@ vpn-profile-rename() {
     _vpn_announce_privileged "${(j: :)${(@q)rollback_argv}} (rollback if $rollback_reason)"
   fi
   if (( old_active )); then
-    _vpn_tunnel_down "$old_iface" || return 1
+    _vpn_tunnel_down "$old_iface" || {
+      local -i boundary_status=$?
+      (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+      return 1
+    }
   fi
-  _vpn_ensure_sudo_access "Renaming the VPN profile" || return 1
+  _vpn_ensure_sudo_access "Renaming the VPN profile" || {
+    local -i boundary_status=$?
+    (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+    return 1
+  }
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
   local current_fingerprint
@@ -891,8 +906,8 @@ vpn-profile-rename() {
   fi
 
   if (( state_failures > 0 )); then
-    _vpn_count_noun "$state_failures" "saved choice"
-    _vpn_error "Rename completed, but $REPLY could not be updated."
+    local -i changes=$(( file_count + ${#followed[@]} ))
+    _vpn_error "Rename completed with partial failures: $state_failures of $changes changes failed."
     _vpn_mark_partial
     return 1
   fi
@@ -945,7 +960,11 @@ vpn-profile-remove() {
   fi
 
   _vpn_require_platform || return 1
-  _vpn_ensure_profile_access || return 1
+  _vpn_ensure_profile_access || {
+    local -i boundary_status=$?
+    (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+    return 1
+  }
 
   if [[ -z "$iface" ]]; then
     local picked
@@ -1033,6 +1052,9 @@ vpn-profile-remove() {
   if _vpn_active_interfaces; then
     active_known=1
     [[ " ${reply[*]} " == *" $iface "* ]] && profile_active=1
+  else
+    local -i active_status=$?
+    (( active_status == 130 || active_status == 143 )) && return "$active_status"
   fi
 
   _vpn_header "Remove VPN Profile"
@@ -1123,9 +1145,17 @@ vpn-profile-remove() {
     _vpn_announce_privileged "${(j: :)${(@q)undo_argv}}"
   fi
   if (( profile_active )); then
-    _vpn_tunnel_down "$iface" || return 1
+    _vpn_tunnel_down "$iface" || {
+      local -i boundary_status=$?
+      (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+      return 1
+    }
   fi
-  _vpn_ensure_sudo_access "Removing the VPN profile" || return 1
+  _vpn_ensure_sudo_access "Removing the VPN profile" || {
+    local -i boundary_status=$?
+    (( boundary_status == 130 || boundary_status == 143 )) && return "$boundary_status"
+    return 1
+  }
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
   local current_fingerprint
