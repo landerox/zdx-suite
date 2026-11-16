@@ -206,16 +206,35 @@ _dev_step_exec() {
     _zdx_step_exec "$@"
     return
   fi
+  (( $# > 0 )) || { reply=(); return 2; }
+  local _DEV_STEP_OUTCOME="" _DEV_STEP_DETAIL=""
+  local -i _DEV_STEP_SHELL=$ZSH_SUBSHELL
   local -i _dev_step_started=$SECONDS _dev_step_rc=0
   "$@" || _dev_step_rc=$?
-  local _dev_step_outcome=done
+  local _dev_step_outcome="${_DEV_STEP_OUTCOME:-done}"
+  local _dev_step_detail="$_DEV_STEP_DETAIL"
   case $_dev_step_rc in
     0) ;;
-    124) _dev_step_outcome=timed-out ;;
-    130|143) _dev_step_outcome=interrupted ;;
-    *) _dev_step_outcome=failed ;;
+    130|143)
+      case "$_dev_step_outcome" in
+        failed|blocked|interrupted|timed-out) ;;
+        *) _dev_step_detail="" ;;
+      esac
+      [[ -n "$_dev_step_detail" ]] || _dev_step_detail="status $_dev_step_rc"
+      _dev_step_outcome=interrupted
+      ;;
+    *)
+      case "$_dev_step_outcome" in
+        failed|blocked|interrupted|timed-out) ;;
+        *)
+          _dev_step_outcome=failed
+          (( _dev_step_rc == 124 )) && _dev_step_outcome=timed-out
+          _dev_step_detail="status $_dev_step_rc"
+          ;;
+      esac
+      ;;
   esac
-  reply=("$_dev_step_outcome" "" "$(( SECONDS - _dev_step_started ))")
+  reply=("$_dev_step_outcome" "$_dev_step_detail" "$(( SECONDS - _dev_step_started ))")
   return $_dev_step_rc
 }
 
@@ -225,11 +244,34 @@ _dev_step_exec() {
 # Usage: _dev_report_result <outcome> <detail> [standalone-message]
 _dev_report_result() {
   local outcome="${1:-}" detail="${2:-}" message="${3:-}"
+  case "$outcome" in
+    updated|current|done|passed|delegated|planned|skipped|not-run\
+      |failed|blocked|interrupted|timed-out) ;;
+    *) return 2 ;;
+  esac
+  detail="${detail//[[:cntrl:]]/ }"
+  (( ${#detail} > 160 )) && detail="${detail[1,159]}…"
+  # Only the check callback's own shell can export a captured skip. A later
+  # non-skip report clears an earlier skip; nested subshell reports cannot.
+  if (( ${+_DEV_CHECK_RESULT_SHELL} )) \
+    && (( _DEV_CHECK_RESULT_SHELL == ZSH_SUBSHELL )); then
+    _DEV_CHECK_RESULT_OUTCOME=none
+    _DEV_CHECK_RESULT_DETAIL=-
+    if [[ "$outcome" == skipped ]]; then
+      _DEV_CHECK_RESULT_OUTCOME=skipped
+      _DEV_CHECK_RESULT_DETAIL="${detail:-not applicable}"
+      return 0
+    fi
+  fi
   if (( ${+functions[_zdx_step_report]} )); then
     local -i report_rc=0
     _zdx_step_report "$outcome" "$detail" || report_rc=$?
     (( report_rc == 0 )) && return 0
     (( report_rc == 1 )) || return 2
+  elif (( ${+_DEV_STEP_SHELL} )) && (( _DEV_STEP_SHELL == ZSH_SUBSHELL )); then
+    _DEV_STEP_OUTCOME="$outcome"
+    _DEV_STEP_DETAIL="$detail"
+    return 0
   fi
   [[ -n "$message" ]] || return 0
   case "$outcome" in
@@ -2864,6 +2906,7 @@ _dev_run_task_batch() {
   shift
   local -a tasks=("$@") summary_records=() failed_tasks=() reply=()
   local -i total=${#tasks[@]} index=0 failures=0 interrupted_status=0
+  local -i passed_tasks=0 skipped_tasks=0
   local -i task_status=0
   local task outcome detail seconds REPLY
 
@@ -2890,7 +2933,14 @@ _dev_run_task_batch() {
     [[ "$outcome" == done && "$task" == dev-run-* ]] && outcome=passed
     _dev_step_result "$index" "$total" "$task" "$outcome" "$detail" "$seconds"
     summary_records+=("$task"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
-    (( task_status == 0 )) && continue
+    if (( task_status == 0 )); then
+      if [[ "$outcome" == skipped || "$outcome" == not-run ]]; then
+        (( ++skipped_tasks ))
+      else
+        (( ++passed_tasks ))
+      fi
+      continue
+    fi
     (( ++failures ))
     if (( task_status == 130 || task_status == 143 )); then
       interrupted_status=$task_status
@@ -2907,7 +2957,15 @@ _dev_run_task_batch() {
     return $interrupted_status
   fi
   if (( failures == 0 )); then
-    if (( total == 1 )); then
+    if (( skipped_tasks && ! passed_tasks )); then
+      _dev_count_noun "$skipped_tasks" task
+      _dev_info "$REPLY skipped."
+    elif (( skipped_tasks )); then
+      _dev_count_noun "$passed_tasks" task
+      local passed_label="$REPLY"
+      _dev_count_noun "$skipped_tasks" task
+      _dev_info "$passed_label completed; $REPLY skipped."
+    elif (( total == 1 )); then
       _dev_success "The only task completed successfully."
     else
       _dev_success "All $REPLY completed successfully."

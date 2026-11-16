@@ -150,7 +150,8 @@ dev-run-bandit() {
   local -a python_files=("${reply[@]}")
 
   if (( ${#python_files[@]} == 0 )); then
-    _dev_info "No Python files found in this project."
+    _dev_report_result skipped "no Python files" \
+      "No Python files found in this project."
     return 0
   fi
 
@@ -167,6 +168,7 @@ dev-run-bandit() {
     "${runner[@]}" "-${severity}" "-${confidence}" --format txt -- \
       "${batch[@]}"
     batch_status=$?
+    (( batch_status == 130 || batch_status == 143 )) && return $batch_status
     (( batch_status != 0 && exit_code == 0 )) && exit_code=$batch_status
     offset=$(( offset + 64 ))
   done
