@@ -1946,7 +1946,7 @@ combined direct dependencies.
 
 - **All Checks (`dev-run-all-checks`)**: Detect the project's stack and run every applicable gate as a numbered step, then print a `Check Results` table. A failing gate shows the last lines of its output right away; add `--verbose` to see each tool's complete output as it runs.
 - **Pre-commit Hooks (`dev-run-hooks`)**: Run the configured file-stage hooks across all files by default, or forward an explicit pre-commit selection. Hooks rewrite files by design. The runner must already be installed in the exact project `.venv`; a global pre-commit executable is never used.
-- **Type Checkers (`dev-check-types`)**: Run every type checker the project declares (`ty` or `pyright` in its dependencies, or a `pyrightconfig.json`), falling back to an installed `ty` or `pyright` only when neither is declared, and fail if any of them does.
+- **Type Checkers (`dev-check-types`)**: Run every type checker the project declares (`ty` or `pyright` in its dependencies, or a regular non-symlink `pyrightconfig.json`), falling back to an installed `ty` or `pyright` only when neither is declared, and fail if any of them does. All Checks includes the same configured checkers.
 - **Ruff (`dev-run-ruff` / `dev-run-ruff-format`)**: Fast linting, and separately, in-place formatting. Lint mode rejects writing flags and removes inherited `RUFF_OUTPUT_FILE`.
 - **Other gates**: `dev-run-shellcheck` (ShellCheck for sh/bash plus `zsh -n` for `.zsh`), `dev-run-markdownlint`, and `dev-run-tflint`. A `package.json` or `Cargo.toml` adds no gate; run the project's own JavaScript or Rust tooling.
 
@@ -1963,6 +1963,11 @@ command warns that `.tofu` files are not linted; the menu header shows such a
 project as `opentofu`.
 `dev-check-types` accepts no arguments, so no caller option can reach its type
 checkers.
+
+Gates with no applicable input appear as skipped in All Checks and menu
+batches. Their zero status contributes to the skipped count rather than a
+passed check. A returned interruption status stops ShellCheck or Bandit
+batches immediately and leaves later aggregate gates marked as not run.
 
 Bandit and ShellCheck share one NUL-safe collector that prunes generated trees
 and nested repositories, fails on discovery errors, limits the inventory to 512
@@ -2003,6 +2008,10 @@ as the documented no-tests no-op; explicit pytest arguments preserve that
 status. Test detection also recognizes `pytest.toml`, `.pytest.toml`,
 `pytest.ini`, `.pytest.ini`, and qualifying pytest tables or sections in
 `pyproject.toml`, `tox.ini`, and `setup.cfg`.
+Selected configuration must be a readable regular file rather than a symlink,
+and is limited to 2 MiB. Explicit pytest operands bypass this discovery.
+For `dev-run-tests`, an implicit no-tests result appears as skipped in an
+aggregate or menu batch.
 
 ### 🛡️ Security Audits
 

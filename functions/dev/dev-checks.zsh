@@ -4,7 +4,8 @@
 # =============================================================================
 #
 # Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, dev-report.zsh,
-# and dev-pypi.zsh.
+# dev-pypi.zsh, and dev-update-transaction.zsh. The latter's workspace
+# services are used at call time for captured check results.
 # Safe to re-source; defines functions only.
 #
 
@@ -125,6 +126,10 @@ dev-check-outdated() {
     for line in "${(@f)outdated_output}"; do
       fields=(${=line})
       (( ${#fields[@]} > 0 )) || continue
+      # uv's columns are data only after its exact header/separator rows.
+      [[ "${(j: :)fields}" == 'Package Version Latest Type' \
+        || "${(j: :)fields}" == 'Package Version Latest' \
+        || "${(j::)fields}" != *[^-]* ]] && continue
       installed_name="${fields[1]}"
       installed_normalized=$(
         _dev_normalize_pkg_name "$installed_name" 2>/dev/null
@@ -795,6 +800,11 @@ _dev_run_pyright() {
   return $exit_code
 }
 
+# A linked configuration does not declare project ownership of Pyright.
+_dev_has_pyright_config() {
+  [[ -f pyrightconfig.json && ! -L pyrightconfig.json ]]
+}
+
 # dev-check-types
 #   Arguments: --help only.
 #   Effects:   read-only. Runs every type checker the project configures.
@@ -836,7 +846,7 @@ dev-check-types() {
     (( dependency_status == 2 )) && return 1
     (( dependency_status == 0 )) && has_pyright=1
   fi
-  [[ -f "pyrightconfig.json" ]] && has_pyright=1
+  _dev_has_pyright_config && has_pyright=1
 
   if (( ! has_ty && ! has_pyright )); then
     _dev_have_command ty && has_ty=1
@@ -928,7 +938,8 @@ _dev_run_ruff_mode() {
   _dev_project_has_files '*.py' || python_probe_status=$?
   (( python_probe_status == 2 )) && return 1
   if (( python_probe_status == 1 )); then
-    _dev_info "No Python files found in this project."
+    _dev_report_result skipped "no Python files" \
+      "No Python files found in this project."
     return 0
   fi
 
@@ -1055,7 +1066,8 @@ dev-run-tflint() {
   _dev_project_has_files '*.tf' || terraform_probe_status=$?
   (( terraform_probe_status == 2 )) && return 1
   if (( terraform_probe_status == 1 )); then
-    _dev_info "No Terraform files found in this project."
+    _dev_report_result skipped "no Terraform files" \
+      "No Terraform files found in this project."
     return 0
   fi
 
@@ -1141,7 +1153,8 @@ dev-run-markdownlint() {
   _dev_project_files 512 '*.md' || return 1
   local -a markdown_files=("${reply[@]}")
   if (( ${#markdown_files[@]} == 0 )); then
-    _dev_info "No Markdown files found in this project."
+    _dev_report_result skipped "no Markdown files" \
+      "No Markdown files found in this project."
     return 0
   fi
 
@@ -1203,7 +1216,8 @@ dev-run-shellcheck() {
   local -a files=("${reply[@]}")
 
   if (( ${#files[@]} == 0 )); then
-    _dev_info "No shell files (.sh, .bash, .zsh) found in this project."
+    _dev_report_result skipped "no shell files" \
+      "No shell files (.sh, .bash, .zsh) found in this project."
     return 0
   fi
 
@@ -1228,7 +1242,10 @@ dev-run-shellcheck() {
     local -a batch=()
     while (( offset <= ${#posix_files[@]} )); do
       batch=("${posix_files[@][$offset,$(( offset + 63 ))]}")
-      command shellcheck -- "${batch[@]}" >&2 || shellcheck_status=1
+      local -i batch_status=0
+      command shellcheck -- "${batch[@]}" >&2 || batch_status=$?
+      (( batch_status == 130 || batch_status == 143 )) && return $batch_status
+      (( batch_status == 0 )) || shellcheck_status=1
       offset=$(( offset + 64 ))
     done
   fi
@@ -1238,7 +1255,10 @@ dev-run-shellcheck() {
     _dev_info "Parsing $REPLY with zsh -n..."
     for candidate in "${zsh_files[@]}"; do
       _dev_debug "zsh -n $candidate"
-      command zsh -n -- "$candidate" >&2 || parse_status=1
+      local -i candidate_status=0
+      command zsh -n -- "$candidate" >&2 || candidate_status=$?
+      (( candidate_status == 130 || candidate_status == 143 )) && return $candidate_status
+      (( candidate_status == 0 )) || parse_status=1
     done
   fi
 
@@ -1275,8 +1295,8 @@ _dev_has_pytest_config() {
 
   for config_file in "${config_files[@]}"; do
     [[ -e "$config_file" || -L "$config_file" ]] || continue
-    if [[ ! -f "$config_file" || ! -r "$config_file" ]]; then
-      _dev_error "Pytest configuration is not a readable regular file: $config_file"
+    if [[ ! -f "$config_file" || -L "$config_file" || ! -r "$config_file" ]]; then
+      _dev_error "Pytest configuration is not a readable regular non-symlink file: $config_file"
       return 2
     fi
     config_size=$(zstat +size -- "$config_file" 2>/dev/null) || {
@@ -1321,15 +1341,29 @@ def read_bounded(filename):
     flags = os.O_RDONLY
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(filename, flags)
     try:
         metadata = os.fstat(descriptor)
+        named_before = os.lstat(filename)
         if not stat.S_ISREG(metadata.st_mode) \
+                or not stat.S_ISREG(named_before.st_mode) \
+                or (named_before.st_dev, named_before.st_ino) \
+                != (metadata.st_dev, metadata.st_ino) \
                 or metadata.st_size > MAX_CONFIG_SIZE:
             raise ValueError
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
             payload = handle.read(MAX_CONFIG_SIZE + 1)
         if len(payload) > MAX_CONFIG_SIZE:
+            raise ValueError
+        after = os.fstat(descriptor)
+        named_after = os.lstat(filename)
+        def identity(value):
+            return (value.st_dev, value.st_ino, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns, value.st_mode)
+        if identity(metadata) != identity(after) \
+                or identity(after) != identity(named_after) \
+                or len(payload) != metadata.st_size:
             raise ValueError
         return payload
     finally:
@@ -1418,7 +1452,8 @@ dev-run-tests() {
     case "$test_probe_status" in
       0) ;;
       1)
-        _dev_info "No test files or pytest configuration found in this project."
+        _dev_report_result skipped "no tests or pytest configuration" \
+          "No test files or pytest configuration found in this project."
         return 0
         ;;
       *) return 1 ;;
@@ -1435,7 +1470,8 @@ dev-run-tests() {
   local -i exit_code=$?
 
   if (( exit_code == 5 && ! explicit_pytest_arguments )); then
-    _dev_info "Pytest collected no tests; nothing to run."
+    _dev_report_result skipped "pytest collected no tests" \
+      "Pytest collected no tests; nothing to run."
     return 0
   fi
 
@@ -1611,6 +1647,176 @@ dev-run-coverage() {
 
 # --- Consolidated quality gate ----------------------------------------------
 
+# Checks own this completed-result file; the existing update workspace owns
+# its lifetime. REPLY is its device:inode, never captured UI or Core state.
+_dev_check_result_file() {
+  emulate -L zsh
+  local result_file="$1" expected_id="$2"
+  shift 2
+  (( $# == 4 )) || return 1
+  _dev_update_workspace_validate "$@" || return 1
+  [[ "$result_file" == "$3/result" && ! -L "$result_file" ]] || return 1
+  local -A directory=() state=()
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  zstat -LH directory -- "$3" 2>/dev/null \
+    && zstat -LH state -- "$result_file" 2>/dev/null || return 1
+  (( (directory[mode] & 8#7777) == 8#700 \
+    && (state[mode] & 8#170000) == 8#100000 \
+    && (state[mode] & 8#7777) == 8#600 \
+    && state[uid] == EUID && state[nlink] == 1 \
+    && state[size] >= 0 && state[size] <= 512 )) || return 1
+  REPLY="${state[device]}:${state[inode]}"
+  [[ -z "$expected_id" || "$REPLY" == "$expected_id" ]]
+}
+
+# Writes exactly one completed record after the command returns. The frame is
+# bounded in characters and bytes; removing a suffix never splits a character.
+_dev_check_result_write() {
+  emulate -L zsh
+  local result_file="$1" expected_id="$2"
+  shift 2
+  local outcome="$_DEV_CHECK_RESULT_OUTCOME" detail="$_DEV_CHECK_RESULT_DETAIL"
+  [[ "$outcome" == none || "$outcome" == skipped ]] || return 1
+  if [[ "$outcome" == none ]]; then
+    detail=-
+  else
+    detail="${detail//[[:cntrl:]]/ }"
+    [[ -n "$detail" ]] || detail='not applicable'
+    detail="${detail[1,160]}"
+  fi
+  local frame="" REPLY=""
+  local -i frame_bytes=0 result_fd=-1 close_rc=0
+  while true; do
+    frame=$'completed\t'"$outcome"$'\t'"$detail"$'\n'
+    () { setopt LOCAL_OPTIONS; unsetopt MULTIBYTE; frame_bytes=${#frame}; }
+    (( frame_bytes <= 512 )) && break
+    detail="${detail[1,-2]}"
+  done
+  _dev_check_result_file "$result_file" "$expected_id" "$@" || return 1
+  zmodload -F zsh/system b:sysopen 2>/dev/null || return 1
+  sysopen -w -o nofollow,nonblock,cloexec -u result_fd \
+    -- "$result_file" 2>/dev/null || return 1
+  {
+    local -A opened=()
+    zstat -H opened -f "$(( result_fd ))" 2>/dev/null || return 1
+    [[ "${opened[device]}:${opened[inode]}" == "$expected_id" ]] \
+      && (( opened[size] == 0 )) || return 1
+    _dev_check_result_file "$result_file" "$expected_id" "$@" || return 1
+    print -rn -- "$frame" 1>&$(( result_fd )) || return 1
+  } always {
+    exec {result_fd}>&- || close_rc=1
+  }
+  (( close_rc == 0 )) || return 1
+  _dev_check_result_file "$result_file" "$expected_id" "$@" || return 1
+  local -A completed=()
+  zstat -LH completed -- "$result_file" 2>/dev/null || return 1
+  (( completed[size] == frame_bytes ))
+}
+
+# reply=(none|skipped detail), only after one complete bounded stable read.
+_dev_check_result_read() {
+  emulate -L zsh
+  local result_file="$1" expected_id="$2"
+  shift 2
+  reply=()
+  local REPLY="" record="" line="" outcome="" detail=""
+  local -i result_fd=-1 record_bytes=0 close_rc=0
+  _dev_check_result_file "$result_file" "$expected_id" "$@" || return 1
+  zmodload -F zsh/system b:sysopen b:sysread 2>/dev/null || return 1
+  sysopen -r -o nofollow,nonblock,cloexec -u result_fd \
+    -- "$result_file" 2>/dev/null || return 1
+  {
+    local -A opened=() after=()
+    zstat -H opened -f "$(( result_fd ))" 2>/dev/null || return 1
+    [[ "${opened[device]}:${opened[inode]}" == "$expected_id" ]] || return 1
+    sysread -i "$(( result_fd ))" -s 513 record 2>/dev/null || return 1
+    () { setopt LOCAL_OPTIONS; unsetopt MULTIBYTE; record_bytes=${#record}; }
+    (( record_bytes > 0 && record_bytes <= 512 \
+      && record_bytes == opened[size] )) || return 1
+    zstat -H after -f "$(( result_fd ))" 2>/dev/null || return 1
+    [[ "${after[device]}:${after[inode]}:${after[size]}:${after[mtime]}:${after[ctime]}" \
+      == "${opened[device]}:${opened[inode]}:${opened[size]}:${opened[mtime]}:${opened[ctime]}" ]] \
+      || return 1
+    _dev_check_result_file "$result_file" "$expected_id" "$@" || return 1
+  } always {
+    exec {result_fd}<&- || close_rc=1
+  }
+  (( close_rc == 0 )) || return 1
+  [[ "$record" == *$'\n' ]] || return 1
+  line="${record%$'\n'}"
+  [[ "$line" != *$'\n'* && "$line" == $'completed\t'* ]] || return 1
+  line="${line#*$'\t'}"
+  [[ "$line" == *$'\t'* ]] || return 1
+  outcome="${line%%$'\t'*}"
+  detail="${line#*$'\t'}"
+  [[ "$detail" != *[[:cntrl:]]* ]] || return 1
+  case "$outcome" in
+    none) [[ "$detail" == - ]] || return 1 ;;
+    skipped) (( ${#detail} > 0 && ${#detail} <= 160 )) || return 1 ;;
+    *) return 1 ;;
+  esac
+  reply=("$outcome" "$detail")
+}
+
+# This receiver exists in the actual captured callback's shell only. The
+# command status is saved before transport work and always wins when nonzero.
+_dev_check_capture_callback() {
+  local result_file="$1" result_identity="$2"
+  local -a result_workspace=("${@[3,6]}")
+  shift 6
+  local -i _DEV_CHECK_RESULT_SHELL=$ZSH_SUBSHELL command_rc=0 write_rc=0
+  local _DEV_CHECK_RESULT_OUTCOME=none _DEV_CHECK_RESULT_DETAIL=-
+  "$@" || command_rc=$?
+  _dev_check_result_write "$result_file" "$result_identity" \
+    "${result_workspace[@]}" || write_rc=$?
+  (( command_rc == 0 )) || return $command_rc
+  (( write_rc == 0 )) || return 1
+  return 0
+}
+
+# Only the quality coordinator uses this transport. Core capture keeps its
+# closed stdin, child isolation, replay and status policy unchanged.
+_dev_check_run_captured() {
+  local display="$1"
+  shift
+  local -a reply=() result_workspace=()
+  _dev_update_workspace_create || return 1
+  result_workspace=("${reply[@]}")
+  local result_file="${result_workspace[3]}/result" result_identity="" REPLY=""
+  local result_outcome=none result_detail=-
+  local -i capture_rc=0 cleanup_rc=0
+  {
+    if (umask 077; setopt NOCLOBBER; : > "$result_file") \
+      && _dev_check_result_file "$result_file" "" "${result_workspace[@]}"; then
+      result_identity="$REPLY"
+      _dev_run_captured "$display" _dev_check_capture_callback \
+        "$result_file" "$result_identity" "${result_workspace[@]}" "$@" \
+        || capture_rc=$?
+      if (( capture_rc == 0 )); then
+        if _dev_check_result_read "$result_file" "$result_identity" \
+          "${result_workspace[@]}"; then
+          result_outcome="${reply[1]}"
+          result_detail="${reply[2]}"
+        else
+          _dev_error "Could not validate the completed check result."
+          capture_rc=1
+        fi
+      fi
+    else
+      _dev_error "Could not prepare a private check result."
+      capture_rc=1
+    fi
+  } always {
+    _dev_update_workspace_cleanup "${result_workspace[@]}" || cleanup_rc=$?
+  }
+  (( capture_rc == 0 )) || return $capture_rc
+  (( cleanup_rc == 0 )) || return 1
+  if [[ "$result_outcome" == skipped ]]; then
+    _dev_report_result skipped "$result_detail" || return 1
+  fi
+  return 0
+}
+
 # Runs one check as a gate step: a banner, its output captured privately and
 # replayed only when the check fails, and one result line. It records the
 # caller's dynamically scoped check_index, check_total, summary_records,
@@ -1635,7 +1841,7 @@ _dev_run_check() {
   fi
   local -a reply=()
   local -i check_status=0
-  _dev_step_exec _dev_run_captured "$*" "$@" || check_status=$?
+  _dev_step_exec _dev_check_run_captured "$*" "$@" || check_status=$?
   local outcome="${reply[1]:-done}" detail="${reply[2]:-}"
   local seconds="${reply[3]:-}"
   # A gate that finishes without its own result has passed.
@@ -1643,7 +1849,14 @@ _dev_run_check() {
   _dev_step_result "$check_index" "$check_total" "$label" "$outcome" \
     "$detail" "$seconds"
   summary_records+=("$label"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")
-  (( check_status == 0 )) && return 0
+  if (( check_status == 0 )); then
+    if [[ "$outcome" == skipped || "$outcome" == not-run ]]; then
+      (( ++skipped_checks ))
+    else
+      (( ++passed_checks ))
+    fi
+    return 0
+  fi
   if (( check_status == 130 || check_status == 143 )); then
     interrupted_status=$check_status
   else
@@ -1705,8 +1918,9 @@ dev-run-all-checks() {
       _dev_pyproject_has_dep "pyright" || type_dependency_status=$?
       (( type_dependency_status == 2 )) && return 1
     fi
-    (( type_dependency_status == 0 )) \
-      && checks+=($'Type checker\tdev-check-types')
+    if (( type_dependency_status == 0 )) || _dev_has_pyright_config; then
+      checks+=($'Type checker\tdev-check-types')
+    fi
 
     [[ -d ".venv" ]] && checks+=($'pip-audit (CVE)\tdev-run-audit')
     checks+=($'Bandit (SAST)\tdev-run-bandit')
@@ -1743,6 +1957,7 @@ dev-run-all-checks() {
   fi
 
   local -i check_index=0 check_total=${#checks[@]} interrupted_status=0
+  local -i passed_checks=0 skipped_checks=0
   local -a summary_records=() failed_checks=()
   local check
   for check in "${checks[@]}"; do
@@ -1759,7 +1974,15 @@ dev-run-all-checks() {
     return $interrupted_status
   fi
   if (( ${#failed_checks[@]} == 0 )); then
-    if (( check_total == 1 )); then
+    if (( skipped_checks && ! passed_checks )); then
+      _dev_count_noun "$skipped_checks" check
+      _dev_info "$REPLY skipped."
+    elif (( skipped_checks )); then
+      _dev_count_noun "$passed_checks" check
+      local passed_label="$REPLY"
+      _dev_count_noun "$skipped_checks" check
+      _dev_info "$passed_label passed; $REPLY skipped."
+    elif (( check_total == 1 )); then
       _dev_success "The only check passed."
     else
       _dev_success "All $REPLY passed."
@@ -1768,6 +1991,9 @@ dev-run-all-checks() {
   fi
 
   _dev_error "${#failed_checks[@]} of $REPLY failed."
+  if (( passed_checks > 0 && ${+functions[_zdx_timed_mark_partial]} )); then
+    _zdx_timed_mark_partial 2>/dev/null || true
+  fi
   _dev_info "Run a failing check directly for its complete output:"
   local failed_check
   for failed_check in "${(@u)failed_checks}"; do

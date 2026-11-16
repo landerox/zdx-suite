@@ -1861,6 +1861,22 @@ in a compromised release channel and then installed, potentially as root.
   Windows launcher on the appended `PATH` cannot stand in for a missing
   backend. A project or state directory on a DrvFs drive without metadata
   reports mode `777` and stays refused as private state.
+- Developer pytest discovery rejects linked root configuration. Content
+  inspection opens a no-follow descriptor, limits the complete read to 2 MiB,
+  and compares the named file and descriptor identities before and after the
+  read. Dedicated pytest configuration retains its precedence and explicit
+  pytest operands bypass discovery. These checks constrain metadata reads;
+  running the selected tests remains a project-code trust decision.
+- Captured Developer quality checks carry a completed skip outcome through
+  their own result file in the existing identity-checked temporary workspace.
+  The file must remain owned, mode `600`, regular, single-link and bound to its
+  original device/inode; the workspace remains mode `700`. The bounded reader
+  accepts one complete framed record of at most 512 bytes, with control-free
+  detail. Invalid or missing results and failed cleanup fail an otherwise
+  successful check.
+  Primary command failures, timeouts and interruptions remain authoritative.
+  Core capture, closed stdin, isolation and redacted replay stay in force.
+  This is a check/use identity control, not a sandbox against same-user code.
 - System cleanup runs every pip probe (`--version`, `cache dir`) and the pip
   cache purge from `/` in a subshell, and runs `python3 -m pip` with
   `PYTHONSAFEPATH=1`, so a `pip.py` or `pip/` package in the caller's working

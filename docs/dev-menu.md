@@ -211,12 +211,14 @@ cannot rewrite files in `node_modules`, vendored or generated trees, or nested
 repositories.
 
 `dev-check-types` runs every type checker the project declares (`ty` or
-`pyright` in its dependencies, or a `pyrightconfig.json`) and falls back to an
+`pyright` in its dependencies, or a regular non-symlink `pyrightconfig.json`)
+and falls back to an
 installed `ty` or `pyright` only when neither is declared. Each checker
 resolves its backend through `_dev_python_tool_runner`.
 
 `dev-run-all-checks` gates Python sources with Ruff, type checking (when `ty`
-or `pyright` is declared), pip-audit (with a `.venv`), and Bandit, then adds
+or `pyright` is declared, including that Pyright configuration), pip-audit
+(with a `.venv`), and Bandit, then adds
 tests, configured pre-commit hooks, TFLint, ShellCheck, and Markdownlint when
 their inputs exist. A `package.json` or `Cargo.toml` adds no gate; the suite
 has no JavaScript or Rust linter. It runs each applicable gate as a step of
@@ -228,6 +230,22 @@ every gate, and the verdict names the commands that rerun the failing gates.
 or authorization. A gate that returns `130` or `143` stops the aggregate:
 later gates are listed as not run and that status is returned.
 `dev-check-types` preserves it the same way.
+ShellCheck and Bandit also stop their file batches immediately on either
+status, preserving the returned status before another batch or gate starts.
+
+An input-free Ruff, ShellCheck, Markdownlint, TFLint, test, or Bandit gate
+returns zero with a skipped outcome. Aggregates and menu batches count those
+outcomes separately from passed checks or completed tasks. An all-skipped
+verdict states the skipped count; a mixed verdict states both counts. An
+ordinary failure alongside a passed check marks the existing aggregate timer
+as partial; a skipped check alone supplies no successful-work evidence.
+
+Captured checks carry only their completed skip outcome through a private
+result file in the existing Dev transaction workspace. Its ownership, private
+modes, single-link regular type, frozen identity, bounded complete record and
+cleanup are validated. Invalid or missing results fail an otherwise successful
+check; a primary command failure, timeout or interruption keeps its status.
+Capture retains its closed stdin, child isolation and redacted replay policy.
 
 `dev-run-tflint` runs `tflint --recursive` without initializing plugins.
 Plugin initialization is a separate remote-code action selected with `--init`;
@@ -266,13 +284,19 @@ error still fails closed.
 ### Tests
 
 `dev-run-tests` and `dev-run-coverage` require a real project `.venv` whose
-interpreter reports that exact environment as `sys.prefix`. Both report a clean
-no-op when the project declares no tests. Root detection recognizes
+interpreter reports that exact environment as `sys.prefix`. Both report a
+clean no-op when the project declares no tests. `dev-run-tests` reports that
+outcome as skipped in an aggregate or menu batch. Root detection recognizes
 `pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, qualifying
 `pyproject.toml`, `tox.ini`, and `setup.cfg` configuration in pytest precedence
 order, in addition to conventional test filenames. A no-argument pytest run that
 collects no tests (status `5`) is also a documented no-op; status `5` is
-preserved when the caller supplied explicit pytest arguments.
+preserved when the caller supplied explicit pytest arguments. Selected root
+configuration must be readable, regular and non-symlink, and at most 2 MiB.
+Content inspection uses a no-follow descriptor and verifies its identity and
+complete bounded read against the named file before and after inspection.
+Dedicated pytest configuration retains precedence without requiring a TOML
+parser. Explicit pytest operands bypass this discovery.
 `dev-run-coverage` accepts `--html` and `--fail-under=N`; every other argument
 is forwarded to pytest unchanged. Tests execute pytest only through the exact
 project interpreter or an executable proven to remain inside `.venv`.
@@ -293,6 +317,9 @@ an undeclared Bandit may fall back to a global binary or opt-in `uvx`.
 upgrading `.venv`; non-interactive use requires `--fix --yes`.
 
 ### Dependencies and toolchain
+
+Outdated-package queries retain real distribution rows, including a package
+named `package`, while excluding uv's column headers and separators.
 
 | Command | Class | Notes |
 | --- | --- | --- |

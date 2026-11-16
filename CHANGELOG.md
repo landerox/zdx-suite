@@ -8,6 +8,10 @@ verification, and remaining limitations.
 
 ### Security
 
+- Developer: reject linked or changed pytest configuration during bounded
+  inspection, and validate completed captured-check results through private,
+  identity-bound files without overriding a primary failure or interruption.
+
 - VPN: refuse active or unknown `SaveConfig` profile mutations, bind tool
   execution and timeout backends to WSL eligibility, retain unsafe private
   directory modes unchanged, and place DNS hooks inside the actual Interface
@@ -237,6 +241,11 @@ verification, and remaining limitations.
   the context per workflow.
 
 ### Fixed
+
+- Developer: preserve interrupted ShellCheck and Bandit batches, distinguish
+  skipped checks from passed work in aggregate and menu results, include
+  configuration-only Pyright in aggregate plans, and exclude uv table headers
+  without hiding a distribution named `package`.
 
 - VPN: capture profile selections privately and validate the offered snapshot,
   reject empty and surplus operands before probes, keep editor output on
