@@ -119,9 +119,12 @@ vpn-access-status() {
   dir=$(_vpn_config_dir)
 
   local dir_meta=""
-  if [[ -d "$dir" ]]; then
-    dir_meta=$(command stat -c '%A %a %U %G' "$dir" 2>/dev/null) \
-      || dir_meta=$(command stat -f '%Sp %Lp %Su %Sg' "$dir" 2>/dev/null)
+  local -A directory_metadata=()
+  if [[ -d "$dir" ]] && zmodload -F zsh/stat b:zstat 2>/dev/null \
+    && zstat -H directory_metadata -- "$dir" 2>/dev/null; then
+    builtin printf -v dir_meta '%o (uid: %s, gid: %s)' \
+      "$(( directory_metadata[mode] & 8#7777 ))" \
+      "${directory_metadata[uid]}" "${directory_metadata[gid]}"
   fi
 
   local REPLY=""

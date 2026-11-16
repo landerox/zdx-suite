@@ -119,16 +119,28 @@ ipv6_gate() {
 }
 
 @test "vpn wsl: the platform, the IPv6 gate, and the report share one WSL detector" {
-  # A WSL kernel without WSL_DISTRO_NAME, as in a service or su session.
+  # A Linux service session has explicit interop evidence, without a distro
+  # marker. Do not simulate /proc text through an obsolete grep interception.
   unset WSL_DISTRO_NAME
-  cat > "$TEST_MOCK_BIN/grep" <<EOF
-#!$BASH
-for argument in "\$@"; do
-  [[ "\$argument" == /proc/version ]] && exit 0
+  export WSL_INTEROP=fixture-interop
+  export VPN_WSL_KERNEL_GREP_CALLS="$HOME/wsl-kernel-grep.calls" VPN_WSL_REAL_GREP
+  VPN_WSL_REAL_GREP=$(type -P -- grep) || return 1
+  [[ "$VPN_WSL_REAL_GREP" == /* && -f "$VPN_WSL_REAL_GREP" && -x "$VPN_WSL_REAL_GREP" ]] || return 1
+  printf '#!%s\n' "$BASH" > "$TEST_MOCK_BIN/grep" || return 1
+  cat >> "$TEST_MOCK_BIN/grep" <<'MOCK'
+for argument in "$@"; do
+  if [[ "$argument" == /proc/version || "$argument" == /proc/sys/kernel/osrelease ]]; then
+    printf '%s\0' "$#" "$0" "$@" >> "$VPN_WSL_KERNEL_GREP_CALLS" || exit 98
+    exit 97
+  fi
 done
-exec /usr/bin/grep "\$@"
-EOF
-  chmod 755 "$TEST_MOCK_BIN/grep"
+exec "$VPN_WSL_REAL_GREP" "$@"
+MOCK
+  chmod -- 700 "$TEST_MOCK_BIN/grep" || return 1
+  run "$TEST_MOCK_BIN/grep" -q microsoft /proc/version
+  [ "$status" -eq 97 ] || return 1
+  [[ -s "$VPN_WSL_KERNEL_GREP_CALLS" ]] || return 1
+  rm -- "$VPN_WSL_KERNEL_GREP_CALLS" || return 1
 
   run run_zsh '
     _vpn_check_ip_stack() { return 0; }
@@ -140,15 +152,15 @@ EOF
   '
 
   [ "$status" -eq 0 ]
+  [[ ! -e "$VPN_WSL_KERNEL_GREP_CALLS" ]] || return 1
   local report
   report=$(find "$VPN_MENU_REPORT_DIR" -name 'vpn-report-*.md' -type f)
   grep -Fq -- '- **Platform:** wsl' "$report"
   grep -Fq -- '- **WSL:** yes' "$report"
   grep -Fq -- '- **WSL networking:** nat' "$report"
   grep -Fq -- '- **WSL IPv6 fix:** enabled' "$report"
-  rm -f "$TEST_MOCK_BIN/grep"
+  rm -- "$TEST_MOCK_BIN/grep" || return 1
 }
-
 @test "vpn wsl: a WSL variable on another kernel does not make the host WSL" {
   vpn_pin_kernel Darwin
   printf '#!/usr/bin/env bash\nexit 1\n' > "$TEST_MOCK_BIN/brew"
@@ -196,7 +208,8 @@ EOF
 
 @test "vpn wsl: DNS leak hints and the WSL fix label name each platform" {
   run_ip_info() {
-    run run_zsh '
+    local detector_model="${1:-}"
+    run run_zsh "$detector_model"'
       _vpn_active_interfaces() { reply=(wg0); _VPN_ACTIVE_DEVICES=(wg0 wg0); return 0; }
       _vpn_run_wg() { return 0; }
       _vpn_have_sudo_cache() { return 0; }
@@ -216,17 +229,9 @@ EOF
   [[ "$output" == *"WSL typically routes DNS via a Windows relay"* ]]
   grep -Eq '^  WSL fix: +on$' <<<"$output"
 
-  unset WSL_DISTRO_NAME
-  cat > "$TEST_MOCK_BIN/grep" <<EOF
-#!$BASH
-for argument in "\$@"; do
-  [[ "\$argument" == /proc/version ]] && exit 1
-done
-exec /usr/bin/grep "\$@"
-EOF
-  chmod 755 "$TEST_MOCK_BIN/grep"
-  run_ip_info
-  rm -f "$TEST_MOCK_BIN/grep"
+  unset WSL_DISTRO_NAME WSL_INTEROP
+  # This branch tests Linux DNS presentation, independent of the real kernel.
+  run_ip_info '_vpn_is_wsl() { return 1; };'
   [ "$status" -eq 0 ]
   [[ "$output" == *"not present in /etc/resolv.conf."* ]]
   [[ "$output" == *"systemd-resolved; check 'resolvectl dns'"* ]]

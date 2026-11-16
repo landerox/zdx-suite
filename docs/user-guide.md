@@ -301,6 +301,10 @@ without a terminal the import fails instead of reporting success. New and
 renamed profile names use at most 15 characters, the `wg-quick` interface
 limit.
 
+Create and import offer editing once. Declining or an editor failure leaves
+the installed profile available for a later `vpn-config-edit`. Failed requested
+WSL hardening still returns failure and retains the imported profile.
+
 ### 💻 WSL DNS Hardening
 
 Inside WSL, Windows routes DNS through a relay that ignores the tunnel resolver,
@@ -423,6 +427,8 @@ not acquire this diagnostic deadline.
   compare the exit IP across providers. Without `curl` or `jq`, local tunnel
   findings remain available, the public-exit lookup is skipped, and the menu
   row names the missing tools.
+  Local resolver and leak diagnostics also remain available when a provider
+  lookup fails.
 - `vpn-mtu-probe` — measure the path MTU: the largest packet that reaches a
   target with Don't Fragment set. It reports the egress interface and its MTU,
   whether the route goes through a WireGuard tunnel, and the tunnel's MTU,
@@ -456,6 +462,8 @@ not acquire this diagnostic deadline.
   using the exact reserved grammar is still eligible. Failed publication
   cleans its verified owned stage; detected replacements and links are kept.
   The completed-report limit remains 1 MiB.
+  Existing cache/report directories with unsafe permissions are refused
+  unchanged; correct those permissions deliberately before retrying.
 - `vpn-config-dir` — show a bounded inventory of safe private profiles,
   backup availability, and safe orphaned backup/undo names; it
   is not an unrestricted directory listing.
@@ -472,6 +480,12 @@ vpn-config-restore wg0 --dry-run   # show the plan and the backup excerpt
 vpn-profile-remove wg0 --dry-run   # show exactly what would be deleted
 vpn-profile-remove wg0 --yes       # skip the prompt, never the validation
 ```
+
+Disconnect a profile before renaming, removing or restoring it when its
+Interface has `SaveConfig = true`. If the suite cannot establish inactivity,
+make the state observation readable and retry; `--yes` and `--dry-run` do not
+bypass this guard. Restore also checks the incoming backup. Enabled profiles
+are checked again after authorization before files or saved pointers change.
 
 - The plan is a numbered table of the exact tunnels or files. A dry run ends
   with `Dry run: 2 tunnels planned; nothing was disconnected.`, and after the

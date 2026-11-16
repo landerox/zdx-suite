@@ -29,6 +29,91 @@ subcmds=(
   'vpn-profile-remove:Plan and remove a profile after confirmation'
 )
 
+# Completion can run before either the suite or Core loads. Query only a
+# frozen native Homebrew executable, with closed stdin and bounded output.
+_vpn_menu_cold_brew_prefix() {
+  emulate -L zsh
+  setopt PIPE_FAIL
+  REPLY=""
+  local brew_program="" head_program="" timeout_program="" candidate=""
+  local captured="" prefix=""
+  brew_program=$(builtin whence -p -- brew 2>/dev/null) || return 1
+  head_program=$(builtin whence -p -- head 2>/dev/null) || return 1
+  for candidate in "$brew_program" "$head_program"; do
+    [[ "$candidate" == /* && "$candidate" != *[[:cntrl:]]* \
+      && -f "$candidate" && -x "$candidate" ]] || return 1
+  done
+  if (( ! ${+functions[_zdx_run_with_timeout]} )); then
+    for candidate in timeout gtimeout; do
+      timeout_program=$(builtin whence -p -- "$candidate" 2>/dev/null) \
+        || timeout_program=""
+      [[ "$timeout_program" == /* && "$timeout_program" != *[[:cntrl:]]* \
+        && -f "$timeout_program" && -x "$timeout_program" ]] && break
+      timeout_program=""
+    done
+    [[ -n "$timeout_program" ]] || return 1
+  fi
+  captured=$(
+    local -i pipeline_status=0
+    {
+      if (( ${+functions[_zdx_run_with_timeout]} )); then
+        _zdx_run_with_timeout 3 "$brew_program" --prefix
+      else
+        command "$timeout_program" -k 2s 3s "$brew_program" --prefix
+      fi
+    } </dev/null 2>/dev/null \
+      | command "$head_program" -c 1025 2>/dev/null || pipeline_status=$?
+    builtin print -rn -- . || { (( pipeline_status != 0 )) || pipeline_status=1; }
+    return "$pipeline_status"
+  ) || return 1
+  unsetopt MULTIBYTE
+  [[ "$captured" == *. ]] || return 1
+  captured="${captured%.}"
+  (( ${#captured} <= 1024 )) || return 1
+  prefix="${captured%%$'\n'*}"
+  [[ "$prefix" == /* && "$prefix" != *[[:cntrl:]]* && -d "$prefix" ]] || return 1
+  REPLY="$prefix"
+}
+
+# Pure fallback inventory, separate from discovery so isolated completion
+# fixtures can supply private directories without a public configuration knob.
+_vpn_menu_cold_fallback_dirs() {
+  (( $# == 0 )) || return 2
+  reply=("${HOMEBREW_PREFIX:-/opt/homebrew}/etc/wireguard" /usr/local/etc/wireguard)
+}
+
+# REPLY: the cold directory selection. The optional system directory is a
+# private isolation seam; ordinary completion uses the platform default.
+_vpn_menu_cold_profile_dir() {
+  emulate -L zsh
+  REPLY=""
+  (( $# <= 1 )) || return 2
+  local system_dir="${1-/private/etc/wireguard}" selected_dir=""
+  [[ "$system_dir" == /* && "$system_dir" != *[[:cntrl:]]* ]] || return 2
+  selected_dir="${VPN_CONFIG_DIR:-/etc/wireguard}"
+  if [[ -z "${VPN_CONFIG_DIR:-}" && "$OSTYPE" == darwin* ]]; then
+    selected_dir="$system_dir"
+    if [[ ! -e "$selected_dir" && ! -L "$selected_dir" ]]; then
+      local brew_dir="" brew_prefix=""
+      local -a reply=() directories=() brew_profiles=()
+      _vpn_menu_cold_brew_prefix && brew_prefix="$REPLY"
+      [[ -n "$brew_prefix" ]] && directories+=("$brew_prefix/etc/wireguard")
+      _vpn_menu_cold_fallback_dirs || return 1
+      directories+=("${reply[@]}")
+      for brew_dir in "${directories[@]}"; do
+        [[ "$brew_dir" == /* && "$brew_dir" != *[[:cntrl:]]* ]] || continue
+        brew_profiles=("$brew_dir"/*.conf(N))
+        if (( ${#brew_profiles[@]} > 0 )); then
+          selected_dir="$brew_dir"
+          break
+        fi
+      done
+    fi
+  fi
+  [[ "$selected_dir" == /* && "$selected_dir" != *[[:cntrl:]]* ]] || return 1
+  REPLY="$selected_dir"
+}
+
 # Profile names come from the configured directory when it is readable without
 # privileges. Completion never invokes sudo. A loaded suite resolves the
 # directory itself; otherwise its rules are mirrored here: the macOS default
@@ -44,22 +129,8 @@ _vpn_menu_profiles() {
   if (( ${+functions[_vpn_config_dir_resolve]} )); then
     dir=$(_vpn_config_dir_resolve 2>/dev/null) || dir=""
   else
-    dir="${VPN_CONFIG_DIR:-/etc/wireguard}"
-    if [[ -z "${VPN_CONFIG_DIR:-}" && "$OSTYPE" == darwin* ]]; then
-      dir=/private/etc/wireguard
-      if [[ ! -e "$dir" ]]; then
-        local brew_dir
-        local -a brew_profiles=()
-        for brew_dir in "${HOMEBREW_PREFIX:-/opt/homebrew}/etc/wireguard" \
-          /usr/local/etc/wireguard; do
-          brew_profiles=("$brew_dir"/*.conf(N))
-          if (( ${#brew_profiles[@]} > 0 )); then
-            dir="$brew_dir"
-            break
-          fi
-        done
-      fi
-    fi
+    local REPLY=""
+    _vpn_menu_cold_profile_dir && dir="$REPLY"
     while [[ "$dir" != "/" && "$dir" == */ ]]; do
       dir="${dir%/}"
     done

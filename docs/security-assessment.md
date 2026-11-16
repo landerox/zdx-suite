@@ -1023,6 +1023,16 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   partial failure. Restore publishes one bounded
   `<name>.conf.pre-restore` undo copy and the restored profile through
   same-directory atomic operations.
+- VPN rename/removal inspect live Interface `SaveConfig`; restore also checks
+  the selected incoming backup. Enabled values require proven inactivity
+  before an executable plan or authorization and again after authorization
+  before family/pointer mutation. Unknown state fails closed, including dry
+  runs and `--yes`. The nonprompting reader checks complete bounded raw bytes
+  and before/after leases; this is not an atomic snapshot. Disabled/absent
+  values retain ordinary activity/consent policy. Reviewed retained hooks
+  remain allowed. Generated DNS hooks must belong to the actual Interface
+  section; a misplaced existing block refuses publication, and strip success
+  is not general configuration validation.
 - VPN tunnel up and down execute the exact absolute validated profile path,
   binding its directory and file identity across authentication. Their
   `wg-quick` output goes to the core's private, bounded, identity-checked
@@ -2295,6 +2305,9 @@ unintended targets.
   home. They are created mode `700` with mode `600` files. Cache entry names are
   an internal allowlist rather than user input, and a pointer to a missing
   profile is displayed for clearing but never acted on.
+- Existing VPN cache/report roots with unsafe permissions are refused
+  unchanged rather than chmodded by a writer. Missing roots are created mode
+  `700`; publication retains its owner, path, link and identity checks.
 - VPN cache entries use private same-directory temporary files and no-clobber or
   atomic replacement; a publication failure preserves the prior pointer.
   Reports are staged privately and published under unique no-clobber names, so
@@ -2825,6 +2838,17 @@ memory or CPU during inspection.
   these controls do not claim one deadline for a whole diagnostic or native
   child lifetime. Interactive authentication and tunnel mutations keep their
   existing execution policy.
+  VPN tool selection uses builtin Linux/WSL evidence and excludes logical or
+  resolved drive-mounted executable paths on confirmed WSL. Actual owned
+  execution and its timeout backend use frozen eligible paths; a safe
+  `gtimeout` does not authorize an unsafe `timeout`. Core watchdog reuse is an
+  internal external-only dependency, without engine or child-PATH changes.
+  Cold macOS completion bounds its deferred prefix query by three seconds and
+  1024 raw bytes; failed queries retain independently selected fallbacks.
+  Tool eligibility does not imply an executable ABI check or a blanket ban on
+  mounted state directories. MTU JSON formatting captures successful output
+  before publishing and keeps its intentional input without a new backend
+  prerequisite.
   Exit-IP providers must be bounded HTTPS URLs; curl restricts protocol,
   response bytes, redirect protocol, connect time, and total time, and returned
   public addresses are validated semantically before display or persistence.

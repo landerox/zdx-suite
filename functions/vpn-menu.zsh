@@ -186,10 +186,10 @@ _vpn_menu_have() {
       if _vpn_darwin_wg_quick; then
         _vpn_darwin_wireguard_go 2>/dev/null
       else
-        command -v wireguard-go &>/dev/null
+        _vpn_check_cmd wireguard-go
       fi
       ;;
-    *) command -v "${1:-}" &>/dev/null ;;
+    *) _vpn_check_cmd "${1:-}" ;;
   esac
 }
 
@@ -512,10 +512,10 @@ _vpn_menu_context() {
   local state="Active: $active_text | Profiles: $profile_text"
   state+=" | Sudo: $sudo_text | Platform: $_VPN_MENU_PLATFORM"
   # The WSL workaround follows the platform; only an exception is shown.
-  if [[ "$_VPN_MENU_PLATFORM" == wsl ]]; then
-    (( _VPN_MENU_WSL_FIX )) || state+=" | WSL fix: off"
-  elif (( _VPN_MENU_WSL_FIX )); then
-    state+=" | WSL fix: on"
+  if (( _VPN_MENU_WSL_DEFAULT_KNOWN \
+    && _VPN_MENU_WSL_FIX != _VPN_MENU_WSL_DEFAULT_FIX )); then
+    if (( _VPN_MENU_WSL_FIX )); then state+=" | WSL fix: on"
+    else state+=" | WSL fix: off"; fi
   fi
 
   _vpn_display_escape "$scope"

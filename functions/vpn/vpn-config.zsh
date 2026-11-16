@@ -260,6 +260,7 @@ _vpn_restore_backup() {
   local expected_backup="${3:-}"
   local expected_undo="${4:-}"
   local directory_identity="${5:-}"
+  local -i saveconfig_enabled="${6:-0}"
   local conf_file bak_file
   conf_file=$(_vpn_conf_path "$iface") || return 1
   bak_file=$(_vpn_backup_path "$iface") || return 1
@@ -293,6 +294,9 @@ _vpn_restore_backup() {
   _vpn_announce_privileged \
     "atomically install $bak_file as $conf_file (undo: $undo_file)"
   _vpn_ensure_sudo_access "Restoring the $iface profile" || return 1
+  if (( saveconfig_enabled )); then
+    _vpn_revalidate_saveconfig_inactive "$iface" || return $?
+  fi
 
   _vpn_assert_config_dir_identity "$directory_identity" || return 1
   local current
@@ -485,6 +489,18 @@ vpn-config-edit() {
       ;;
   esac
 
+  _vpn_edit_confirmed "$conf_file" "$profile_fingerprint" "$directory_identity"
+}
+
+# Opens the already reviewed editor target without a second consent or heading.
+_vpn_edit_confirmed() {
+  local conf_file="$1" profile_fingerprint="$2" directory_identity="$3" current=""
+  _vpn_assert_config_dir_identity "$directory_identity" || return 1
+  current=$(_vpn_profile_file_fingerprint "$conf_file" "profile selected for editing") || return 1
+  [[ "$current" == "$profile_fingerprint" ]] || {
+    _vpn_error "The profile changed after confirmation; the editor was not opened."
+    return 1
+  }
   # sudoedit refuses a directory the user can write; on macOS such a
   # directory (Homebrew's etc/wireguard) is edited through a private copy.
   if _vpn_platform_is darwin \
@@ -638,6 +654,26 @@ vpn-config-restore() {
       ;;
   esac
 
+  local REPLY="" saveconfig_path="" saveconfig_fingerprint=""
+  local -i saveconfig_enabled=0 saveconfig_status=0
+  local -a saveconfig_sources=("$bak_file" "$backup_fingerprint")
+  [[ "$conf_fingerprint" == missing ]] || saveconfig_sources+=("$conf_file" "$conf_fingerprint")
+  while (( ${#saveconfig_sources[@]} )); do
+    saveconfig_path="${saveconfig_sources[1]}"
+    saveconfig_fingerprint="${saveconfig_sources[2]}"
+    shift 2 saveconfig_sources
+    saveconfig_status=0
+    _vpn_profile_saveconfig "$saveconfig_path" "$directory_identity" "$saveconfig_fingerprint" || saveconfig_status=$?
+    (( saveconfig_status == 130 || saveconfig_status == 143 )) && return "$saveconfig_status"
+    (( saveconfig_status == 0 )) || { _vpn_error "Could not safely inspect SaveConfig for $iface."; return 1; }
+    [[ "$REPLY" != true ]] || saveconfig_enabled=1
+  done
+  if (( saveconfig_enabled )); then
+    local -i saveconfig_active=0
+    _vpn_state_iface_is_active "$iface" && saveconfig_active=1
+    _vpn_saveconfig_activity_guard "$iface" "$_VPN_MENU_ACTIVE_KNOWN" "$saveconfig_active" || return 1
+  fi
+
   _vpn_header "Restore VPN Backup ($iface)"
   local REPLY=""
   local -a plan_rows=()
@@ -707,10 +743,13 @@ vpn-config-restore() {
 
   if _vpn_restore_backup "$iface" \
     "$conf_fingerprint" "$backup_fingerprint" "$undo_fingerprint" \
-    "$directory_identity"; then
+    "$directory_identity" "$saveconfig_enabled"; then
     _vpn_success "Restore completed: 1 profile restored."
     _vpn_dim "Reconnect $iface to apply the restored configuration."
     return 0
+  else
+    local -i restore_status=$?
+    (( restore_status == 130 || restore_status == 143 )) && return "$restore_status"
   fi
 
   _vpn_error "Failed to restore the backup for $iface."

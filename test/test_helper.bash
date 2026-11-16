@@ -153,6 +153,8 @@ unset XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS
 # An exported ZDOTDIR points every Zsh that a test starts without -f at the
 # caller's startup files.
 unset ZDOTDIR
+# Platform fixtures opt in after setup; never inherit an invoker's model.
+unset TEST_ZSH_OSTYPE
 
 # Neutralize package-manager controls injected by developer shells and hosted
 # runners. Individual tests export hostile values explicitly when exercising
@@ -644,6 +646,11 @@ run_zsh() {
   # shellcheck disable=SC2016,SC2140
   zsh -f -c "
     emulate -R zsh
+    case \"\${TEST_ZSH_OSTYPE-}\" in
+      '') ;;
+      linux-gnu|darwin-test|freebsd-test) OSTYPE=\"\$TEST_ZSH_OSTYPE\" ;;
+      *) print -u2 -r -- 'test_helper: invalid TEST_ZSH_OSTYPE'; return 2 ;;
+    esac
     export ZSH_CUSTOM='$TEST_SUITE_ROOT'
     export HOME='$HOME'
     export PATH='$PATH'

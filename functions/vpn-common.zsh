@@ -404,8 +404,33 @@ _vpn_read_line() {
 
 # --- Dependencies -----------------------------------------------------------
 
+# Eligibility is independent of the cached platform and executes no tool.
+_vpn_tool_path_allowed() {
+  emulate -L zsh
+  (( $# == 1 )) && [[ "$1" == /* && "$1" != *[[:cntrl:]]* ]] || return 1
+  _vpn_is_wsl || return 0
+  [[ "$1" != /mnt/[a-zA-Z]/* && "${1:A}" != /mnt/[a-zA-Z]/* ]]
+}
+
+# REPLY: a frozen logical absolute external, retaining adjacent-tool semantics.
+_vpn_cmd_path() {
+  emulate -L zsh
+  REPLY=""
+  (( $# == 1 )) && [[ -n "$1" && "$1" != *[[:cntrl:]]* ]] || return 2
+  local program="$1"
+  if [[ "$program" != /* ]]; then
+    [[ "$program" != */* ]] || return 2
+    command -v "$program" >/dev/null 2>&1 || return 1
+    program=$(builtin whence -p -- "$program" 2>/dev/null) || return 1
+  fi
+  [[ "$program" == /* && -f "$program" && -x "$program" ]] || return 1
+  _vpn_tool_path_allowed "$program" || return 1
+  REPLY="$program"
+}
+
 _vpn_check_cmd() {
-  command -v "$1" &>/dev/null
+  local REPLY=""
+  _vpn_cmd_path "${1-}"
 }
 
 _vpn_check_wg_quick() {
@@ -456,20 +481,42 @@ _vpn_check_ip_stack() {
 # protocol; the capture owner validates status and bounds before consuming it.
 # Arbitrary shell callbacks and mutating commands do not use this adapter.
 _vpn_readonly_exec() {
-  local seconds="${1-}"
-  shift 2>/dev/null
-  [[ "$seconds" == <1-600> && ${#seconds} -le 3 ]] && (( $# > 0 )) \
-    || return 2
-  local program="$1"
-  shift
-  if [[ "$program" != /* ]]; then
-    program=$(whence -p -- "$program" 2>/dev/null) || return 127
-  fi
-  [[ "$program" == /* && "$program" != *[[:cntrl:]]* \
-    && -f "$program" && -x "$program" ]] || return 127
-  _vpn_run_with_timeout "$seconds" "$program" "$@" </dev/null 2>/dev/null
+  _vpn_external_exec "$@" </dev/null 2>/dev/null
 }
 
+# reply: the actual frozen native backend, or the existing Core watchdog.
+_vpn_external_backend() {
+  local candidate="" REPLY=""
+  reply=()
+  for candidate in timeout gtimeout; do
+    _vpn_cmd_path "$candidate" || continue
+    reply=(native "$REPLY")
+    return 0
+  done
+  if (( ${+functions[_zdx_run_with_timeout]} && ${+functions[_zdx_timeout_watchdog]} )); then
+    reply=(watchdog)
+    return 0
+  fi
+  return 1
+}
+
+# External-only adapter. Streams and stdin belong to the owning caller.
+# The generic callback timeout primitive below remains unchanged.
+_vpn_external_exec() {
+  local seconds="${1-}" REPLY=""
+  [[ "$seconds" == <1-600> && ${#seconds} -le 3 && $# -ge 2 ]] || return 2
+  shift
+  _vpn_cmd_path "$1" || return 127
+  local program="$REPLY"
+  shift
+  local -a reply=()
+  _vpn_external_backend || return 1
+  if [[ "${reply[1]}" == native ]]; then
+    command "${reply[2]}" -k 2s "${seconds}s" "$program" "$@"
+    return $?
+  fi
+  _zdx_timeout_watchdog "$seconds" "$program" "$@"
+}
 # Runs one external program with a deadline: status 124 on timeout, 2 for
 # invalid arguments, and 127 when the program is not on PATH. The program is
 # resolved to its absolute path, so a shell function or alias of the same name
@@ -508,10 +555,8 @@ _vpn_run_with_timeout() {
 # Status 0 when bounded programs can run: always with the core loaded, and
 # otherwise when timeout or gtimeout exists. Prints the refusal otherwise.
 _vpn_bounded_ready() {
-  (( ${+functions[_zdx_run_with_timeout]} )) && return 0
-  if _vpn_check_cmd timeout || _vpn_check_cmd gtimeout; then
-    return 0
-  fi
+  local -a reply=()
+  _vpn_external_backend && return 0
   _vpn_error \
     "Bounded VPN probes need timeout or gtimeout when the ZDX core is not loaded."
   return 1
@@ -563,10 +608,15 @@ _vpn_platform_is() {
 # DNS hardening, and the report all use it through _vpn_platform, so they
 # cannot disagree about the host.
 _vpn_is_wsl() {
-  [[ -n "${WSL_DISTRO_NAME-}" ]] && return 0
-  command grep -qi microsoft /proc/version 2>/dev/null
+  [[ "${OSTYPE:-}" == linux* ]] || return 1
+  [[ -n "${WSL_DISTRO_NAME-}${WSL_INTEROP-}" ]] && return 0
+  local kernel=""
+  if [[ -r /proc/sys/kernel/osrelease ]]; then
+    IFS= read -r kernel < /proc/sys/kernel/osrelease || kernel=""
+  fi
+  [[ "${kernel:l}" == *microsoft* || -e /proc/sys/fs/binfmt_misc/WSLInterop \
+    || -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]]
 }
-
 # True when VPN_CONFIG_DIR still holds the Linux default, meaning the user has
 # not told the suite where WireGuard lives on this host.
 _vpn_config_dir_is_default() {
@@ -911,6 +961,7 @@ _vpn_trusted_zsh() {
   candidate=$(whence -p zsh 2>/dev/null) && candidates+=("$candidate")
   for candidate in "${candidates[@]}"; do
     [[ -e "$candidate" ]] || continue
+    _vpn_tool_path_allowed "$candidate" || continue
     _vpn_trusted_executable "$candidate" || continue
     REPLY="${candidate:A}"
     return 0
@@ -1145,6 +1196,108 @@ _vpn_profile_file_fingerprint() {
     && [[ "${checksum_fields[1]}" == <-> \
       && "${checksum_fields[2]}" == <-> ]] || return 1
   print -r -- "${after_id}:${checksum_fields[1]}:${checksum_fields[2]}"
+}
+
+# REPLY: Interface SaveConfig as true/false; absent is false. Invalid assignments
+# and control-bearing text fail without data. Existing trusted hooks are allowed.
+_vpn_saveconfig_from_text() {
+  emulate -L zsh
+  setopt EXTENDED_GLOB
+  local LC_ALL=C text="${1-}" line data key section=other value
+  REPLY=""
+  (( $# == 1 )) || return 1
+  local control="[${(#):-0}-${(#):-8}${(#):-11}${(#):-12}${(#):-14}-${(#):-31}${(#):-127}]"
+  [[ "$text" != *${~control}* ]] || return 1
+  local enabled=false
+  for line in "${(@f)text}"; do
+    data="${line%%\#*}"
+    key="${(L)${data%%=*}}"
+    case "$key" in
+      [[:space:]]#'[interface]'[[:space:]]#) section=interface ;;
+      [[:space:]]#'['*) section=other ;;
+    esac
+    [[ "$section" == interface && "$key" == [[:space:]]#saveconfig[[:space:]]# ]] || continue
+    [[ "$data" == *=* ]] || return 1
+    value="${(L)${data#*=}}"
+    case "$value" in
+      [[:space:]]#true[[:space:]]#) enabled=true ;;
+      [[:space:]]#false[[:space:]]#) enabled=false ;;
+      *) return 1 ;;
+    esac
+  done
+  REPLY="$enabled"
+}
+
+# Complete nonprompting read under the planned directory/file leases. Raw byte
+# limits and the planned exact byte count precede text interpretation; failed
+# or incomplete reads never supply a boolean.
+_vpn_profile_saveconfig() {
+  emulate -L zsh
+  REPLY=""
+  (( $# == 3 )) || return 2
+  local profile_path="$1" directory_identity="$2" expected="$3" current="" text="" head_program=""
+  local -i read_status=0
+  _vpn_assert_config_dir_identity "$directory_identity" || return 1
+  current=$(_vpn_profile_file_fingerprint "$profile_path" "SaveConfig profile") || {
+    read_status=$?
+    (( read_status == 124 || read_status == 130 || read_status == 143 )) && return "$read_status"
+    return 1
+  }
+  [[ "$current" == "$expected" ]] || return 1
+  local expected_bytes="${expected##*:}"
+  [[ "$expected_bytes" == <-> && ${#expected_bytes} -le 7 ]] || return 1
+  (( expected_bytes <= _VPN_MAX_PROFILE_BYTES )) || return 1
+  _vpn_cmd_path head || return 1
+  head_program="$REPLY"
+  REPLY=""
+  text=$(
+    local -i producer_status=0
+    if [[ -r "$profile_path" ]]; then
+      _vpn_readonly_exec 3 "$head_program" -c "$(( _VPN_MAX_PROFILE_BYTES + 1 ))" -- "$profile_path" || producer_status=$?
+    else
+      _vpn_sudo_probe head -c "$(( _VPN_MAX_PROFILE_BYTES + 1 ))" -- "$profile_path" || producer_status=$?
+    fi
+    builtin print -rn -- . || { (( producer_status != 0 )) || producer_status=1; }
+    return "$producer_status"
+  ) || read_status=$?
+  (( read_status == 124 || read_status == 130 || read_status == 143 )) && return "$read_status"
+  (( read_status == 0 )) && [[ "$text" == *. ]] || return 1
+  text="${text%.}"
+  unsetopt MULTIBYTE
+  (( ${#text} <= _VPN_MAX_PROFILE_BYTES && ${#text} == expected_bytes )) || return 1
+  _vpn_assert_config_dir_identity "$directory_identity" || return 1
+  current=$(_vpn_profile_file_fingerprint "$profile_path" "SaveConfig profile") || {
+    read_status=$?
+    (( read_status == 124 || read_status == 130 || read_status == 143 )) && return "$read_status"
+    return 1
+  }
+  [[ "$current" == "$expected" ]] || return 1
+  _vpn_saveconfig_from_text "$text"
+}
+
+# The enabled guard requires proven inactivity, both during planning and after
+# authorization. False/absent profiles do not add a second activity observation.
+_vpn_saveconfig_activity_guard() {
+  local iface="$1" known="$2" active="$3"
+  (( known && ! active )) && return 0
+  _vpn_error "SaveConfig=true requires $iface to be proven inactive."
+  if (( active )); then
+    _vpn_info "Disconnect $iface first, then retry this profile operation."
+  else
+    _vpn_info "Tunnel activity is unknown; obtain readable WireGuard state and verify $iface is inactive before retrying."
+  fi
+  return 1
+}
+
+_vpn_revalidate_saveconfig_inactive() {
+  local iface="$1"
+  local -a reply=()
+  local -i activity_status=0 active=0
+  _vpn_active_interfaces || activity_status=$?
+  (( activity_status == 130 || activity_status == 143 )) && return "$activity_status"
+  (( activity_status == 0 )) || { _vpn_saveconfig_activity_guard "$iface" 0 0; return 1; }
+  [[ " ${reply[*]} " != *" $iface "* ]] || active=1
+  _vpn_saveconfig_activity_guard "$iface" 1 "$active"
 }
 
 # stdout: a stable fingerprint for a private regular file owned by this user.
@@ -1429,11 +1582,13 @@ _vpn_have_sudo_cache() {
 _vpn_ensure_sudo_access() {
   local reason="${1:-VPN access}"
 
-  if ! command -v sudo &>/dev/null; then
+  local REPLY="" sudo_program=""
+  if ! _vpn_cmd_path sudo; then
     _vpn_error "sudo is not installed; privileged VPN actions are unavailable."
     return 1
   fi
 
+  sudo_program="$REPLY"
   if _vpn_have_sudo_cache; then
     return 0
   else
@@ -1442,7 +1597,7 @@ _vpn_ensure_sudo_access() {
   fi
 
   _vpn_info "$reason requires sudo authentication."
-  if command sudo -v; then
+  if command "$sudo_program" -v; then
     _vpn_success "VPN access unlocked."
     return 0
   else
@@ -1462,6 +1617,9 @@ _vpn_ensure_sudo_access() {
 # caller revalidate its target between authentication and mutation.
 _vpn_sudo_exec() {
   (( $# > 0 )) || return 2
+  local REPLY="" sudo_program=""
+  _vpn_cmd_path sudo || return 1
+  sudo_program="$REPLY"
   local -a reply=()
   _vpn_privileged_argv "$@" || {
     _vpn_error "Refusing an unpinned privileged command: ${(V)1}"
@@ -1473,7 +1631,7 @@ _vpn_sudo_exec() {
     (( cache_status == 130 || cache_status == 143 )) && return "$cache_status"
     return 1
   }
-  command sudo -n -- "${privileged_argv[@]}"
+  command "$sudo_program" -n -- "${privileged_argv[@]}"
 }
 
 # Read-only privileged probe. Failure is expected and silent: callers fall back
@@ -1495,9 +1653,9 @@ _vpn_sudo_probe() {
   if (( ! explicit_timeout )); then
     command -v sudo &>/dev/null || return 1
   fi
-  sudo_program=$(whence -p -- sudo 2>/dev/null) || return 1
-  [[ "$sudo_program" == /* && "$sudo_program" != *[[:cntrl:]]* \
-    && -f "$sudo_program" && -x "$sudo_program" ]] || return 1
+  local REPLY=""
+  _vpn_cmd_path sudo || return 1
+  sudo_program="$REPLY"
   local -a reply=() cache_argv=() probe_argv=()
   _vpn_privileged_argv true || return 1
   cache_argv=("${reply[@]}")
@@ -1706,7 +1864,7 @@ _vpn_configs_access_state() {
 }
 
 _vpn_wg_access_state() {
-  command -v wg &>/dev/null || {
+  _vpn_check_cmd wg || {
     print -r -- "missing"
     return 0
   }
@@ -1918,7 +2076,7 @@ _vpn_ensure_wg_access() {
 # cache. It never triggers an authentication prompt from a read path.
 _vpn_run_wg() {
   local -x WG_HIDE_KEYS=always
-  command -v wg &>/dev/null || return 1
+  _vpn_check_cmd wg || return 1
 
   if _vpn_readonly_exec 3 wg "$@"; then
     return 0
@@ -2281,7 +2439,7 @@ _vpn_iface_internal_addrs() {
     _vpn_darwin_iface_addrs "$REPLY"
     return
   fi
-  command -v ip &>/dev/null || return 1
+  _vpn_check_cmd ip || return 1
   local output=""
   output=$(_vpn_readonly_exec 3 ip -o addr show dev "$REPLY") || return $?
   print -r -- "$output" | command awk '
@@ -2323,7 +2481,7 @@ _vpn_default_route() {
     _vpn_darwin_route_summary 1.1.1.1
     return
   fi
-  command -v ip &>/dev/null || return 1
+  _vpn_check_cmd ip || return 1
   local output=""
   output=$(_vpn_readonly_exec 3 ip route get 1.1.1.1) || return $?
   print -r -- "${output%%$'\n'*}"

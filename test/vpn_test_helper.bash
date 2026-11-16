@@ -1,13 +1,19 @@
 # vpn_test_helper.bash - VPN platform fixtures, loaded after test_helper.
 #
-# The VPN suite chooses Linux, WSL, or macOS behavior from `uname -s`. A
-# mocked platform branch is selected through capability mocks, never by the
-# host (docs/testing.md), so every VPN file pins the kernel it exercises and
-# the same assertions hold on a Linux runner and on a macOS host.
+# VPN platform fixtures pin uname and an explicit child-Zsh OSTYPE model.
+# The WSL detector requires Linux OSTYPE; a uname mock alone cannot select it.
+# run_zsh applies the optional enum before loading Core (docs/testing.md).
 
 # vpn_pin_kernel NAME: answer `uname -s` with NAME (Linux, Darwin, FreeBSD).
 # Other uname queries reach the host binary.
 vpn_pin_kernel() {
+  (( $# == 1 )) || return 2
+  case "$1" in
+    Linux) export TEST_ZSH_OSTYPE=linux-gnu ;;
+    Darwin) export TEST_ZSH_OSTYPE=darwin-test ;;
+    FreeBSD) export TEST_ZSH_OSTYPE=freebsd-test ;;
+    *) printf '%s\n' 'vpn_pin_kernel: unsupported kernel model' >&2; return 2 ;;
+  esac
   cat > "$TEST_MOCK_BIN/uname" <<EOF
 #!$BASH
 if [[ "\${1:-}" == -s ]]; then
