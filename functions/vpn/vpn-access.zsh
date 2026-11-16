@@ -3,7 +3,7 @@
 # VPN Access: authenticate, invalidate sudo timestamps, and report access state
 # =============================================================================
 #
-# Loaded by vpn-menu.zsh after vpn-common.zsh and vpn-state.zsh.
+# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, and vpn-darwin.zsh.
 # Safe to re-source; defines functions only.
 #
 

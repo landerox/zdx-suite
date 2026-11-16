@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # Public loader and command router for WireGuard tunnel workflows.
-# Usage: vpn-menu [subcommand]
+# Usage: vpn-menu [subcommand] [arguments...]
 #
 
 if [[ -n "${_VPN_MENU_SOURCED:-}" ]]; then
@@ -46,8 +46,9 @@ if (( _vpn_menu_load_rc != 0 )); then
 fi
 
 # --- Load feature modules ---------------------------------------------------
-# Order is explicit: state and the WSL and macOS platform primitives first,
-# then the modules that consume them.
+# This is definition order; all mandatory modules load before workflows run.
+# State snapshots call vpn-wsl.zsh, control calls vpn-info.zsh, and previews
+# use vpn-mtu.zsh constants at invocation time despite their later load order.
 
 typeset _vpn_menu_module
 for _vpn_menu_module in \

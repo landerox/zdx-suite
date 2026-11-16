@@ -208,6 +208,9 @@ verification, and remaining limitations.
 
 ### Changed
 
+- VPN: name module prerequisites and deferred call-time providers in headers
+  and architecture documentation. Loader order and runtime behavior are unchanged.
+
 - System: document that standalone logging streams raw child output when its
   core capture service is absent, and correct module prerequisites and adapter
   descriptions. Runtime behavior is unchanged.

@@ -3,7 +3,8 @@
 # VPN Profile: create, import, rename, and remove WireGuard profiles
 # =============================================================================
 #
-# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, and vpn-wsl.zsh.
+# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, vpn-wsl.zsh,
+# vpn-control.zsh, and vpn-config.zsh.
 # Safe to re-source; defines functions only.
 #
 

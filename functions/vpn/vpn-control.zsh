@@ -3,7 +3,9 @@
 # VPN Control: connect and disconnect tunnels, defaults, last-used profile
 # =============================================================================
 #
-# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, and vpn-wsl.zsh.
+# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, vpn-wsl.zsh,
+# and vpn-darwin.zsh. At invocation time, detail output also requires the
+# later-loaded vpn-info.zsh.
 # Safe to re-source; defines functions only.
 #
 # Every privileged step follows the same sequence: announce the operation,

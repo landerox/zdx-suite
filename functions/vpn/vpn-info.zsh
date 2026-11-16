@@ -3,7 +3,8 @@
 # VPN Info: summary, details, IP info and Markdown report
 # =============================================================================
 #
-# Loaded by vpn-menu.zsh after vpn-common.zsh and vpn-state.zsh.
+# Loaded by vpn-menu.zsh after vpn-common.zsh, vpn-state.zsh, vpn-wsl.zsh,
+# and vpn-darwin.zsh.
 # Safe to re-source; defines functions only.
 #
 

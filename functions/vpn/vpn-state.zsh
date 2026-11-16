@@ -4,11 +4,11 @@
 # =============================================================================
 #
 # Loaded by vpn-menu.zsh after vpn-common.zsh.
+# Snapshot calls also require vpn-wsl.zsh, loaded later, at invocation time.
 # Safe to re-source; defines functions only.
 #
-# The snapshot helpers used to live in vpn-menu.zsh while feature modules called
-# them, which inverted the dependency direction. They belong here so any module
-# can read suite state without requiring the entrypoint.
+# The state snapshot is owned here so feature modules can read suite state
+# without requiring the entrypoint or collecting it while modules are sourced.
 #
 
 if [[ -n "${_VPN_STATE_SOURCED:-}" ]]; then
