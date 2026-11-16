@@ -409,6 +409,11 @@ profile management that do not need the missing tool remain usable.
 
 ### 🩺 Diagnostics
 
+Owned local WireGuard, routing, resolver and report-metadata observations
+use a three-second bound per external program. Provider requests retain
+their network limits; connection changes and interactive authentication do
+not acquire this diagnostic deadline.
+
 - `vpn-summary` — access state, profiles, active tunnels, backups, and saved
   pointers. The menu re-reads this state before every pass, so it has no
   separate refresh action.
@@ -448,7 +453,9 @@ profile management that do not need the missing tool remain usable.
   prunes the oldest reports while always keeping the one just written.
   Retention selects only reserved generated-name shapes and keeps changed
   candidates. Similar names outside that grammar survive; a hand-made file
-  using the exact reserved grammar is still eligible.
+  using the exact reserved grammar is still eligible. Failed publication
+  cleans its verified owned stage; detected replacements and links are kept.
+  The completed-report limit remains 1 MiB.
 - `vpn-config-dir` — show a bounded inventory of safe private profiles,
   backup availability, and safe orphaned backup/undo names; it
   is not an unrestricted directory listing.
@@ -479,6 +486,10 @@ vpn-profile-remove wg0 --yes       # skip the prompt, never the validation
   be undone, and discloses when it will replace an existing undo copy.
 - A rename follows matching backup and undo copies, default and last-used pointers;
   an active profile is included in the plan and disconnected first.
+- Returned interruptions during access, live-state inspection, authentication
+  or disconnect stop profile changes before later file or saved-choice work.
+  Partial rename verdicts count both credential files and matching saved
+  choices; failed pointer updates remain visible with a nonzero result.
 
 Secrets are never displayed: `PrivateKey` and `PresharedKey` are stripped from
 every excerpt, preview pane, and report.

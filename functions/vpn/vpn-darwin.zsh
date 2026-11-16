@@ -37,18 +37,38 @@ typeset -g _VPN_DARWIN_BASH_PROBE='printf "%s\n" "${BASH_VERSINFO[0]}"'
 
 # --- Bounded collection -----------------------------------------------------
 
-# stdout: the output of one read-only collector, or status 1 when it fails or
-# exceeds max_bytes. Usage: _vpn_darwin_capture <max_bytes> <command...>
+# stdout: one complete successful read-only observation. Ordinary failure or
+# overflow returns 1, invalid arguments 2; deadlines/interruption retain
+# 124/130/143 without data. Usage: _vpn_darwin_capture <max_bytes> <command...>
 _vpn_darwin_capture() {
   setopt LOCAL_OPTIONS PIPE_FAIL
   local -i max_bytes="${1:-0}"
   shift
   (( max_bytes > 0 && $# > 0 )) || return 2
-  local captured
+  [[ "$1" != command ]] || shift
+  (( $# > 0 )) || return 2
+  local -a collector=(_vpn_readonly_exec 3 "$@")
+
+  local head_program="" captured=""
+  local -i capture_status=0
+  head_program=$(whence -p -- head 2>/dev/null) || return 1
+  [[ "$head_program" == /* && -f "$head_program" && -x "$head_program" ]] || return 1
   captured=$(
-    "$@" 2>/dev/null </dev/null | command head -c "$(( max_bytes + 1 ))"
-  ) || return 1
-  (( ${#captured} <= max_bytes )) || return 1
+    local -i pipeline_status=0
+    "${collector[@]}" </dev/null 2>/dev/null \
+      | "$head_program" -c "$(( max_bytes + 1 ))" 2>/dev/null || pipeline_status=$?
+    builtin print -rn -- . || { (( pipeline_status != 0 )) || pipeline_status=1; }
+    return "$pipeline_status"
+  ) || capture_status=$?
+  # Account raw bytes before the historical trailing-LF normalization. These
+  # options change only after the collector has returned and stay local.
+  unsetopt MULTIBYTE
+  (( capture_status == 130 || capture_status == 143 || capture_status == 124 )) \
+    && return "$capture_status"
+  [[ "$captured" == *. ]] || return 1
+  captured="${captured%.}"
+  (( ${#captured} <= max_bytes && capture_status == 0 )) || return 1
+  captured="$(builtin print -rn -- "$captured")" || return 1
   print -r -- "$captured"
 }
 

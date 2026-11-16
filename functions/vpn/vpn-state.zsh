@@ -415,7 +415,7 @@ _vpn_report_root() {
 
 _vpn_state_timestamp() {
   local timestamp
-  timestamp=$(command date +"%Y-%m-%d_%H%M%S" 2>/dev/null) || {
+  timestamp=$(_vpn_readonly_exec 3 date +"%Y-%m-%d_%H%M%S") || {
     _vpn_error "Could not generate a report timestamp."
     return 1
   }
@@ -438,7 +438,7 @@ _vpn_report_path() {
 
   local timestamp host
   timestamp=$(_vpn_state_timestamp) || return 1
-  host=$(command hostname -s 2>/dev/null || command hostname 2>/dev/null) \
+  host=$(_vpn_readonly_exec 3 hostname -s || _vpn_readonly_exec 3 hostname) \
     || host="host"
   host="${host//[^A-Za-z0-9._-]/_}"
   host="${host[1,64]}"
@@ -695,10 +695,25 @@ _vpn_state_load() {
 
   _vpn_platform_prepare
   _VPN_MENU_PLATFORM="$_VPN_PLATFORM"
-  _VPN_MENU_CONFIG_ACCESS_STATE=$(_vpn_configs_access_state)
-  _VPN_MENU_WG_ACCESS_STATE=$(_vpn_wg_access_state)
-  _vpn_have_sudo_cache && _VPN_MENU_SUDO_UNLOCKED=1
-  _vpn_should_apply_wsl_ipv6_fix && _VPN_MENU_WSL_FIX=1
+  local -i snapshot_status=0
+  _VPN_MENU_CONFIG_ACCESS_STATE=$(_vpn_configs_access_state) || snapshot_status=$?
+  (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  snapshot_status=0
+  _VPN_MENU_WG_ACCESS_STATE=$(_vpn_wg_access_state) || snapshot_status=$?
+  (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  snapshot_status=0
+  if _vpn_have_sudo_cache; then
+    _VPN_MENU_SUDO_UNLOCKED=1
+  else
+    snapshot_status=$?
+    (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  fi
+  if _vpn_should_apply_wsl_ipv6_fix; then
+    _VPN_MENU_WSL_FIX=1
+  else
+    snapshot_status=$?
+    (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
+  fi
 
   local raw
   if raw=$(_vpn_get_configs 2>/dev/null); then
@@ -707,6 +722,9 @@ _vpn_state_load() {
       _VPN_MENU_CONFIGS=("${(@f)raw}")
       _VPN_MENU_CONFIGS=("${(@)_VPN_MENU_CONFIGS:#}")
     fi
+  else
+    snapshot_status=$?
+    (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
   fi
 
   # The live query validates names and bounds the list; an invalid, oversized,
@@ -717,6 +735,9 @@ _vpn_state_load() {
     _VPN_MENU_ACTIVE_DEVICES=("${(@kv)_VPN_ACTIVE_DEVICES}")
     _VPN_MENU_UNMANAGED_DEVICES=("${_VPN_UNMANAGED_DEVICES[@]}")
     _VPN_MENU_ACTIVE_KNOWN=1
+  else
+    snapshot_status=$?
+    (( snapshot_status == 130 || snapshot_status == 143 )) && return "$snapshot_status"
   fi
 
   _VPN_MENU_DEFAULT_IFACE=$(_vpn_effective_default_iface) \

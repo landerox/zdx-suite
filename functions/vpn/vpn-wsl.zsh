@@ -27,10 +27,14 @@ typeset -g VPN_DNS_FALLBACK_SECONDARY="${VPN_DNS_FALLBACK_SECONDARY:-9.9.9.9}"
 # stdout: the networking mode wslinfo reports (nat, mirrored, virtioproxy,
 # none), or "unknown" without wslinfo or a usable answer.
 _vpn_wsl_networking_mode() {
+  setopt LOCAL_OPTIONS PIPE_FAIL
   local mode=""
+  local -i mode_status=0
   if command -v wslinfo &>/dev/null; then
-    mode=$(command wslinfo --networking-mode 2>/dev/null </dev/null \
-      | command head -c 64) || mode=""
+    mode=$(_vpn_readonly_exec 3 wslinfo --networking-mode \
+      | command head -c 64) || mode_status=$?
+    (( mode_status == 130 || mode_status == 143 )) && return "$mode_status"
+    (( mode_status == 0 )) || mode=""
   fi
   mode="${${mode%%$'\n'*}%$'\r'}"
   mode="${mode:l}"
@@ -44,8 +48,11 @@ _vpn_ipv6_default_route_absent() {
   setopt LOCAL_OPTIONS PIPE_FAIL
   command -v ip &>/dev/null || return 2
   local routes=""
-  routes=$(command ip -6 route show default 2>/dev/null </dev/null \
-    | command head -c 4096) || return 2
+  local -i route_status=0
+  routes=$(_vpn_readonly_exec 3 ip -6 route show default \
+    | command head -c 4096) || route_status=$?
+  (( route_status == 130 || route_status == 143 )) && return "$route_status"
+  (( route_status == 0 )) || return 2
   [[ -z "${routes//[[:space:]]/}" ]]
 }
 
@@ -60,7 +67,11 @@ _vpn_should_apply_wsl_ipv6_fix() {
   _vpn_platform_is darwin && return 1
   [[ "${VPN_MENU_WSL_IPV6_FIX:-}" == 1 ]] && return 0
   _vpn_platform_is wsl || return 1
-  [[ "$(_vpn_wsl_networking_mode)" == nat ]] && return 0
+  local mode=""
+  local -i mode_status=0
+  mode=$(_vpn_wsl_networking_mode) || mode_status=$?
+  (( mode_status == 130 || mode_status == 143 )) && return "$mode_status"
+  [[ "$mode" == nat ]] && return 0
   _vpn_ipv6_default_route_absent
 }
 

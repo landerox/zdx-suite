@@ -551,7 +551,9 @@ _vpn_interactive() {
   {
     while true; do
       (( _vpn_interrupted_status == 0 )) || return $_vpn_interrupted_status
-      _vpn_state_load
+      local -i state_status=0
+      _vpn_state_load || state_status=$?
+      (( state_status == 130 || state_status == 143 )) && return "$state_status"
 
       # In-loop locals keep an initializer: re-declaring an existing local
       # without one makes zsh print the variable on every later iteration.

@@ -8,6 +8,11 @@ verification, and remaining limitations.
 
 ### Security
 
+- VPN: bound local diagnostic and protected-read programs, retain returned
+  interruption statuses, disable provider URL globbing, and clean verified
+  owned oversized report stages without relaxing the publication limit.
+  Partial rename results count credential files and matching saved choices.
+
 - System: bound gcloud, uv, fnm and fzf ownership observations, preserve owner
   timeouts, and execute vetted native diagnostic programs. Indeterminate gcloud
   or uv ownership stops planning; malformed service identifiers and empty
