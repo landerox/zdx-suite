@@ -1796,6 +1796,9 @@ summary, and a verdict.
 - **List, activate, and inspect (`venv-list`, `venv-activate`,
   `venv-info`)**: Operate only on `.venv`, `venv`, or one direct child of
   `.virtualenvs/` that is owned, symlink-free, and contains `pyvenv.cfg`.
+  Discovery reports unsafe candidates and keeps usable environments available.
+  `venv-info` prefers the active environment when it belongs to the validated
+  project inventory.
 - **Remove (`venv-remove`)**: Review, fingerprint, confirm, and remove one
   exact project-local environment after a timeout-bounded structured mount
   check. External Poetry and Conda environments are never adopted.

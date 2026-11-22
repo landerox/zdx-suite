@@ -252,13 +252,56 @@ _py_run_uv_scoped() {
     "$uv_command" "$@"
 }
 
+# Add the project writer's group/other write restrictions while retaining a
+# caller's stricter mask. The writer and its children inherit the new mask.
+_py_run_project_writer() (
+  local previous_mask="" safe_mask=""
+  previous_mask=$(builtin umask) || return $?
+  builtin printf -v safe_mask '%03o' $(( 8#$previous_mask | 8#22 ))
+  builtin umask "$safe_mask" || return $?
+  "$@"
+)
+
+_py_is_clt_python() {
+  [[ "${OSTYPE:-}" == darwin* \
+    && ( "$1" == /usr/bin/python3 || "${1:A}" == /usr/bin/python3 ) ]]
+}
+
+# REPLY is the resolved executable. Never run Apple's launcher unless the
+# bounded developer-directory probe positively clears it.
+_py_resolve_python() {
+  local name="$1" candidate="" developer_dir=""
+  candidate=$(builtin whence -p -- "$name" 2>/dev/null) || candidate=""
+  [[ "$candidate" == /* && -f "$candidate" && -x "$candidate" ]] || {
+    _py_error "Python interpreter not found: $name"
+    return 1
+  }
+  if _py_is_clt_python "$candidate"; then
+    local -i probe_rc=0
+    developer_dir=$(_py_run_with_timeout 3 xcode-select -p </dev/null 2>/dev/null) \
+      || probe_rc=$?
+    if (( probe_rc != 0 )) || [[ "$developer_dir" != /* \
+      || "$developer_dir" == *$'\n'* || ! -d "$developer_dir" ]]; then
+      _py_error "Apple's Python launcher requires Command Line Tools or Xcode."
+      _py_info "Install or select the developer tools, or select a separate Python installation."
+      case "$probe_rc" in
+        124|130|143) return "$probe_rc" ;;
+        *) return 1 ;;
+      esac
+    fi
+  fi
+  REPLY="$candidate"
+}
+
+# REPLY retains the exact interpreter that passed the metadata probe.
 _py_require_tomllib() {
-  _py_check_command python3 || return $?
+  _py_resolve_python python3 || return $?
+  local python_command="$REPLY"
   local -i probe_rc=0
-  command python3 -B -I -S -c 'import tomllib' </dev/null >/dev/null 2>&1 \
+  command "$python_command" -B -I -S -c 'import tomllib' </dev/null >/dev/null 2>&1 \
     || probe_rc=$?
   case "$probe_rc" in
-    0) return 0 ;;
+    0) REPLY="$python_command"; return 0 ;;
     130|143) return "$probe_rc" ;;
     *)
       _py_error "Python 3.11 or newer is required for project metadata."

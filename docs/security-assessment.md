@@ -1150,6 +1150,10 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   before each move.
 - Py lifecycle mutations accept only `.venv`, `venv`, or one safe direct child
   of `.virtualenvs` below an owned project. Creation freezes the absent target.
+  Discovery validates literal NUL-delimited paths and skips unsafe candidates.
+  An incomplete inventory fails closed. Environment creation, Python pinning,
+  and package mutations mask group and other write bits in their child
+  processes while retaining stricter caller permissions.
   `venv-rebuild` replaces only the project `.venv` of a uv project: it
   freezes the project root, the `.venv` and interpreter identities, and the
   `pyproject.toml`, `uv.lock`, and `.python-version` fingerprints, refuses

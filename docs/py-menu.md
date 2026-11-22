@@ -127,17 +127,24 @@ An environment must be an owned, symlink-free directory with a regular
 group/world-writable. Ancestors are accepted only when owned by the current
 EUID or the namespace-visible owner of `/` (normally UID 0) and protected
 against replacement, except for a sticky shared root owned by that system-root
-identity. `.virtualenvs` discovery accepts at most 128 safe direct-child names
-under a 10-second deadline (see [Bounded commands](#bounded-commands)).
-Discovery and destructive lifecycle
-operations do not adopt external Poetry or Conda environments. `venv-create`
+identity. `.virtualenvs` discovery accepts at most 128 direct-child records
+under a 10-second deadline and keeps literal filenames intact. It skips and
+reports refused candidates while retaining valid siblings. An unsafe container
+is skipped without traversal. A failed or incomplete inventory fails closed.
+For `venv-info`, the active environment is preferred when it matches a
+validated record. Otherwise, ordinary local selection applies. An explicit
+`--path` must match a validated record.
+
+Discovery and lifecycle operations stay inside the project. `venv-create`
 freezes the project root, creates a new `.venv` through `uv` or the
 standard-library `venv` module, and never replaces an existing target. The uv
 path passes `--no-python-downloads`: a missing runtime fails instead of being
 downloaded implicitly and must be installed explicitly with
 `venv-python-install`. Poetry creation is permanently refused because its
 target path cannot be bounded before mutation; `--poetry` shows that refusal
-and creates nothing.
+and creates nothing. For an existing `.venv` that fails validation, the
+command directs the user to inspect the path and its ownership, permissions,
+and `pyvenv.cfg`.
 
 Activation prints a plan, requires confirmation or `--yes`, and fingerprints
 the owned activation script before sourcing that exact opened descriptor.
@@ -152,7 +159,8 @@ needs a stable descriptor path from /proc/<pid>/fd, and this host has none
 the script yourself. A flag that changes after review is refused again before
 sourcing. Successful activation requires the
 reviewed environment in `VIRTUAL_ENV`, its `bin` first in `PATH`, and its
-validated Python executable selected. Failure restores the previous standard
+validated Python executable selected. The `bin` path and selected Python may
+use a trusted alias to that same directory. Failure restores the previous standard
 activation variables, `deactivate` and `pydoc` functions, and the `pydoc` alias.
 Protected or local activation parameters are refused before sourcing because
 they cannot be restored as ordinary session state. Activation remains execution
@@ -267,6 +275,10 @@ the installed view is restricted to uv-managed interpreters. Pinning sets the
 reviewed directory explicitly, disables project/workspace discovery for that
 write, and removes uv project, environment, and working-directory redirection
 variables from the child process.
+
+Creation, pinning, and package mutation mask group and other write bits in
+their child processes. Stricter caller settings and the caller's mask stay
+in effect.
 
 Package mutations target either the detected uv/Poetry project or a validated
 project-local virtual environment. Poetry markers, project metadata, lock
@@ -411,6 +423,7 @@ namespace and mount configuration.
 | Removal and rebuild mount check | `/proc/self/mountinfo` | as Linux | `lstat` device walk |
 | Relocatable activation | `/proc/<pid>/fd` | as Linux | refused before review |
 | Ordinary activation | `/proc/<pid>/fd` | as Linux | `/dev/fd` |
+| Apple's Python launcher | not applicable | not applicable | requires a developer directory verified by bounded `xcode-select -p` |
 | python.org framework interpreter | not applicable | not applicable | accepted as above |
 | Projects on Windows drives | not applicable | refused, with DrvFs hint | not applicable |
 
