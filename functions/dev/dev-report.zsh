@@ -50,6 +50,10 @@ _dev_report_init() {
 
 _dev_report_section() {
   (( _DEV_REPORT_ACTIVE )) || return 0
+  if (( ${#_DEV_REPORT_LINES[@]} > 0 )) \
+    && [[ -n "${_DEV_REPORT_LINES[-1]}" ]]; then
+    _DEV_REPORT_LINES+=("")
+  fi
   _DEV_REPORT_LINES+=("## ${1}")
   _DEV_REPORT_LINES+=("")
 }

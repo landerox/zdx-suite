@@ -20,9 +20,6 @@ typeset -g DEV_CLEAN_DEPTH="${DEV_CLEAN_DEPTH-12}"
 # configuration content is never evaluated as an arithmetic expression.
 typeset -g DEV_CLEAN_MAX_TARGETS="${DEV_CLEAN_MAX_TARGETS-10000}"
 
-# Number of plan entries shown before the preview is summarized.
-typeset -gi _DEV_CLEAN_PREVIEW_LIMIT=25
-
 # Set only by dev-clean-py and dev-clean-all from their --keep-build flag.
 typeset -gi _DEV_CLEAN_KEEP_BUILD=0
 
@@ -629,6 +626,48 @@ _dev_clean_build_plan() {
   return 0
 }
 
+# One display word only; never use it as a filesystem path or mutation argv.
+# Quote control bytes before building TSV rows so a path stays in one cell.
+_dev_clean_display_path() {
+  local target_path="$1" display_home="${HOME-}" suffix=""
+  [[ "$display_home" == / ]] || display_home="${display_home%/}"
+  if [[ -n "$display_home" && "$display_home" != / \
+    && "$target_path" == "$display_home" ]]; then
+    REPLY="~"
+  elif [[ -n "$display_home" && "$display_home" != / \
+    && "$target_path" == "$display_home"/* ]]; then
+    suffix="${target_path#"$display_home"/}"
+    REPLY="~/${(q+)suffix}"
+  else
+    REPLY="${(q+)target_path}"
+  fi
+  return 0
+}
+
+# REPLY is one presentation-only TSV row. Detail strings are fixed UI text;
+# raw target identities and relative paths remain in the original plan.
+_dev_clean_result_row() {
+  local index="$1" outcome="$2" root="$3" relative="$4" detail="$5"
+  _dev_clean_display_path "$root/$relative"
+  REPLY="$index"$'\t'"$outcome"$'\t'"$REPLY"$'\t'"$detail"
+  return 0
+}
+
+# An authorized plan can stop before apply starts. No deletion was attempted.
+_dev_clean_not_run_results() {
+  local root="$1" detail="$2"
+  shift 2
+  local -a records=("$@") rows=()
+  local -i offset=0 index=0
+  local REPLY
+  for (( offset = 1; offset <= ${#records[@]}; offset += 4 )); do
+    index=$(( index + 1 ))
+    _dev_clean_result_row "$index" not-run "$root" "${records[offset]}" "$detail"
+    rows+=("$REPLY")
+  done
+  _dev_table --outcome-column 2 $'#\tResult\tTarget\tDetail' "${rows[@]}"
+}
+
 _dev_clean_show_plan() {
   local root="$1"
   shift
@@ -640,29 +679,19 @@ _dev_clean_show_plan() {
   local -i target_count=$(( ${#records[@]} / 4 ))
 
   local REPLY
-  _dev_count_noun "$target_count" target
-  _dev_info "Removal plan ($REPLY) under $root:"
+  _dev_clean_display_path "$root"
+  _dev_label Project "$REPLY"
+  _dev_count_noun "$target_count" target || return 1
+  _dev_info "Removal plan ($REPLY):"
 
-  local -i shown=0
-  local relative device inode object_type
-  while (( ${#records[@]} > 0 )); do
-    relative="${records[1]}"
-    device="${records[2]}"
-    inode="${records[3]}"
-    object_type="${records[4]}"
-    records=("${records[@]:4}")
-
-    if (( shown >= _DEV_CLEAN_PREVIEW_LIMIT )); then
-      _dev_dim "... and $(( target_count - shown )) more."
-      break
-    fi
-    if [[ "$object_type" == "directory" ]]; then
-      _dev_dim "dir   $(_dev_display_escape "$relative")"
-    else
-      _dev_dim "file  $(_dev_display_escape "$relative")"
-    fi
-    shown=$(( shown + 1 ))
+  local -a rows=()
+  local -i offset=0 index=0
+  for (( offset = 1; offset <= ${#records[@]}; offset += 4 )); do
+    index=$(( index + 1 ))
+    _dev_clean_display_path "$root/${records[offset]}"
+    rows+=("$index"$'\t'"${records[offset + 3]}"$'\t'"$REPLY")
   done
+  _dev_table $'#\tType\tTarget' "${rows[@]}"
 }
 
 # --- Plan execution --------------------------------------------------------
@@ -683,12 +712,15 @@ _dev_clean_apply() {
   local -a records=("$@")
 
   local -i removed=0 skipped=0 failed=0 directory_rc=0 allow_repositories=0
+  local -i completed=0 not_run=0 apply_status=0 next_record=0 removal_failed=0
+  local -i target_count=$(( ${#records[@]} / 4 )) index=0
   local relative expected_device expected_inode expected_type
-  local -a current_identity=()
-  local result_summary=""
+  local -a current_identity=() result_rows=()
+  local REPLY
 
   local -i record_index
   for (( record_index = 1; record_index <= ${#records[@]}; record_index += 4 )); do
+    index=$(( (record_index + 3) / 4 ))
     relative="${records[record_index]}"
     expected_device="${records[record_index + 1]}"
     expected_inode="${records[record_index + 2]}"
@@ -698,12 +730,16 @@ _dev_clean_apply() {
       _dev_warn \
         "Refusing unsafe target: $(_dev_display_escape "$relative")"
       failed=$(( failed + 1 ))
+      _dev_clean_result_row "$index" blocked "$root" "$relative" "unsafe relative path"
+      result_rows+=("$REPLY")
       continue
     fi
 
     if [[ ! -e "$relative" && ! -L "$relative" ]]; then
       # Already gone, usually because a parent directory was removed first.
       skipped=$(( skipped + 1 ))
+      _dev_clean_result_row "$index" skipped "$root" "$relative" "already absent"
+      result_rows+=("$REPLY")
       continue
     fi
 
@@ -711,6 +747,8 @@ _dev_clean_apply() {
       _dev_warn \
         "Could not inspect target: $(_dev_display_escape "$relative")"
       failed=$(( failed + 1 ))
+      _dev_clean_result_row "$index" failed "$root" "$relative" "could not inspect target"
+      result_rows+=("$REPLY")
       continue
     }
     current_identity=("${reply[@]}")
@@ -720,6 +758,8 @@ _dev_clean_apply() {
       _dev_warn \
         "Refusing target changed after planning: $(_dev_display_escape "$relative")"
       failed=$(( failed + 1 ))
+      _dev_clean_result_row "$index" blocked "$root" "$relative" "changed after planning"
+      result_rows+=("$REPLY")
       continue
     fi
 
@@ -733,15 +773,26 @@ _dev_clean_apply() {
       directory_rc=0
       _dev_clean_directory_safe_to_remove \
         "$relative" "$allow_repositories" || directory_rc=$?
-      (( directory_rc == 130 || directory_rc == 143 )) && return "$directory_rc"
+      if (( directory_rc == 130 || directory_rc == 143 )); then
+        failed=$(( failed + 1 ))
+        apply_status=$directory_rc
+        _dev_clean_result_row "$index" interrupted "$root" "$relative" "status $directory_rc"
+        result_rows+=("$REPLY")
+        next_record=$(( record_index + 4 ))
+        break
+      fi
       if (( directory_rc != 0 )); then
         _dev_warn "Refusing a target that $REPLY: $(_dev_display_escape "$relative")"
         failed=$(( failed + 1 ))
+        _dev_clean_result_row "$index" blocked "$root" "$relative" "protected data or incomplete inspection"
+        result_rows+=("$REPLY")
         continue
       fi
       # The bounded contents observation must not renew a replaced target.
       _dev_clean_lstat "$relative" || {
         failed=$(( failed + 1 ))
+        _dev_clean_result_row "$index" failed "$root" "$relative" "could not inspect target after checking contents"
+        result_rows+=("$REPLY")
         continue
       }
       if [[ "${reply[1]}" != "$expected_device" \
@@ -749,19 +800,25 @@ _dev_clean_apply() {
         || "${reply[3]}" != "$expected_type" ]]; then
         _dev_warn "Refusing target changed after planning: $(_dev_display_escape "$relative")"
         failed=$(( failed + 1 ))
+        _dev_clean_result_row "$index" blocked "$root" "$relative" "changed while checking contents"
+        result_rows+=("$REPLY")
         continue
       fi
     fi
 
+    removal_failed=0
     # This is deliberately the final operation before rm. The deletion uses
     # the relative record through the original cwd anchor, never the movable
     # absolute root pathname.
     _dev_clean_revalidate_root \
       "$root" "$expected_root_device" "$expected_root_inode" \
       "$expected_root_type" || {
-      result_summary="$removed removed, $failed failed, $skipped skipped"
-      _dev_error "Cleanup stopped because the project root changed ($result_summary)."
-      return 1
+      failed=$(( failed + 1 ))
+      apply_status=1
+      _dev_clean_result_row "$index" blocked "$root" "$relative" "root changed before removal"
+      result_rows+=("$REPLY")
+      next_record=$(( record_index + 4 ))
+      break
     }
 
     if [[ "$expected_type" == "directory" ]]; then
@@ -771,6 +828,7 @@ _dev_clean_apply() {
         _dev_warn \
           "Could not remove directory: $(_dev_display_escape "$relative")"
         failed=$(( failed + 1 ))
+        removal_failed=1
       fi
     else
       if command rm -f -- "$relative" 2>/dev/null; then
@@ -779,29 +837,78 @@ _dev_clean_apply() {
         _dev_warn \
           "Could not remove file: $(_dev_display_escape "$relative")"
         failed=$(( failed + 1 ))
+        removal_failed=1
       fi
     fi
 
     _dev_clean_revalidate_root \
       "$root" "$expected_root_device" "$expected_root_inode" \
       "$expected_root_type" || {
-      result_summary="$removed removed, $failed failed, $skipped skipped"
-      _dev_error "Cleanup stopped after the project root changed ($result_summary)."
-      return 1
+      apply_status=1
+      if (( removal_failed )); then
+        _dev_clean_result_row "$index" failed "$root" "$relative" "removal failed; root verification failed"
+      else
+        failed=$(( failed + 1 ))
+        _dev_clean_result_row "$index" failed "$root" "$relative" "removal completed; root verification failed"
+      fi
+      result_rows+=("$REPLY")
+      next_record=$(( record_index + 4 ))
+      break
     }
+
+    if (( removal_failed )); then
+      _dev_clean_result_row "$index" failed "$root" "$relative" "removal failed"
+    else
+      completed=$(( completed + 1 ))
+      _dev_clean_result_row "$index" done "$root" "$relative" "removed"
+    fi
+    result_rows+=("$REPLY")
   done
 
-  local REPLY
+  if (( next_record > 0 )); then
+    for (( record_index = next_record; record_index <= ${#records[@]}; record_index += 4 )); do
+      index=$(( (record_index + 3) / 4 ))
+      not_run=$(( not_run + 1 ))
+      _dev_clean_result_row "$index" not-run "$root" "${records[record_index]}" "cleanup stopped before this target"
+      result_rows+=("$REPLY")
+    done
+  fi
+  _dev_table --outcome-column 2 $'#\tResult\tTarget\tDetail' "${result_rows[@]}"
+
   _dev_count_noun "$removed" target
   local removed_label="$REPLY"
+  if (( skipped > 0 )); then
+    _dev_count_noun "$skipped" target
+    _dev_dim "$REPLY already absent."
+  fi
+  if (( not_run > 0 )); then
+    _dev_count_noun "$not_run" target
+    _dev_dim "$REPLY not run."
+  fi
+  if (( apply_status == 130 || apply_status == 143 )); then
+    _dev_report_result interrupted "status $apply_status; $removed_label removed" \
+      "Cleanup interrupted (status $apply_status): $removed_label removed."
+    return "$apply_status"
+  fi
+
   if (( failed > 0 )); then
-    _dev_error "Removed $removed_label; $failed failed, $skipped skipped."
-    _dev_report_result failed "removed $removed_label; $failed failed"
+    _dev_count_noun "$target_count" target
+    local failure_counts="$failed of $REPLY failed"
+    if (( completed > 0 )); then
+      if (( ${+functions[_zdx_timed_mark_partial]} )); then
+        _zdx_timed_mark_partial 2>/dev/null || true
+      fi
+      _dev_report_result failed "$failure_counts" \
+        "Cleanup completed with partial failures: $failure_counts."
+    else
+      _dev_report_result failed "$failure_counts" \
+        "Cleanup failed: $failure_counts."
+    fi
     return 1
   fi
 
   _dev_report_result done "removed $removed_label" \
-    "Removed $removed_label ($skipped already absent)."
+    "Cleanup completed: $removed_label removed."
   return 0
 }
 
@@ -828,6 +935,8 @@ _dev_clean_workflow() {
   local root_device="${reply[2]}"
   local root_inode="${reply[3]}"
   local root_type="${reply[4]}"
+  _dev_clean_display_path "$root"
+  local root_display="$REPLY"
 
   local -i depth=$(( 10#$DEV_CLEAN_DEPTH ))
 
@@ -864,7 +973,7 @@ _dev_clean_workflow() {
   local -i target_count=$(( ${#plan[@]} / 4 ))
   if (( target_count == 0 )); then
     _dev_report_result current "nothing to clean" \
-      "Nothing to clean under $root."
+      "Nothing to clean under $root_display."
     return 0
   fi
 
@@ -873,8 +982,8 @@ _dev_clean_workflow() {
   _dev_count_noun "$target_count" target
   local target_label="$REPLY"
   if (( dry_run )); then
-    _dev_warn "DRY-RUN — no files were removed."
-    _dev_report_result planned "$target_label"
+    _dev_report_result planned "$target_label" \
+      "Dry run: $target_label planned; nothing was removed."
     return 0
   fi
 
@@ -882,8 +991,8 @@ _dev_clean_workflow() {
   local outcome="declined"
   {
     (( auto_yes )) && _DEV_AUTO_YES=1
-    outcome=$(_dev_confirm_outcome \
-      "Remove $target_label under $root?")
+    _dev_confirm_outcome "Remove $target_label under $root_display?"
+    outcome="$REPLY"
   } always {
     _DEV_AUTO_YES=$previous_auto_yes
   }
@@ -899,13 +1008,18 @@ _dev_clean_workflow() {
       ;;
     *)
       _dev_report_result skipped "cancelled; nothing removed" \
-        "Cancelled. Nothing was removed."
+        "Cancelled: nothing was removed."
       return 0
       ;;
   esac
 
   _dev_clean_revalidate_root \
-    "$root" "$root_device" "$root_inode" "$root_type" || return 1
+    "$root" "$root_device" "$root_inode" "$root_type" || {
+    _dev_clean_not_run_results "$root" "root changed before execution" "${plan[@]}"
+    _dev_report_result blocked "project root changed before execution" \
+      "Cleanup blocked: the project root changed before any removal."
+    return 1
+  }
 
   _dev_clean_apply \
     "$root" "$root_device" "$root_inode" "$root_type" "${plan[@]}"

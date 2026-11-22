@@ -24,10 +24,12 @@ typeset -gi _DEV_ACTIONS_JOBS=8
 #   scan <file>...
 #     stdout: one "F<TAB>index<TAB>sha256" record per file, then one
 #             "R<TAB>index<TAB>line<TAB>class<TAB>owner<TAB>repo<TAB>path<TAB>
-#             ref<TAB>comment<TAB>display" record per `uses:` line outside a
-#             block scalar. Empty fields are "-". The class is remote, local,
-#             docker, or invalid; only a remote record carries validated
-#             owner, repo, path, and ref fields, and comment is the version a
+#             ref<TAB>comment<TAB>display" record per workflow job/step or
+#             composite runs.steps `uses:` reference. Nested input/environment
+#             and block-scalar data are excluded. Empty fields are "-".
+#             The class is remote, local, docker, or invalid; only a remote
+#             record carries validated owner, repo, path, and ref fields,
+#             and comment is the version a
 #             trailing comment names (`# v4.2.2`, `# 4.2.2`, `# tag=v4.2.2`).
 #   rewrite <original> <candidate> <edits>
 #     Creates <candidate> (mode 600, never replacing a file) from <original>
@@ -52,10 +54,16 @@ USES = re.compile(
     rb"(?P<quote>['\"]?)(?P<value>[^\s'\"#]+)(?P=quote)"
     rb"(?P<trailer>(?:[ \t]+#.*)?[ \t]*)$"
 )
+BLOCK_ANCHOR = rb"&[^\s,\[\]{}]+"
 BLOCK_HEADER = re.compile(
     rb"^[ \t]*(?:-[ \t]+)*(?:[^\s#][^#]*?[ \t]*:[ \t]+)?"
+    rb"(?:(?:" + BLOCK_ANCHOR + rb"|![^\s,\[\]{}]*)[ \t]+)*"
     rb"[|>][0-9+-]*(?:[ \t]+#.*)?[ \t]*$"
 )
+CONTAINER_HEADER = re.compile(
+    rb"([^\s:#][^:]*?):[ \t]*(?:" + BLOCK_ANCHOR + rb"[ \t]*)?(?:#.*)?"
+)
+ITEM_ANCHOR = re.compile(BLOCK_ANCHOR + rb"[ \t]*(?:#.*)?")
 COMMENT = re.compile(
     rb"^(?P<lead>[ \t]+#[ \t]*(?:tag=)?)"
     rb"(?P<version>v?[0-9]+(?:\.[0-9]+){0,2})(?P<rest>(?:[ \t].*)?)$"
@@ -178,13 +186,18 @@ def classify(value):
 
 def scan(paths):
     records = []
+    opaque_parent = object()
+    opaque_item = object()
     for index, path in enumerate(paths, 1):
         data = read_stable(path)
         records.append(f"F\t{index}\t{hashlib.sha256(data).hexdigest()}")
         block_parent = None
         block_indent = None
+        containers = []
         for number, line in enumerate(split_lines(data), 1):
             body = body_of(line)
+            if number == 1:
+                body = body.removeprefix(b"\xef\xbb\xbf")
             indent = len(body) - len(body.lstrip(b" "))
             if block_parent is not None:
                 if not body.strip(b" \t"):
@@ -199,7 +212,36 @@ def scan(paths):
                 else:
                     block_parent = None
                     block_indent = None
-            if KEY_LINE.match(body):
+            content = body[indent:]
+            if not content or content.startswith(b"#"):
+                continue
+            sequence = content == b"-" or content.startswith((b"- ", b"-\t"))
+            while containers:
+                parent_indent, parent_key = containers[-1]
+                # A sequence may start at its mapping key's indentation.
+                # Retain that key while replacing each prior list item.
+                if parent_indent < indent or (
+                    sequence and parent_indent == indent
+                    and parent_key not in (None, opaque_item)
+                ):
+                    break
+                containers.pop()
+            if sequence:
+                containers.append((indent, None))
+                content = content[1:].lstrip(b" \t")
+            ancestors = [key for _, key in containers]
+            job_reference = (
+                len(ancestors) == 2
+                and ancestors[0] == b"jobs"
+                and isinstance(ancestors[1], bytes)
+            )
+            step_reference = (
+                len(ancestors) == 4
+                and ancestors[0] == b"jobs"
+                and isinstance(ancestors[1], bytes)
+                and ancestors[2:] == [b"steps", None]
+            ) or ancestors == [b"runs", b"steps", None]
+            if (job_reference or step_reference) and KEY_LINE.match(body):
                 match = USES.match(body)
                 if match is None:
                     fields = ["invalid", "-", "-", "-", "-", "-"]
@@ -215,6 +257,19 @@ def scan(paths):
                 records.append(
                     "\t".join(["R", str(index), str(number)] + fields + [shown])
                 )
+            header = CONTAINER_HEADER.fullmatch(content)
+            if header is not None:
+                key = header.group(1).rstrip(b" \t")
+                if len(key) >= 2 and key[:1] == key[-1:] and key[:1] in (b"'", b'"'):
+                    key = key[1:-1]
+                containers.append((len(body) - len(content), key))
+            elif re.match(rb"[^\s:#][^:]*?:", content):
+                # An unparsed mapping value still owns its indented data.
+                containers.append((len(body) - len(content), opaque_parent))
+            elif sequence and content and not content.startswith(b"#"):
+                if ITEM_ANCHOR.fullmatch(content) is None:
+                    # Keep the whole scalar list item opaque until its sibling.
+                    containers[-1] = (indent, opaque_item)
             if BLOCK_HEADER.match(body):
                 block_parent = indent
                 block_indent = None
@@ -1536,7 +1591,8 @@ dev-update-actions() {
       return $interrupted
     fi
     local apply_outcome=""
-    apply_outcome=$(_dev_confirm_outcome "Update $planned_label?")
+    _dev_confirm_outcome "Update $planned_label?"
+    apply_outcome="$REPLY"
     case "$apply_outcome" in
       confirmed) ;;
       unavailable)

@@ -78,7 +78,7 @@ dev_scope_legacy_backup() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Removal plan"* ]]
-  [[ "$output" == *"DRY-RUN"* ]]
+  [[ "$output" == *"Dry run: 4 targets planned; nothing was removed."* ]]
   [ -d "$DEV_PROJECT/pkg/__pycache__" ]
   [ -d "$DEV_PROJECT/.pytest_cache" ]
   [ -f "$DEV_PROJECT/pkg/stale.pyc" ]
@@ -155,8 +155,8 @@ dev_scope_legacy_backup() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"dbt build artifacts and logs: 4 targets"* ]]
-  [[ "$output" == *"dir   notebooks/.ipynb_checkpoints"* ]]
-  [[ "$output" == *"file  logs/dbt.log.1"* ]]
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +directory +~/project/notebooks/[.]ipynb_checkpoints$'
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +file +~/project/logs/dbt[.]log[.]1$'
   [[ "$output" != *"airflow.log"* && "$output" != *"archive"* ]]
   [[ "$output" != *"models/target"* && "$output" != *".hypothesis"* ]]
 
@@ -184,7 +184,8 @@ dev_scope_legacy_backup() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"dbt build artifacts and logs: 2 targets"* ]]
-  [[ "$output" == *"dir   target"* && "$output" == *"dir   dbt_packages"* ]]
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +directory +~/project/target$'
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +directory +~/project/dbt_packages$'
 
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-py --keep-build --yes'
 

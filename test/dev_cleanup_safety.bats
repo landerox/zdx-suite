@@ -27,7 +27,7 @@ dev_scope_duckdb_cargo() {
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --yes'
   [ "$status" -eq 0 ]
   [ "$(cat "$DEV_PROJECT/target/data/state.duckdb")" = 'private database' ]
-  [[ "$output" != *'dir   target'* ]]
+  [[ "$output" != *'~/project/target'* ]]
 }
 
 @test "dev cleanup scope: Cargo manifest cannot override DuckDB protection" {
@@ -197,7 +197,7 @@ dev_scope_failed_protected_inventory() {
     _dev_confirm_outcome() {
       command mv "$DEV_PROJECT" "$DEV_MOVED" || return 91
       command ln -s "$DEV_VICTIM" "$DEV_PROJECT" || return 92
-      print -r -- confirmed
+      REPLY=confirmed
     }
     dev-clean-py
   '
@@ -236,7 +236,8 @@ EOF
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"root pathname"* ]]
-  [[ "$output" == *"1 removed"* ]]
+  [[ "$output" == *"removal completed; root verification failed"* ]]
+  [[ "$output" == *"1 target not run."* ]]
   [ -L "$DEV_PROJECT" ]
   [ "$(cat "$DEV_VICTIM/one.pyc")" = "victim-a" ]
   [ "$(cat "$DEV_VICTIM/two.pyc")" = "victim-b" ]
@@ -251,7 +252,7 @@ EOF
     _dev_confirm_outcome() {
       command mv stale.pyc stale.pyc.planned || return 91
       print -r -- replacement > stale.pyc
-      print -r -- confirmed
+      REPLY=confirmed
     }
     dev-clean-py
   '
@@ -450,7 +451,7 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --keep-build --dry-run'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dir   pkg/__pycache__"* ]]
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +directory +~/project/pkg/__pycache__$'
   [[ "$output" != *"build/lib"* && "$output" != *"dist/stale.pyc"* ]]
   [[ "$output" != *"target/debug"* ]]
 }
@@ -474,12 +475,12 @@ EOF
 
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --dry-run'
   [ "$status" -eq 0 ]
-  [[ "$output" != *"dir   target"* ]]
+  [[ "$output" != *"~/project/target"* ]]
 
   : > "$DEV_PROJECT/Cargo.toml"
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --dry-run'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dir   target"* ]]
+  printf '%s\n' "$output" | grep -Eq '^  [0-9]+ +directory +~/project/target$'
 }
 
 @test "dev cleanup safety: dbt output is planned only beside a regular dbt_project.yml" {
@@ -490,7 +491,7 @@ EOF
   run run_zsh 'cd "$DEV_PROJECT" && dev-clean-all --dry-run'
   [ "$status" -eq 0 ]
   [[ "$output" == *"dbt build artifacts and logs: nothing to remove"* ]]
-  [[ "$output" != *"dir   target"* && "$output" != *"dbt_packages"* ]]
+  [[ "$output" != *"~/project/target"* && "$output" != *"dbt_packages"* ]]
   [[ "$output" != *"logs/dbt.log"* ]]
 
   # A symlinked project file does not prove dbt output either.

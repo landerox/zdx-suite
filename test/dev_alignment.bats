@@ -528,7 +528,7 @@ EOF
 @test "dev alignment: diff rendering keeps UI off stdout" {
   cat > "$TEST_MOCK_BIN/git" <<'EOF'
 #!/usr/bin/env sh
-if [ "${1:-}" = "diff" ]; then
+if [ "${1:-}" = "--no-pager" ] && [ "${2:-}" = "diff" ]; then
   printf '%s\n' 'diff --git a/demo b/demo' '-old' '+new'
 fi
 exit 0

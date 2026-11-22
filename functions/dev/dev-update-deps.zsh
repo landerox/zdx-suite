@@ -315,8 +315,8 @@ dev-update-deps() {
     }
     local apply_outcome
     _dev_count_noun "$updated" update
-    apply_outcome=$(_dev_confirm_outcome \
-      "Apply $REPLY to pyproject.toml?")
+    _dev_confirm_outcome "Apply $REPLY to pyproject.toml?"
+    apply_outcome="$REPLY"
     case "$apply_outcome" in
       confirmed) ;;
       unavailable)

@@ -482,18 +482,23 @@ snippet and executes unintended code.
 - Developer argument-free commands share one exact-arity parser: only zero
   arguments or one help flag is accepted before operational probes. Menu row
   builders reject pipe, newline, and NUL delimiters before emitting fzf data.
-- Developer confirmation prompts visibly escape user-derived text before
-  rendering it in fzf or the terminal fallback, preventing control characters
-  in a path from changing the authorization UI.
+- Developer confirmation consumers call the shared outcome helper in the
+  current shell and copy its decision immediately, retaining trust disclosures,
+  post-consent leases and auto-yes restoration. Prompts visibly escape
+  user-derived text before fzf or the terminal fallback, preventing control
+  characters in a path from changing the authorization UI.
 - `dev-update-actions` treats every workflow value, tag listing line, and
   `gh api` reply as data. Workflow files are read as bytes by an isolated
   (`-I -S`) parser; owners, repositories, action paths, refs, versions, and
   SHAs must match strict patterns in the parser and again in the shell before
   they reach a `https://github.com/<owner>/<repo>` URL, a `git` argument
   after `--`, or a `gh api` path, and `gh` output must be a plain integer. An
-  invalid value is listed as refused and never queried or rewritten. Display
-  text from workflows is escaped, and the rewriter accepts only an
-  `owner/repo[/path]@<40-hex>` value and a `vX.Y.Z` comment.
+  invalid reference value is listed as refused and never queried or rewritten.
+  Display text from workflows is escaped, and the rewriter accepts only an
+  `owner/repo[/path]@<40-hex>` value and a `vX.Y.Z` comment. Container context
+  limits references to genuine workflow job/step and composite positions;
+  nested inputs, environment values and block-scalar content stay data. Block
+  anchor declarations do not expand aliases or execute YAML metadata.
 - Many external calls quote targets and use arrays for complex commands.
 - `zsh -n` parses tracked Zsh files.
 - System telemetry browsing derives fzf rows from validated fields and never
@@ -907,7 +912,10 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   `dbt_packages/`, and `logs/dbt.log*` only, and skips any dbt directory that
   contains `*.duckdb*` or `duckdb_temp*` entries; no pattern selects DuckDB
   data. `.ipynb_checkpoints` joins the Python category; `.hypothesis` is never
-  selected.
+  selected. The complete bounded plan is shown before consent. Ordered target
+  results distinguish observed removals, absent targets and work not run after
+  a stop; failed post-removal root validation retains the observed effect.
+  Partial timing requires a fully completed target plus an ordinary failure.
 - Developer dependency updates construct and fingerprint a private plan before
   authorization. Specifier edits bind to parsed dependency-array elements and
   verify the complete resulting TOML, preserving unrelated strings, comments,
@@ -1002,7 +1010,11 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   `--fix --yes`.
 - Developer read-only gates reject known writing flags. Ruff also removes
   `RUFF_OUTPUT_FILE`, and TFLint refuses `--fix`. `dev-check-types` accepts no
-  arguments, so no caller option reaches its type checkers.
+  arguments, so no caller option reaches its type checkers. Project discovery
+  prunes the suite's report/backup roots and eligible custom descendants by
+  literal path, without preparing directories or changing permissions/ignore
+  files. Invalid unused overrides cannot prune the project itself. This
+  discovery scope does not attest that a state directory is safe to write.
 - Developer persisted state is validated on every use rather than at load time.
   Dedicated state directories must be literal, owned, mode `700`, identity
   stable, inside the project or home, and free of symlink components. State

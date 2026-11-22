@@ -491,28 +491,37 @@ EOF
 }
 
 @test "dev actions: formatting outside the reference and its comment is preserved byte for byte" {
+  local -a workflow_header=(
+    'on: push'
+    'jobs:'
+    '  check:'
+    '    runs-on: ubuntu-latest'
+    '    steps:'
+  )
   {
     printf '%s\r\n' \
-      'steps:' \
-      "  - uses:   'actions/checkout@$(sha 410)'   #   v4.1.0 (pinned by hand)"
-    printf '  - uses: "owner2/tool@1.2.0"\t\r\n'
+      "${workflow_header[@]}" \
+      "      - uses:   'actions/checkout@$(sha 410)'   #   v4.1.0 (pinned by hand)"
+    printf '      - uses: "owner2/tool@1.2.0"\t\r\n'
     printf '%s\r\n' \
-      "  - uses: actions/checkout@$(sha 410) # keep: reviewed" \
-      '  # uses: actions/checkout@v1 is only a comment' \
-      '  - name: "Ünïcode ✓"'
-    printf '  - uses: actions/checkout@v4'
+      "      - uses: actions/checkout@$(sha 410) # keep: reviewed" \
+      '      # uses: actions/checkout@v1 is only a comment' \
+      '      - name: "Ünïcode ✓"' \
+      '        run: echo ok'
+    printf '      - uses: actions/checkout@v4'
   } > "$DEV_PROJECT/.github/workflows/crlf.yml"
 
   {
     printf '%s\r\n' \
-      'steps:' \
-      "  - uses:   'actions/checkout@$(sha 430)'   #   v4.3.0 (pinned by hand)"
-    printf '  - uses: "owner2/tool@%s"\t# 1.3.0\r\n' "$(sha 1300)"
+      "${workflow_header[@]}" \
+      "      - uses:   'actions/checkout@$(sha 430)'   #   v4.3.0 (pinned by hand)"
+    printf '      - uses: "owner2/tool@%s"\t# 1.3.0\r\n' "$(sha 1300)"
     printf '%s\r\n' \
-      "  - uses: actions/checkout@$(sha 430) # v4.3.0 # keep: reviewed" \
-      '  # uses: actions/checkout@v1 is only a comment' \
-      '  - name: "Ünïcode ✓"'
-    printf '  - uses: actions/checkout@%s # v4.3.0' "$(sha 430)"
+      "      - uses: actions/checkout@$(sha 430) # v4.3.0 # keep: reviewed" \
+      '      # uses: actions/checkout@v1 is only a comment' \
+      '      - name: "Ünïcode ✓"' \
+      '        run: echo ok'
+    printf '      - uses: actions/checkout@%s # v4.3.0' "$(sha 430)"
   } > "$TEST_TEMP_DIR/expected.yml"
 
   run_actions 'dev-update-actions --yes'
@@ -899,4 +908,279 @@ write_malformed_newer_tags() {
   grep -Fq "actions/checkout@$(sha 430) # v4.3.0" \
     "$DEV_PROJECT/.github/workflows/network.yml"
   [ ! -s "$HOME/network.stdout" ]
+}
+
+@test "dev actions: block anchors preserve genuine job step and composite references" {
+  export DEV_ACTIONS_COOLDOWN_DAYS=0 DEV_ACTIONS_TIMEOUT=3
+  export ANCHOR_CONTEXT="$TEST_TEMP_DIR/anchor-context" ANCHOR_BASH="$BASH"
+  export ANCHOR_GIT_LEAF="$TEST_TEMP_DIR/anchor-git-fixture"
+  mkdir -m 700 "$ANCHOR_CONTEXT" || return 1
+  mkdir -p "$DEV_PROJECT/.github/actions/setup" || return 1
+  mv "$TEST_MOCK_BIN/git" "$ANCHOR_GIT_LEAF" || return 1
+  {
+    printf '#!%s\n' "$BASH"
+    cat <<'BASH'
+[[ $# == 15 && "$1" == --no-pager && "$2" == -c \
+  && "$3" == credential.helper= && "$4" == -c && "$5" == core.askPass= \
+  && "$6" == -c && "$7" == http.extraHeader= && "$8" == -c \
+  && "$9" == protocol.allow=never && "${10}" == -c \
+  && "${11}" == protocol.https.allow=always && "${12}" == ls-remote \
+  && "${13}" == --tags && "${14}" == -- ]] || exit 97
+case "${15}" in
+  https://github.com/actions/checkout) key=checkout ;;
+  https://github.com/owner2/tool) key=tool ;;
+  https://github.com/org/shared) key=shared ;;
+  *) exit 97 ;;
+esac
+dir="$ANCHOR_CONTEXT/$key"
+mkdir -m 700 "$dir" || exit 98
+printf '%s\0' "$0" "$@" > "$dir/argv.nul" || exit 98
+printf '%s\0' "$ANCHOR_BASH" "$ANCHOR_GIT_LEAF" "$@" > "$dir/child.argv.nul" || exit 98
+input=""
+if IFS= read -r -n 1 input || [[ -n "$input" ]]; then exit 97; fi
+printf 'EOF\n' > "$dir/stdin" || exit 98
+"$ANCHOR_BASH" "$ANCHOR_GIT_LEAF" "$@" > "$dir/stdout" 2> "$dir/stderr"
+observed=$?
+printf '%s\n' "$observed" > "$dir/producer.status" || exit 98
+cat "$dir/stdout" || exit 98
+cat "$dir/stderr" >&2 || exit 98
+exit "$observed"
+BASH
+  } > "$TEST_MOCK_BIN/git" || return 1
+  chmod -- 700 "$TEST_MOCK_BIN/git" || return 1
+
+  cat > "$DEV_PROJECT/.github/workflows/anchored.yml" <<EOF
+name: anchored workflow
+on: push
+jobs: &workflow_jobs
+  shared: &reusable_job
+    uses: org/shared/.github/workflows/build.yml@main
+  build: &build_job
+    runs-on: ubuntu-latest
+    steps: &shared_steps
+      - uses: 'actions/checkout@$(sha 410)' # v4.1.0 (anchor)
+EOF
+  cat > "$DEV_PROJECT/.github/actions/setup/action.yml" <<'YAML'
+name: anchored composite
+description: finite anchored container fixture
+runs: &action_runs
+  using: composite
+  steps: &composite_steps
+    - uses: "owner2/tool@1.2.0" # 1.2.0
+YAML
+  cat > "$ANCHOR_CONTEXT/workflow.expected" <<EOF
+name: anchored workflow
+on: push
+jobs: &workflow_jobs
+  shared: &reusable_job
+    uses: org/shared/.github/workflows/build.yml@$(sha 2100) # v2.1.0
+  build: &build_job
+    runs-on: ubuntu-latest
+    steps: &shared_steps
+      - uses: 'actions/checkout@$(sha 430)' # v4.3.0 (anchor)
+EOF
+  cat > "$ANCHOR_CONTEXT/composite.expected" <<EOF
+name: anchored composite
+description: finite anchored container fixture
+runs: &action_runs
+  using: composite
+  steps: &composite_steps
+    - uses: "owner2/tool@$(sha 1300)" # 1.3.0
+EOF
+  run_actions '
+    _anchor_public_capture() {
+      dev-update-actions --yes > "$ANCHOR_CONTEXT/primary.stdout" 2> "$ANCHOR_CONTEXT/primary.stderr"
+      local -i observed=$?
+      print -r -- "$observed" > "$ANCHOR_CONTEXT/primary.status" || return 98
+      return 0
+    }
+    _anchor_public_capture > "$ANCHOR_CONTEXT/wrapper.stdout" 2> "$ANCHOR_CONTEXT/wrapper.stderr"
+    local -i observed=$?
+    print -r -- "$observed" > "$ANCHOR_CONTEXT/wrapper.status" || return 98
+    return $observed
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  printf '0\n' > "$ANCHOR_CONTEXT/status.expected"
+  printf 'EOF\n' > "$ANCHOR_CONTEXT/stdin.expected"
+  cmp "$ANCHOR_CONTEXT/status.expected" "$ANCHOR_CONTEXT/primary.status"
+  cmp "$ANCHOR_CONTEXT/status.expected" "$ANCHOR_CONTEXT/wrapper.status"
+  [[ -f "$ANCHOR_CONTEXT/primary.stdout" && ! -L "$ANCHOR_CONTEXT/primary.stdout" \
+    && ! -s "$ANCHOR_CONTEXT/primary.stdout" ]]
+  [[ -f "$ANCHOR_CONTEXT/primary.stderr" && ! -L "$ANCHOR_CONTEXT/primary.stderr" \
+    && -s "$ANCHOR_CONTEXT/primary.stderr" ]]
+  [[ -f "$ANCHOR_CONTEXT/wrapper.stdout" && ! -s "$ANCHOR_CONTEXT/wrapper.stdout" \
+    && -f "$ANCHOR_CONTEXT/wrapper.stderr" && ! -s "$ANCHOR_CONTEXT/wrapper.stderr" ]]
+  cmp "$ANCHOR_CONTEXT/workflow.expected" "$DEV_PROJECT/.github/workflows/anchored.yml"
+  cmp "$ANCHOR_CONTEXT/composite.expected" "$DEV_PROJECT/.github/actions/setup/action.yml"
+  awk '$1 ~ /^[0-9]+$/ {
+    if (NF != 6) exit 97
+    print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6
+    rows++
+  } END { if (rows != 3) exit 98 }' "$ANCHOR_CONTEXT/primary.stderr" \
+    > "$ANCHOR_CONTEXT/plan.actual" || return 1
+  printf '%s\n' \
+    $'1\torg/shared/.github/workflows/build.yml\tmain\tv2.1.0\tpin\tworkflows/anchored.yml' \
+    $'2\tactions/checkout\tv4.1.0\tv4.3.0\tminor\tworkflows/anchored.yml' \
+    $'3\towner2/tool\t1.2.0\t1.3.0\tpin\tactions/setup/action.yml' \
+    > "$ANCHOR_CONTEXT/plan.expected"
+  cmp "$ANCHOR_CONTEXT/plan.expected" "$ANCHOR_CONTEXT/plan.actual"
+  grep -Fq 'GitHub Actions update completed: 3 action references updated.' \
+    "$ANCHOR_CONTEXT/primary.stderr"
+  local key repository tags_file
+  for key in checkout tool shared; do
+    case "$key" in
+      checkout) repository=actions/checkout; tags_file=actions__checkout ;;
+      tool) repository=owner2/tool; tags_file=owner2__tool ;;
+      shared) repository=org/shared; tags_file=org__shared ;;
+    esac
+    printf '%s\0' "$TEST_MOCK_BIN/git" --no-pager \
+      -c credential.helper= -c core.askPass= -c http.extraHeader= \
+      -c protocol.allow=never -c protocol.https.allow=always \
+      ls-remote --tags -- "https://github.com/$repository" \
+      > "$ANCHOR_CONTEXT/$key/argv.expected"
+    printf '%s\0' "$ANCHOR_BASH" "$ANCHOR_GIT_LEAF" --no-pager \
+      -c credential.helper= -c core.askPass= -c http.extraHeader= \
+      -c protocol.allow=never -c protocol.https.allow=always \
+      ls-remote --tags -- "https://github.com/$repository" \
+      > "$ANCHOR_CONTEXT/$key/child.argv.expected"
+    cmp "$ANCHOR_CONTEXT/$key/argv.expected" "$ANCHOR_CONTEXT/$key/argv.nul"
+    cmp "$ANCHOR_CONTEXT/$key/child.argv.expected" "$ANCHOR_CONTEXT/$key/child.argv.nul"
+    cmp "$ANCHOR_CONTEXT/status.expected" "$ANCHOR_CONTEXT/$key/producer.status"
+    cmp "$ANCHOR_CONTEXT/stdin.expected" "$ANCHOR_CONTEXT/$key/stdin"
+    cmp "$ACTIONS_TAGS/$tags_file" "$ANCHOR_CONTEXT/$key/stdout"
+    [[ -f "$ANCHOR_CONTEXT/$key/stderr" && ! -L "$ANCHOR_CONTEXT/$key/stderr" \
+      && ! -s "$ANCHOR_CONTEXT/$key/stderr" ]]
+  done
+}
+
+@test "dev actions: unsupported mapping values keep nested uses as data" {
+  export DEV_ACTIONS_COOLDOWN_DAYS=0 DEV_ACTIONS_TIMEOUT=3
+  export OPAQUE_CONTEXT="$TEST_TEMP_DIR/opaque-context" OPAQUE_BASH="$BASH"
+  export OPAQUE_GIT_LEAF="$TEST_TEMP_DIR/opaque-git-fixture"
+  mkdir -m 700 "$OPAQUE_CONTEXT" || return 1
+  mv "$TEST_MOCK_BIN/git" "$OPAQUE_GIT_LEAF" || return 1
+  {
+    printf '#!%s\n' "$BASH"
+    cat <<'BASH'
+[[ $# == 15 && "$1" == --no-pager && "$2" == -c \
+  && "$3" == credential.helper= && "$4" == -c && "$5" == core.askPass= \
+  && "$6" == -c && "$7" == http.extraHeader= && "$8" == -c \
+  && "$9" == protocol.allow=never && "${10}" == -c \
+  && "${11}" == protocol.https.allow=always && "${12}" == ls-remote \
+  && "${13}" == --tags && "${14}" == -- ]] || exit 97
+case "${15}" in
+  https://github.com/actions/checkout) key=checkout ;;
+  https://github.com/owner2/tool) key=tool ;;
+  *) exit 97 ;;
+esac
+dir="$OPAQUE_CONTEXT/$key"
+mkdir -m 700 "$dir" || exit 98
+printf '%s\0' "$0" "$@" > "$dir/argv.nul" || exit 98
+printf '%s\0' "$OPAQUE_BASH" "$OPAQUE_GIT_LEAF" "$@" > "$dir/child.argv.nul" || exit 98
+input=""
+if IFS= read -r -n 1 input || [[ -n "$input" ]]; then exit 97; fi
+printf 'EOF\n' > "$dir/stdin" || exit 98
+"$OPAQUE_BASH" "$OPAQUE_GIT_LEAF" "$@" > "$dir/stdout" 2> "$dir/stderr"
+observed=$?
+printf '%s\n' "$observed" > "$dir/producer.status" || exit 98
+cat "$dir/stdout" || exit 98
+cat "$dir/stderr" >&2 || exit 98
+exit "$observed"
+BASH
+  } > "$TEST_MOCK_BIN/git" || return 1
+  chmod -- 700 "$TEST_MOCK_BIN/git" || return 1
+
+  cat > "$DEV_PROJECT/.github/workflows/opaque.yml" <<EOF
+name: opaque mapping data
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - &script | # payload: literal text
+        uses: owner2/tool@1.2.0
+      - name: Genuine step after nested input data
+        with: !!map
+          uses: owner2/tool@1.2.0
+        env: !!map
+          uses: owner2/tool@1.2.0
+        uses: 'actions/checkout@$(sha 410)' # v4.1.0
+      - name: Literal script
+        run: |
+          uses: owner2/tool@1.2.0
+EOF
+  cat > "$OPAQUE_CONTEXT/workflow.expected" <<EOF
+name: opaque mapping data
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - &script | # payload: literal text
+        uses: owner2/tool@1.2.0
+      - name: Genuine step after nested input data
+        with: !!map
+          uses: owner2/tool@1.2.0
+        env: !!map
+          uses: owner2/tool@1.2.0
+        uses: 'actions/checkout@$(sha 430)' # v4.3.0
+      - name: Literal script
+        run: |
+          uses: owner2/tool@1.2.0
+EOF
+  run_actions '
+    _opaque_public_capture() {
+      dev-update-actions --yes > "$OPAQUE_CONTEXT/primary.stdout" 2> "$OPAQUE_CONTEXT/primary.stderr"
+      local -i observed=$?
+      print -r -- "$observed" > "$OPAQUE_CONTEXT/primary.status" || return 98
+      return 0
+    }
+    _opaque_public_capture > "$OPAQUE_CONTEXT/wrapper.stdout" 2> "$OPAQUE_CONTEXT/wrapper.stderr"
+    local -i observed=$?
+    print -r -- "$observed" > "$OPAQUE_CONTEXT/wrapper.status" || return 98
+    return $observed
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  printf '0\n' > "$OPAQUE_CONTEXT/status.expected"
+  printf 'EOF\n' > "$OPAQUE_CONTEXT/stdin.expected"
+  cmp "$OPAQUE_CONTEXT/status.expected" "$OPAQUE_CONTEXT/primary.status"
+  cmp "$OPAQUE_CONTEXT/status.expected" "$OPAQUE_CONTEXT/wrapper.status"
+  [[ -f "$OPAQUE_CONTEXT/primary.stdout" && ! -L "$OPAQUE_CONTEXT/primary.stdout" \
+    && ! -s "$OPAQUE_CONTEXT/primary.stdout" ]]
+  [[ -f "$OPAQUE_CONTEXT/primary.stderr" && ! -L "$OPAQUE_CONTEXT/primary.stderr" \
+    && -s "$OPAQUE_CONTEXT/primary.stderr" ]]
+  [[ -f "$OPAQUE_CONTEXT/wrapper.stdout" && ! -s "$OPAQUE_CONTEXT/wrapper.stdout" \
+    && -f "$OPAQUE_CONTEXT/wrapper.stderr" && ! -s "$OPAQUE_CONTEXT/wrapper.stderr" ]]
+  cmp "$OPAQUE_CONTEXT/workflow.expected" "$DEV_PROJECT/.github/workflows/opaque.yml"
+  awk '$1 ~ /^[0-9]+$/ {
+    if (NF != 6) exit 97
+    print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6
+    rows++
+  } END { if (rows != 1) exit 98 }' "$OPAQUE_CONTEXT/primary.stderr" \
+    > "$OPAQUE_CONTEXT/plan.actual" || return 1
+  printf '%s\n' $'1\tactions/checkout\tv4.1.0\tv4.3.0\tminor\tworkflows/opaque.yml' \
+    > "$OPAQUE_CONTEXT/plan.expected"
+  cmp "$OPAQUE_CONTEXT/plan.expected" "$OPAQUE_CONTEXT/plan.actual"
+  grep -Fq 'GitHub Actions update completed: 1 action reference updated.' \
+    "$OPAQUE_CONTEXT/primary.stderr"
+  [[ ! -e "$OPAQUE_CONTEXT/tool" && ! -L "$OPAQUE_CONTEXT/tool" ]]
+  printf '%s\0' "$TEST_MOCK_BIN/git" --no-pager \
+    -c credential.helper= -c core.askPass= -c http.extraHeader= \
+    -c protocol.allow=never -c protocol.https.allow=always \
+    ls-remote --tags -- https://github.com/actions/checkout \
+    > "$OPAQUE_CONTEXT/checkout/argv.expected"
+  printf '%s\0' "$OPAQUE_BASH" "$OPAQUE_GIT_LEAF" --no-pager \
+    -c credential.helper= -c core.askPass= -c http.extraHeader= \
+    -c protocol.allow=never -c protocol.https.allow=always \
+    ls-remote --tags -- https://github.com/actions/checkout \
+    > "$OPAQUE_CONTEXT/checkout/child.argv.expected"
+  cmp "$OPAQUE_CONTEXT/checkout/argv.expected" "$OPAQUE_CONTEXT/checkout/argv.nul"
+  cmp "$OPAQUE_CONTEXT/checkout/child.argv.expected" "$OPAQUE_CONTEXT/checkout/child.argv.nul"
+  cmp "$OPAQUE_CONTEXT/status.expected" "$OPAQUE_CONTEXT/checkout/producer.status"
+  cmp "$OPAQUE_CONTEXT/stdin.expected" "$OPAQUE_CONTEXT/checkout/stdin"
+  cmp "$ACTIONS_TAGS/actions__checkout" "$OPAQUE_CONTEXT/checkout/stdout"
+  [[ -f "$OPAQUE_CONTEXT/checkout/stderr" && ! -L "$OPAQUE_CONTEXT/checkout/stderr" \
+    && ! -s "$OPAQUE_CONTEXT/checkout/stderr" ]]
 }
