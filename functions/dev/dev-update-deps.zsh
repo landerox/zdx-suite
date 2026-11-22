@@ -3,7 +3,7 @@
 # Dev Update Deps: dependency specifier updates and lockfile refresh
 # =============================================================================
 #
-# Loaded by dev-menu.zsh after dev-state.zsh, dev-pypi.zsh,
+# Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, dev-pypi.zsh,
 # dev-update-transaction.zsh, and dev-update-specifiers.zsh.
 # Safe to re-source; defines functions only.
 #

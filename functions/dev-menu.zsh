@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # Public loader and command router for project maintenance workflows.
-# Usage: dev-menu [subcommand]
+# Usage: dev-menu [--help | --multi | <subcommand> [arguments...]]
 #
 
 if [[ -n "${_DEV_MENU_SOURCED:-}" ]]; then

@@ -121,7 +121,7 @@ case "$subcommand" in
   dev-run-audit)
     local -a audit_specs=(
       '(- *)'{-h,--help}'[Show command usage]'
-      '(-h --help)--fix[Upgrade vulnerable direct dependencies]'
+      '(-h --help)--fix[Upgrade vulnerable packages in .venv]'
     )
     if (( ${words[(I)--fix]} )); then
       audit_specs+=(

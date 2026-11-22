@@ -3,7 +3,8 @@
 # Dev Update Actions: pinned GitHub Actions references in workflow files
 # =============================================================================
 #
-# Loaded by dev-menu.zsh after dev-state.zsh and dev-update-transaction.zsh.
+# Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, and
+# dev-update-transaction.zsh.
 # Safe to re-source; defines functions only.
 #
 

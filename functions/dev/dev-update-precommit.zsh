@@ -3,7 +3,7 @@
 # Dev Update Pre-commit: guarded frozen hook revisions and package update
 # =============================================================================
 #
-# Loaded by dev-menu.zsh after dev-state.zsh, dev-pypi.zsh,
+# Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, dev-pypi.zsh,
 # dev-update-transaction.zsh, and dev-update-specifiers.zsh.
 # Safe to re-source; defines functions only.
 #
