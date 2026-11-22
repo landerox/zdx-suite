@@ -196,43 +196,56 @@ _py_snapshot_local_venvs() {
   local root="$REPLY"
   local -a candidates=("$root/.venv" "$root/venv")
   local virtualenvs_root="$root/.virtualenvs"
+  local child_output="" container_fingerprint=""
   if [[ -e "$virtualenvs_root" || -L "$virtualenvs_root" ]]; then
-    _py_fingerprint_owned_directory "$virtualenvs_root" >/dev/null \
-      || return $?
-    local -a find_args=(
-      find "$virtualenvs_root"
-      -mindepth 1 -maxdepth 1 -type d -print
-    )
-    local child_output=""
-    child_output=$(_py_capture_bounded_output \
-      $(( 1024 * 1024 )) ".virtualenvs inventory" 10 \
-      "${find_args[@]}") || return $?
-    local child_candidate=""
-    local -i child_count=0
-    for child_candidate in "${(@f)child_output}"; do
-      (( child_count++ ))
-      (( child_count <= 128 )) || {
-        _py_error "Refusing more than 128 .virtualenvs children."
-        return 1
-      }
-      _py_venv_path_is_allowed "$root" "$child_candidate" || {
-        _py_error "Refusing an unsafe .virtualenvs child name."
-        return 1
-      }
-      candidates+=("$child_candidate")
-    done
+    if _py_fingerprint_owned_directory "$virtualenvs_root" >/dev/null 2>&1; then
+      container_fingerprint="$REPLY"
+      child_output=$(_py_capture_bounded_output \
+        $(( 1024 * 1024 )) ".virtualenvs inventory" 10 \
+        find "$virtualenvs_root" -mindepth 1 -maxdepth 1 \
+        \( -type d -o -type l \) -print0) || return $?
+      _py_fingerprint_owned_directory "$virtualenvs_root" "$container_fingerprint" \
+        >/dev/null || return $?
+    else
+      _py_warn "Skipping unsafe .virtualenvs directory: ${(V)virtualenvs_root}"
+    fi
+  fi
+  if [[ -n "$child_output" ]]; then
+    if [[ "$child_output" != *$'\0' || "$child_output" == $'\0' \
+      || "$child_output" == *$'\0\0'* ]]; then
+      _py_error "The .virtualenvs inventory contained an incomplete record."
+      return 1
+    fi
+    local -a children=("${(@0)${child_output%$'\0'}}")
+    (( ${#children[@]} <= 128 )) || {
+      _py_error "Refusing more than 128 .virtualenvs children."
+      return 1
+    }
+    candidates+=("${children[@]}")
   fi
   local candidate="" fingerprint=""
   local -A seen=()
 
   for candidate in "${candidates[@]}"; do
-    [[ -d "$candidate" ]] || continue
-    _py_validate_venv_path "$candidate" >/dev/null 2>&1 || continue
-    fingerprint="$REPLY"
     [[ -z "${seen[$candidate]:-}" ]] || continue
     seen[$candidate]=1
+    _py_venv_path_is_allowed "$root" "$candidate" || {
+      _py_warn "Skipping unsafe virtual-environment path: ${(V)candidate}"
+      continue
+    }
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    if [[ "$candidate" == "$virtualenvs_root/"* && ! -L "$candidate" \
+      && ! -e "$candidate/pyvenv.cfg" && ! -L "$candidate/pyvenv.cfg" ]]; then
+      continue
+    fi
+    _py_validate_venv_path "$candidate" >/dev/null 2>&1 || {
+      _py_warn "Skipping unsafe virtual environment: ${(V)candidate}. Inspect its ownership, permissions, and pyvenv.cfg."
+      continue
+    }
+    fingerprint="$REPLY"
     print -r -- $'local\t'"$candidate"$'\t'"$fingerprint"
   done
+  return 0
 }
 
 _py_venv_record_path() {
@@ -529,7 +542,9 @@ _py_fingerprint_venv_python() {
 # unreviewed parent lockfile or environment.
 _py_assert_no_external_uv_workspace() {
   local project_root="$1"
+  local REPLY=""
   _py_require_tomllib || return $?
+  local python_command="$REPLY"
 
   local ancestor="${project_root:h}"
   local metadata_file="" metadata_fingerprint=""
@@ -544,7 +559,7 @@ _py_assert_no_external_uv_workspace() {
       }
       metadata_fingerprint="$REPLY"
       workspace_rc=0
-      command python3 -B -I -S -c '
+      command "$python_command" -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -633,7 +648,9 @@ venv-list() {
   records=$(_py_snapshot_local_venvs) || return $?
   [[ -n "$records" ]] || {
     _py_info "No validated project-local virtual environments found."
-    _py_dim "Create one with: py-menu venv-create"
+    if [[ ! -e .venv && ! -L .venv ]]; then
+      _py_dim "Create one with: py-menu venv-create"
+    fi
     return 0
   }
 
@@ -729,7 +746,11 @@ venv-create() {
     local REPLY
     _py_command_display "$target"
     _py_error "$REPLY already exists; venv-create never replaces it."
-    _py_info "Review it with venv-info, then remove it with venv-remove if needed."
+    if _py_validate_venv_path "$target" >/dev/null 2>&1; then
+      _py_info "Review it with venv-info, then remove it with venv-remove if needed."
+    else
+      _py_info "Inspect the existing path, ownership, permissions, and pyvenv.cfg manually."
+    fi
     return 1
   fi
 
@@ -763,7 +784,8 @@ venv-create() {
           executable="python${python_version}"
         fi
       fi
-      _py_check_command "$executable" || return 1
+      _py_resolve_python "$executable" || return $?
+      executable="$REPLY"
       resolved_python_version=$(
         command "$executable" -I -c \
           'import sys; print(".".join(map(str, sys.version_info[:3])))' \
@@ -837,6 +859,7 @@ venv-create() {
     return 1
   }
   if [[ "$backend" == stdlib ]]; then
+    _py_resolve_python "$executable" || return $?
     local current_python_version=""
     current_python_version=$(
       command "$executable" -I -c \
@@ -857,11 +880,11 @@ venv-create() {
     local -a uv_args=(venv --no-python-downloads)
     [[ -n "$python_version" ]] && uv_args+=(--python "$python_version")
     _py_command_display uv "${uv_args[@]}" "$target"
-    _py_run_captured "$REPLY" \
+    _py_run_project_writer _py_run_captured "$REPLY" \
       _py_run_uv_scoped "${uv_args[@]}" "$target" || operation_rc=$?
   else
     _py_command_display "$executable" -m venv "$target"
-    _py_run_captured "$REPLY" \
+    _py_run_project_writer _py_run_captured "$REPLY" \
       command "$executable" -I -m venv "$target" || operation_rc=$?
   fi
   (( operation_rc == 0 )) || {
@@ -1022,9 +1045,12 @@ venv-activate() {
       "$activate_file" "$activate_fingerprint" "$require_stable_path"
     activation_rc=$?
     if (( activation_rc == 0 )); then
+      local selected_python=""
+      selected_python=$(builtin whence -p python) || selected_python=""
       if [[ -z "${VIRTUAL_ENV:-}" || "${VIRTUAL_ENV:A}" != "$target" \
-        || "${PATH%%:*}" != "$target/bin" \
-        || "$(builtin whence -p python)" != "$target/bin/python" ]] \
+        || "${selected_python:t}" != python ]] \
+        || ! _py_resolve_trusted_dir "${PATH%%:*}" || [[ "$REPLY" != "$target/bin" ]] \
+        || ! _py_resolve_trusted_dir "${selected_python:h}" || [[ "$REPLY" != "$target/bin" ]] \
         || ! _py_fingerprint_venv_python "$target"; then
         _py_error "The activation script did not select the reviewed environment."
         activation_rc=1
@@ -1110,8 +1136,17 @@ venv-info() {
     return 1
   }
 
-  if [[ -z "$requested_path" && -n "${VIRTUAL_ENV:-}" ]]; then
-    requested_path="$VIRTUAL_ENV"
+  if [[ -z "$requested_path" && "${VIRTUAL_ENV:-}" == /* ]]; then
+    _py_validate_project_root || return $?
+    _py_project_path "$VIRTUAL_ENV" "$REPLY"
+    local active_path="$REPLY" active_record=""
+    for active_record in "${(@f)records}"; do
+      _py_venv_record_path "$active_record"
+      if [[ "$REPLY" == "$active_path" ]]; then
+        requested_path="$active_path"
+        break
+      fi
+    done
   fi
   _py_resolve_venv_record "$records" "$requested_path" "Inspect > "
   local resolve_rc=$?
@@ -1155,13 +1190,9 @@ _py_mount_table_path() {
 # tree under a 15-second deadline.
 _py_assert_no_mounts_under() {
   local target="$1"
-  local python_command=""
-  python_command=$(whence -p python3 2>/dev/null) || python_command=""
-  [[ -n "$python_command" && -x "$python_command" ]] || {
-    _py_error "Python 3 is required to validate the mount boundary."
-    return 1
-  }
   local REPLY="" mount_mode=""
+  _py_resolve_python python3 || return $?
+  local python_command="$REPLY"
   _py_host_kernel || {
     _py_error "Could not identify the host kernel for mount-boundary validation."
     return 1
@@ -2304,7 +2335,7 @@ _py_venv_python() {
         _py_validate_python_pin_target \
           "$pin_fingerprint" "$pin_root_fingerprint" || return $?
         local pin_root="${pin_file:h}"
-        _py_run_captured "uv python pin $version" \
+        _py_run_project_writer _py_run_captured "uv python pin $version" \
           _py_run_uv_scoped --directory "$pin_root" \
           python pin --no-project --no-python-downloads \
           "$version" || operation_rc=$?

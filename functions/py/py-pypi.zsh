@@ -53,6 +53,7 @@ _py_validate_project_file() {
 
 _py_project_uses_poetry() {
   local pyproject="$1"
+  local REPLY=""
   local -i qualification_rc=0
   _py_require_tomllib || qualification_rc=$?
   case "$qualification_rc" in
@@ -60,7 +61,7 @@ _py_project_uses_poetry() {
     130|143) return "$qualification_rc" ;;
     *) return 2 ;;
   esac
-  command python3 -B -I -S -c '
+  command "$REPLY" -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -422,7 +423,8 @@ _py_fetch_package_metadata() {
   local package_name="$1"
   _py_check_command curl || return 1
   # The response is JSON, so any Python 3 works; tomllib (3.11+) is not used.
-  _py_check_command python3 || return 1
+  _py_resolve_python python3 || return $?
+  local python_command="$REPLY"
 
   _py_validate_temp_parent "${TMPDIR:-/tmp}" || {
     _py_error "Refusing an unsafe temporary root for the PyPI query."
@@ -514,7 +516,7 @@ _py_fetch_package_metadata() {
       }
     fi
     if (( query_rc == 0 )); then
-      metadata=$(command python3 -B -I -S -c '
+      metadata=$(command "$python_command" -B -I -S -c '
 import json
 import pathlib
 import sys
@@ -919,7 +921,7 @@ _py_package_change() {
       ;;
   esac
 
-  _py_run_package_change \
+  _py_run_project_writer _py_run_package_change \
     "$operation" "$backend" "$target" "$package_name" "$development" \
     "$backend_plan" "${poetry_scope[@]}"
   local operation_rc=$?

@@ -469,7 +469,7 @@ assert_unrelated_preserved() {
 #!/usr/bin/env bash
 [[ "$1" == "$PY_LAYER_PROJECT/.virtualenvs" ]] || exit 97
 printf '%s\n' "$*" >>"$HOME/find.calls"
-printf '%s\n' "$1/alpha" "$1/neighbor"
+printf '%s\0' "$1/alpha" "$1/neighbor"
 EOF
   chmod -- 755 "$TEST_MOCK_BIN/find"
   run run_py_layer_zsh 'venv-list >"$HOME/list.stdout" 2>"$HOME/list.stderr"'

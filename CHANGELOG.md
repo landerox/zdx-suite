@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Python: keep environments discoverable when a sibling is refused, accept
+  trusted activation aliases, preserve safe writer permissions, and qualify
+  Apple's Python launcher before invocation.
+
 - Developer: clarify the audit completion's `.venv` remediation scope and the
   update modules' load prerequisites.
 
