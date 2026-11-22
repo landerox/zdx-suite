@@ -242,6 +242,9 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Developer: clarify the audit completion's `.venv` remediation scope and the
+  update modules' load prerequisites.
+
 - Developer: keep private reports and backups out of quality gates, run
   confirmations in the current shell, show complete cleanup plans with ordered
   target results and truthful partial verdicts, and update only genuine

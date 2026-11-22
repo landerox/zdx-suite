@@ -3,9 +3,12 @@
 # Dev Update: infrastructure ownership reports and full maintenance
 # =============================================================================
 #
-# Loaded by dev-menu.zsh after dev-common.zsh, dev-update-deps.zsh,
-# dev-update-precommit.zsh, and dev-update-actions.zsh.
+# Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, dev-pypi.zsh,
+# dev-update-transaction.zsh, dev-update-deps.zsh, dev-update-precommit.zsh,
+# and dev-update-actions.zsh.
 # Safe to re-source; defines functions only.
+#
+# Full maintenance calls dev-clean.zsh after the suite finishes loading.
 #
 
 if [[ -n "${_DEV_UPDATE_SOURCED:-}" ]]; then

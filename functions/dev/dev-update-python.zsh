@@ -3,7 +3,7 @@
 # Dev Update Python: runtime patch upgrade and delegation to py-menu
 # =============================================================================
 #
-# Loaded by dev-menu.zsh after dev-state.zsh and dev-pypi.zsh.
+# Loaded by dev-menu.zsh after dev-common.zsh, dev-state.zsh, and dev-pypi.zsh.
 # Safe to re-source; defines functions only.
 #
 # The Python suite owns the .venv lifecycle. This module upgrades only the

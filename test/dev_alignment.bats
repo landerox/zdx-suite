@@ -587,7 +587,7 @@ EOF
     source "$COMPLETION"
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"--fix[Upgrade vulnerable direct dependencies]"* ]]
+  [[ "$output" == *"--fix[Upgrade vulnerable packages in .venv]"* ]]
   [[ "$output" != *"Confirm automatic remediation"* ]]
 
   run env COMPLETION="$completion" zsh -f -c '
