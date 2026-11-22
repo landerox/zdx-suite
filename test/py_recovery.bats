@@ -28,6 +28,11 @@ case "$*" in
   'tool upgrade '* )
     print -r -- "uv:$3" >> "$PY_RECOVERY_LOG"
     print -r -- "Resolved 1 package for $3"
+    if [[ -n "${PY_RECOVERY_SIGNAL_READY:-}" ]]; then
+      : > "$PY_RECOVERY_SIGNAL_READY"
+      command sleep 8
+      exit 98
+    fi
     [[ "$3" != "$PY_RECOVERY_FAILURE" ]] || exit "$PY_RECOVERY_STATUS"
     if [[ "${PY_RECOVERY_BUMP:-0}" == 1 ]]; then
       : > "$HOME/upgraded-$3"
@@ -94,6 +99,82 @@ EOF
       printf '%s\n' "$output" | grep -Eq '^  (gamma|beta) [(]'"$backend"'[)] +– not run +upgrade interrupted$'
       [[ "$output" == *"tool-upgrade alpha --backend $backend"* ]]
     done
+  done
+}
+
+@test "py recovery: private terminal Ctrl-C keeps the public tool and batch reports" {
+  export PY_RECOVERY_SIGNAL_READY="$HOME/interrupt-ready"
+  export PY_RECOVERY_DRIVER="$HOME/interrupt-driver.zsh"
+  cat > "$PY_RECOVERY_DRIVER" <<'EOF'
+emulate -R zsh
+export NO_COLOR=1
+builtin source "$TEST_SUITE_ROOT/functions.zsh" || exit 91
+builtin source "$TEST_SUITE_ROOT/functions/py-menu.zsh" || exit 92
+builtin cd -- "$PY_RECOVERY_PROJECT" || exit 93
+if [[ "$PY_RECOVERY_INTERACTIVE_MODE" == tool ]]; then
+  tool-upgrade --all --backend uv --yes
+else
+  fzf() {
+    command awk -F '|' '$2 == "venv-list" || $2 == "tool-list" { print }'
+  }
+  venv-list() {
+    : > "$PY_RECOVERY_SIGNAL_READY"
+    command sleep 8
+    return 98
+  }
+  tool-list() { print -u2 -r -- "UNEXPECTED_LATER_TASK"; }
+  py-menu --multi
+fi
+local result=$?
+print -r -- "PTY_COMMAND_RETURN:$result"
+exit "$result"
+EOF
+
+  local mode
+  for mode in tool batch; do
+    export PY_RECOVERY_INTERACTIVE_MODE="$mode"
+    rm -f -- "$PY_RECOVERY_SIGNAL_READY"
+    run run_zsh '
+      zmodload zsh/zpty && zmodload zsh/datetime || return 90
+      zpty -b PY_RECOVERY_PTY zsh -f -i "${(q)PY_RECOVERY_DRIVER}" || return 91
+      local output="" chunk=""
+      local -i sent=0
+      local -F deadline=$(( EPOCHREALTIME + 12 ))
+      {
+        while (( EPOCHREALTIME < deadline )); do
+          if zpty -r -t PY_RECOVERY_PTY chunk 2>/dev/null; then
+            output+="$chunk"
+          fi
+          if (( ! sent )) && [[ -f "$PY_RECOVERY_SIGNAL_READY" ]]; then
+            zpty -n -w PY_RECOVERY_PTY $'\''\003'\'' || return 92
+            sent=1
+          fi
+          [[ "$output" == *PTY_COMMAND_RETURN:* ]] && break
+          zpty -t PY_RECOVERY_PTY || break
+          command sleep 0.02
+        done
+        while zpty -r -t PY_RECOVERY_PTY chunk 2>/dev/null; do
+          output+="$chunk"
+        done
+      } always {
+        zpty -d PY_RECOVERY_PTY 2>/dev/null
+      }
+      print -r -- "${output//$'\''\r'\''/}"
+      (( sent )) || return 93
+      [[ "$output" == *PTY_COMMAND_RETURN:130* ]]
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'PTY_COMMAND_RETURN:130'* ]]
+    if [[ "$mode" == tool ]]; then
+      [[ "$output" == *'Tool upgrades interrupted (status 130): 1 interrupted · 2 not run.'* ]]
+      [[ "$output" == *'tool-upgrade alpha --backend uv'* ]]
+      [ "$(cat "$PY_RECOVERY_LOG")" = 'uv:alpha' ]
+    else
+      [[ "$output" == *'Task Summary'*'– not run'* ]]
+      [[ "$output" == *'Tasks were interrupted (status 130)'* ]]
+      [[ "$output" != *'UNEXPECTED_LATER_TASK'* ]]
+    fi
   done
 }
 

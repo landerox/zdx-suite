@@ -883,12 +883,16 @@ venv-create() {
     _py_run_project_writer _py_run_captured "$REPLY" \
       _py_run_uv_scoped "${uv_args[@]}" "$target" || operation_rc=$?
   else
-    _py_command_display "$executable" -m venv "$target"
+    _py_command_display "$executable" -I -m venv "$target"
     _py_run_project_writer _py_run_captured "$REPLY" \
       command "$executable" -I -m venv "$target" || operation_rc=$?
   fi
   (( operation_rc == 0 )) || {
     _py_error "Environment creation failed (status $operation_rc)."
+    if _py_fingerprint_owned_directory "$root" "$root_fingerprint" >/dev/null 2>&1 \
+      && [[ -e "$target" || -L "$target" ]]; then
+      _py_warn "Incomplete environment left at $target_display. Inspect it before retrying."
+    fi
     return "$operation_rc"
   }
   _py_validate_venv_path "$target" || {
@@ -1697,14 +1701,19 @@ _py_rebuild_stage() {
   # environment within the ownership and mode rules whatever the caller's
   # umask is.
   local -a venv_args=(
+    --directory "$root" --project "$root"
     venv --clear --managed-python --no-python-downloads
     --python "$python_request" --relocatable
   )
   _py_command_display uv "${venv_args[@]}" "$staged"
   display="$REPLY"
-  if ! ( umask 022 && _py_run_captured "$display" \
-    _py_run_uv_scoped --directory "$root" --project "$root" \
-    "${venv_args[@]}" "$staged" ); then
+  local -i stage_rc=0
+  ( umask 022 && _py_run_captured "$display" \
+    _py_run_uv_scoped "${venv_args[@]}" "$staged" ) || stage_rc=$?
+  if (( stage_rc == 130 || stage_rc == 143 )); then
+    _py_error "Replacement creation interrupted (status $stage_rc)."
+    return "$stage_rc"
+  elif (( stage_rc != 0 )); then
     _py_error "Could not create the replacement environment; .venv was left untouched."
     _py_dim "It needs an installed uv-managed CPython $python_request: py-menu venv-python-install $python_request"
     return 1
@@ -1723,10 +1732,15 @@ _py_rebuild_stage() {
   )
   _py_command_display "$staged"
   staged_display="$REPLY"
-  _py_command_display uv "${sync_args[@]}"
+  _py_command_display uv --directory "$root" --project "$root" "${sync_args[@]}"
   display="UV_PROJECT_ENVIRONMENT=$staged_display $REPLY"
-  if ! ( umask 022 && _py_run_captured "$display" \
-    _py_run_uv_staged "$root" "$staged" "${sync_args[@]}" ); then
+  stage_rc=0
+  ( umask 022 && _py_run_captured "$display" \
+    _py_run_uv_staged "$root" "$staged" "${sync_args[@]}" ) || stage_rc=$?
+  if (( stage_rc == 130 || stage_rc == 143 )); then
+    _py_error "Locked synchronization interrupted (status $stage_rc)."
+    return "$stage_rc"
+  elif (( stage_rc != 0 )); then
     _py_error "Locked synchronization failed; .venv was left untouched."
     _py_dim "If uv.lock is stale or missing a package, refresh it first, for example with dev-update-lock."
     return 1
@@ -1820,7 +1834,7 @@ _py_rebuild_transaction() {
   local workspace_fingerprint="$REPLY"
   local staged="$workspace/new-venv" original="$workspace/original-venv"
   local staged_fingerprint="" staged_python="" workspace_display=""
-  local -i operation_rc=1 original_moved=0 preserve_workspace=0
+  local -i operation_rc=1 original_moved=0 preserve_workspace=0 published=0 stage_rc=0
   local -a reply=()
 
   {
@@ -1844,6 +1858,7 @@ _py_rebuild_transaction() {
         elif command mv -- "$staged" "$target"; then
           if _py_fingerprint_owned_directory "$target" "$staged_fingerprint" \
             && _py_validate_venv_path "$target"; then
+            published=1
             operation_rc=0
           else
             preserve_workspace=1
@@ -1866,6 +1881,11 @@ _py_rebuild_transaction() {
           fi
         fi
       fi
+    else
+      stage_rc=$?
+      if (( stage_rc == 130 || stage_rc == 143 )); then
+        operation_rc=$stage_rc
+      fi
     fi
   } always {
     # An interrupt between the two renames must never let cleanup delete the
@@ -1878,26 +1898,33 @@ _py_rebuild_transaction() {
     if (( ! preserve_workspace )) && ! _py_rebuild_workspace_remove \
       "$root" "$root_fingerprint" "$workspace" "$workspace_fingerprint"; then
       preserve_workspace=1
-      operation_rc=1
+      (( operation_rc == 0 )) && operation_rc=1
     fi
     if (( preserve_workspace )); then
       _py_command_display "$workspace"
       workspace_display="$REPLY"
-      _py_warn "Recovery workspace retained: $workspace_display"
-      if [[ -e "$original" || -L "$original" ]]; then
+      if (( published )); then
+        _py_warn "Rebuild published with unfinished cleanup: $workspace_display"
+        _py_info "Inspect any remaining original-venv data before manual cleanup."
+      else
+        _py_warn "Recovery workspace retained: $workspace_display"
+      fi
+      if (( ! published )) && [[ -e "$original" || -L "$original" ]]; then
         _py_info "Recovery: original-venv in that workspace is the previous environment; move it back to .venv only while .venv is absent."
       fi
     fi
   }
 
-  (( operation_rc == 0 )) || return 1
-  local previous_version="${previous_python#* }" new_version="${staged_python#* }"
-  _py_command_display "$target"
-  if [[ "$previous_version" == "$new_version" ]]; then
-    _py_success "Rebuilt $REPLY with CPython $new_version."
-  else
-    _py_success "Rebuilt $REPLY: CPython $previous_version → $new_version."
+  if (( published )); then
+    local previous_version="${previous_python#* }" new_version="${staged_python#* }"
+    _py_command_display "$target"
+    if [[ "$previous_version" == "$new_version" ]]; then
+      _py_success "Rebuilt $REPLY with CPython $new_version."
+    else
+      _py_success "Rebuilt $REPLY: CPython $previous_version → $new_version."
+    fi
   fi
+  return "$operation_rc"
 }
 
 venv-rebuild() {
@@ -2099,7 +2126,7 @@ _py_uv_python_inventory() {
   local mode="$1"
   local raw_output=""
   local -a producer_args=(uv python list)
-  if [[ "$mode" == installed || "$mode" == installed-paths ]]; then
+  if [[ "$mode" == installed* ]]; then
     producer_args+=(--only-installed --managed-python)
   fi
   local UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-10}"
@@ -2121,7 +2148,11 @@ _py_uv_python_inventory() {
     first_field="${raw_line%%[[:space:]]*}"
     version="${first_field#cpython-}"
     version="${version%%-*}"
-    _py_validate_python_version "$version" || continue
+    [[ -n "$raw_line" ]] || continue
+    if ! _py_validate_python_version "$version"; then
+      [[ "$mode" != installed-evidence ]] || return 1
+      continue
+    fi
     [[ -z "${seen[$version]:-}" ]] || continue
     seen[$version]=1
     (( result_count++ ))
@@ -2140,6 +2171,7 @@ _py_uv_python_inventory() {
       print -r -- "$version"
     fi
   done
+  return 0
 }
 
 _py_select_uv_python_version() {
@@ -2285,9 +2317,12 @@ _py_venv_python() {
       local pin_file="" pin_fingerprint="" pin_root_fingerprint=""
       local nothing_changed="nothing was installed."
       if [[ "$subcommand" == install ]]; then
+        local minor="$version"
+        [[ "$version" == *.*.* ]] && minor="${version%.*}"
         _py_header "Install Python Runtime"
         _py_label "Version" "$version"
         _py_label "Source" "uv-managed Python download"
+        _py_dim "uv may add or update python$minor in its executable directory, which can be on PATH."
         _py_warn "This operation downloads and installs executable runtime code."
       else
         _py_validate_python_pin_target || return $?
@@ -2324,8 +2359,12 @@ _py_venv_python() {
 
       # Installed versions before and after are the install's evidence.
       local -a installed_before=()
+      local before_inventory="" after_inventory=""
+      local -i before_rc=0 after_rc=0
       if [[ "$subcommand" == install ]]; then
-        installed_before=(${(f)"$(_py_uv_python_inventory installed 2>/dev/null)"})
+        before_inventory=$(_py_uv_python_inventory installed-evidence 2>/dev/null) || before_rc=$?
+        (( before_rc == 130 || before_rc == 143 )) && return "$before_rc"
+        installed_before=(${(f)before_inventory})
       fi
       local -i operation_rc=0
       if [[ "$subcommand" == install ]]; then
@@ -2335,10 +2374,10 @@ _py_venv_python() {
         _py_validate_python_pin_target \
           "$pin_fingerprint" "$pin_root_fingerprint" || return $?
         local pin_root="${pin_file:h}"
-        _py_run_project_writer _py_run_captured "uv python pin $version" \
-          _py_run_uv_scoped --directory "$pin_root" \
-          python pin --no-project --no-python-downloads \
-          "$version" || operation_rc=$?
+        local -a pin_args=(--directory "$pin_root" python pin --no-project --no-python-downloads "$version")
+        _py_command_display uv "${pin_args[@]}"
+        _py_run_project_writer _py_run_captured "$REPLY" \
+          _py_run_uv_scoped "${pin_args[@]}" || operation_rc=$?
       fi
       (( operation_rc == 0 )) || {
         _py_error "Python $subcommand failed (status $operation_rc)."
@@ -2362,9 +2401,13 @@ _py_venv_python() {
         return 0
       fi
       local installed_version="" new_version=""
-      local -a installed_after=(
-        ${(f)"$(_py_uv_python_inventory installed 2>/dev/null)"}
-      )
+      after_inventory=$(_py_uv_python_inventory installed-evidence 2>/dev/null) || after_rc=$?
+      if (( before_rc != 0 || after_rc != 0 )); then
+        _py_success "uv completed the Python $version installation."
+        (( after_rc == 130 || after_rc == 143 )) && return "$after_rc"
+        return 0
+      fi
+      local -a installed_after=(${(f)after_inventory})
       for installed_version in "${installed_after[@]}"; do
         [[ "$installed_version" == "$version" \
           || "$installed_version" == "$version".* ]] || continue

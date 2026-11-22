@@ -92,7 +92,7 @@ case "$command_name" in
       package-install)
         _arguments \
           '(-h --help)'{-h,--help}'[show command usage]' \
-          '--dev[add the package to the development dependency group]' \
+          '--dev[add to the development group in a uv or Poetry project]' \
           '--dry-run[print the plan without changing package state]' \
           '--yes[accept the reviewed plan non-interactively]' \
           '1:package name'

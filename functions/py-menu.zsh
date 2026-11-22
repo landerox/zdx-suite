@@ -388,12 +388,19 @@ _py_menu_interactive() {
 _py_run_task_batch() {
   local -a tasks=("$@") summary_records=() failed_tasks=() reply=()
   local -i total=${#tasks[@]} index=0 failures=0 interrupted_status=0
-  local -i task_status=0
+  local -i task_status=0 pending_signal=0
   local task="" outcome="" detail="" seconds="" REPLY
+  if [[ -o interactive ]]; then
+    setopt localoptions localtraps
+    trap 'pending_signal=130' INT
+    trap 'pending_signal=143' TERM
+  fi
 
   _py_header "Selected Python Tasks"
   for task in "${tasks[@]}"; do
     (( ++index ))
+    (( interrupted_status == 0 && pending_signal != 0 )) \
+      && interrupted_status=$pending_signal
     if (( interrupted_status )); then
       summary_records+=("$task"$'\tnot-run\t\tbatch interrupted')
       continue
@@ -405,10 +412,25 @@ _py_run_task_batch() {
       _py_step_banner "$index" "$total" "$task"
     fi
     task_status=0
+    reply=()
+    if (( pending_signal )); then
+      interrupted_status=$pending_signal
+      _py_step_result "$index" "$total" "$task" not-run "batch interrupted" ""
+      summary_records+=("$task"$'\tnot-run\t\tbatch interrupted')
+      continue
+    fi
     _py_step_exec _py_timed "py:$task" _py_dispatch "$task" \
       || task_status=$?
-    outcome="${reply[1]:-done}"
-    detail="${reply[2]:-}"
+    if (( pending_signal )); then
+      interrupted_status=$pending_signal
+    fi
+    if (( pending_signal && task_status != 0 )); then
+      task_status=$pending_signal
+      outcome=interrupted detail="status $task_status"
+    else
+      outcome="${reply[1]:-done}"
+      detail="${reply[2]:-}"
+    fi
     seconds="${reply[3]:-}"
     _py_step_result "$index" "$total" "$task" "$outcome" "$detail" "$seconds"
     summary_records+=("$task"$'\t'"$outcome"$'\t'"$seconds"$'\t'"$detail")

@@ -250,9 +250,13 @@ interrupt between the renames, an unverifiable state, or a failed rollback
 keeps the workspace, decided from the filesystem as well as from the rename
 bookkeeping, and reports it as `Recovery workspace retained: <path>`, with
 `original-venv` inside it as the previous environment to move back only
-while `.venv` is absent. The uv steps run under `umask 022`, so the new
-environment meets the ownership and mode rules whatever the caller's umask
-is, and their output is captured and replayed only on failure.
+while `.venv` is absent. A verified publication followed by incomplete cleanup
+reports the rebuilt `.venv` and the remaining workspace with status `1`.
+Any old environment in that workspace may be partly removed and needs
+inspection before manual cleanup. A staged creation or synchronization that
+returns `130` or `143` stops the operation and preserves that status. The uv
+steps run under `umask 022` so the new environment meets the mode rules.
+Their output is captured and replayed only on failure.
 
 The rebuild never installs, upgrades, or downloads a Python runtime: a missing
 uv-managed CPython for the request fails the staged `uv venv` step with the
@@ -275,13 +279,19 @@ the installed view is restricted to uv-managed interpreters. Pinning sets the
 reviewed directory explicitly, disables project/workspace discovery for that
 write, and removes uv project, environment, and working-directory redirection
 variables from the child process.
+Runtime installation discloses that uv can place a version-suffixed executable
+such as `python3.12` in its executable directory on `PATH`. A reported addition
+or unchanged version requires successful inventories before and after the
+operation. Without both inventories, the result describes backend completion.
 
 Creation, pinning, and package mutation mask group and other write bits in
 their child processes. Stricter caller settings and the caller's mask stay
 in effect.
 
 Package mutations target either the detected uv/Poetry project or a validated
-project-local virtual environment. Poetry markers, project metadata, lock
+project-local virtual environment. `--dev` requires a uv or Poetry project and
+is refused for an environment-only backend. Success reports backend completion
+for package mutations. Poetry markers, project metadata, lock
 state, backend selection, project-root directory identity, and the
 environment's exact `bin/python` are frozen and revalidated after
 authorization. Environment-backed plans also freeze the presence or exact
@@ -347,6 +357,9 @@ both backends. `tool-upgrade --all` freezes, prints, revalidates, and upgrades
 the exact installed set across both backends by default; `--backend` narrows
 that set. It never delegates to an unbounded backend-wide transaction. Every
 mutation requires confirmation or `--yes`.
+Tool installation compares the selected backend's inventory before and after.
+Removal reports a change when the after-inventory confirms the tool is absent.
+An unavailable inventory leaves the result at backend completion.
 The upgrade plan is a numbered `# | Tool | Backend | Version` table. With
 several targets, each upgrade gets a `[n/N]` banner and one result line, and a
 `Tool Upgrade Summary` table follows. A target is `updated` when its reported

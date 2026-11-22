@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Python: preserve terminal interruption reports and staged rebuild statuses,
+  distinguish published rebuilds from unfinished cleanup, and report package,
+  tool, and runtime outcomes with the available evidence.
+
 - Python: keep environments discoverable when a sibling is refused, accept
   trusted activation aliases, preserve safe writer permissions, and qualify
   Apple's Python launcher before invocation.

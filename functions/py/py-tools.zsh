@@ -11,8 +11,8 @@ if [[ -n "${_PY_TOOLS_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# Data record: backend<TAB>validated-package-name. With "versions" as the
-# second argument a third field holds the reported version, or is empty.
+# Data record: backend<TAB>validated-package-name. Version modes add a third
+# field. Evidence mode requires every tool row to carry a valid version.
 _py_tool_backend_inventory() {
   local backend="$1" with_versions="${2:-}"
   local raw_output=""
@@ -42,12 +42,16 @@ _py_tool_backend_inventory() {
       _py_error "$backend tool inventory exceeded 2048 records."
       return 1
     }
-    if [[ "$backend" == uv && "$line" == [[:space:]]* ]]; then
+    [[ -n "$line" ]] || continue
+    if [[ "$backend" == uv && ( "$line" == [[:space:]]* || "$line" == '- '* ) ]]; then
       continue
     fi
     package_name="${line%%[[:space:]]*}"
     [[ "$backend" == uv ]] && package_name="${package_name%%@*}"
-    _py_validate_package_name "$package_name" || continue
+    _py_validate_package_name "$package_name" || {
+      [[ "$with_versions" != evidence ]] || return 1
+      continue
+    }
     [[ -z "${seen[$package_name]:-}" ]] || continue
     seen[$package_name]=1
     (( record_count++ ))
@@ -55,7 +59,7 @@ _py_tool_backend_inventory() {
       _py_error "$backend tool inventory exceeded 500 eligible tools."
       return 1
     }
-    if [[ "$with_versions" == versions ]]; then
+    if [[ "$with_versions" == versions || "$with_versions" == evidence ]]; then
       version=""
       if [[ "$line" == *[[:space:]]* ]]; then
         version="${line#*[[:space:]]}"
@@ -64,11 +68,13 @@ _py_tool_backend_inventory() {
       fi
       version="${version#v}"
       [[ "$version" =~ '^[0-9][0-9A-Za-z.+!_-]{0,63}$' ]] || version=""
+      [[ "$with_versions" != evidence || -n "$version" ]] || return 1
       print -r -- "$backend"$'\t'"$package_name"$'\t'"$version"
     else
       print -r -- "$backend"$'\t'"$package_name"
     fi
   done
+  return 0
 }
 
 # Usage: _py_tool_inventory [backend] [versions]
@@ -231,17 +237,25 @@ tool-list() {
 
 # REPLY: the version one backend reports for a tool, or an empty string.
 # Usage: _py_tool_version <backend> <tool>
+# REPLY holds the version when present. Status 3 is verified absence in a
+# complete inventory. A failed query provides no evidence of absence.
 _py_tool_version() {
   local backend="$1" package_name="$2" records="" record=""
+  local -i inventory_rc=0
   REPLY=""
-  records=$(_py_tool_backend_inventory "$backend" versions 2>/dev/null) \
-    || return 1
+  records=$(_py_tool_backend_inventory "$backend" evidence 2>/dev/null) \
+    || inventory_rc=$?
+  case "$inventory_rc" in
+    0) ;;
+    130|143) return "$inventory_rc" ;;
+    *) return 1 ;;
+  esac
   for record in "${(@f)records}"; do
     [[ "${${record#*$'\t'}%%$'\t'*}" == "$package_name" ]] || continue
     REPLY="${record##*$'\t'}"
     return 0
   done
-  return 1
+  return 3
 }
 
 # Usage: _py_tool_confirm_change <question> <assume-yes> [cancel-note]
@@ -358,7 +372,11 @@ tool-install() {
   (( confirm_rc == 130 )) && return 0
   (( confirm_rc == 0 )) || return "$confirm_rc"
 
-  local -i operation_rc=0
+  local REPLY="" before_version=""
+  local -i before_rc=0 after_rc=0 operation_rc=0
+  _py_tool_version "$backend" "$package_name" || before_rc=$?
+  (( before_rc == 130 || before_rc == 143 )) && return "$before_rc"
+  before_version="$REPLY"
   if [[ "$backend" == uv ]]; then
     _py_run_captured "uv tool install $package_name" \
       command uv tool install "$package_name" || operation_rc=$?
@@ -370,9 +388,24 @@ tool-install() {
     _py_error "Tool installation failed (status $operation_rc)."
     return "$operation_rc"
   }
-  local REPLY
-  _py_tool_version "$backend" "$package_name"
-  _py_success "Installed $package_name${REPLY:+ $REPLY} with $backend."
+  _py_tool_version "$backend" "$package_name" || after_rc=$?
+  if (( after_rc == 3 )); then
+    _py_error "$package_name is absent from the $backend inventory after installation."
+    return 1
+  elif (( before_rc == 3 && after_rc == 0 )); then
+    _py_success "Installed $package_name${REPLY:+ $REPLY} with $backend."
+  elif (( before_rc == 0 && after_rc == 0 )) \
+    && [[ -n "$before_version" && -n "$REPLY" ]]; then
+    if [[ "$before_version" == "$REPLY" ]]; then
+      _py_success "$package_name $REPLY was already installed with $backend."
+    else
+      _py_success "Updated $package_name with $backend: $before_version → $REPLY."
+    fi
+  else
+    _py_success "$backend completed installation for $package_name."
+  fi
+  (( after_rc == 130 || after_rc == 143 )) && return "$after_rc"
+  return 0
 }
 
 tool-uninstall() {
@@ -485,7 +518,19 @@ tool-uninstall() {
     _py_error "Tool uninstallation failed (status $operation_rc)."
     return "$operation_rc"
   }
-  _py_success "Uninstalled $package_name from $backend."
+  local REPLY=""
+  local -i after_rc=0
+  _py_tool_version "$backend" "$package_name" || after_rc=$?
+  case "$after_rc" in
+    0)
+      _py_error "$package_name is still present in the $backend inventory."
+      return 1
+      ;;
+    3) _py_success "Uninstalled $package_name from $backend." ;;
+    *) _py_success "$backend completed uninstallation for $package_name." ;;
+  esac
+  (( after_rc == 130 || after_rc == 143 )) && return "$after_rc"
+  return 0
 }
 
 tool-upgrade() {
@@ -642,16 +687,24 @@ tool-upgrade() {
 
   # Each target is one step: a [n/N] banner and result line when several
   # run, version evidence for updated versus current, and one verdict.
-  local operation="" backend="" candidate="" step_label="" before=""
+  local operation="" backend="" candidate="" step_label="" before="" after=""
   local step_start="" step_seconds="" outcome="" detail=""
   local -a summary_records=() retry_commands=()
   local -i operation_rc=0 failures=0 index=0 total=${#operations[@]}
-  local -i interrupted_status=0 updated=0 current=0 not_run=0
+  local -i interrupted_status=0 interrupted_steps=0 updated=0 current=0 not_run=0
+  local -i pending_signal=0 inventory_rc=0
+  if [[ -o interactive ]]; then
+    setopt localtraps
+    trap 'pending_signal=130' INT
+    trap 'pending_signal=143' TERM
+  fi
   for operation in "${operations[@]}"; do
     (( ++index ))
     backend="${operation%%$'\t'*}"
     candidate="${operation#*$'\t'}"
     step_label="$candidate ($backend)"
+    (( interrupted_status == 0 && pending_signal != 0 )) \
+      && interrupted_status=$pending_signal
     if (( interrupted_status )); then
       (( ++not_run ))
       summary_records+=("$step_label"$'\tnot-run\t\tupgrade interrupted')
@@ -660,7 +713,14 @@ tool-upgrade() {
     (( total > 1 )) && _py_step_banner "$index" "$total" "$step_label"
     step_start="${EPOCHREALTIME:-$SECONDS}"
     operation_rc=0
-    if [[ "$backend" == uv ]]; then
+    if (( pending_signal )); then
+      interrupted_status=$pending_signal
+      (( ++not_run ))
+      (( total > 1 )) && _py_step_result "$index" "$total" "$step_label" \
+        not-run "upgrade interrupted" ""
+      summary_records+=("$step_label"$'\tnot-run\t\tupgrade interrupted')
+      continue
+    elif [[ "$backend" == uv ]]; then
       _py_run_captured "uv tool upgrade $candidate" \
         command uv tool upgrade "$candidate" || operation_rc=$?
     else
@@ -670,21 +730,35 @@ tool-upgrade() {
     step_seconds=$(( ${EPOCHREALTIME:-$SECONDS} - step_start ))
     (( step_seconds >= 0 )) || step_seconds=0
     before="${before_versions[$operation]:-}"
+    after=""
+    if (( operation_rc == 0 && pending_signal == 0 )) && [[ -n "$before" ]]; then
+      inventory_rc=0
+      _py_tool_version "$backend" "$candidate" || inventory_rc=$?
+      if (( inventory_rc == 130 || inventory_rc == 143 )); then
+        operation_rc=$inventory_rc
+      elif (( inventory_rc == 0 )); then
+        after="$REPLY"
+      fi
+    fi
+    if (( pending_signal )); then
+      interrupted_status=$pending_signal
+      (( operation_rc != 0 )) && operation_rc=$pending_signal
+    fi
     if (( operation_rc == 130 || operation_rc == 143 )); then
       outcome=interrupted detail="status $operation_rc"
       interrupted_status=$operation_rc
+      (( ++interrupted_steps ))
       retry_commands+=("tool-upgrade $candidate --backend $backend")
     elif (( operation_rc != 0 )); then
       outcome=failed detail="status $operation_rc"
       (( ++failures ))
       retry_commands+=("tool-upgrade $candidate --backend $backend")
-    elif [[ -n "$before" ]] && _py_tool_version "$backend" "$candidate" \
-      && [[ -n "$REPLY" ]]; then
-      if [[ "$REPLY" == "$before" ]]; then
-        outcome=current detail="$REPLY"
+    elif [[ -n "$after" ]]; then
+      if [[ "$after" == "$before" ]]; then
+        outcome=current detail="$after"
         (( ++current ))
       else
-        outcome=updated detail="$before → $REPLY"
+        outcome=updated detail="$before → $after"
         (( ++updated ))
       fi
     else
@@ -702,11 +776,10 @@ tool-upgrade() {
   local -a counts=()
   (( updated )) && counts+=("$updated updated")
   (( current )) && counts+=("$current current")
-  local -i done_count=$(( index - updated - current - failures - not_run ))
-  (( interrupted_status )) && (( done_count -= 1 ))
+  local -i done_count=$(( index - updated - current - failures - not_run - interrupted_steps ))
   (( done_count > 0 )) && counts+=("$done_count done")
   (( failures )) && counts+=("$failures failed")
-  (( interrupted_status )) && counts+=("1 interrupted")
+  (( interrupted_steps )) && counts+=("$interrupted_steps interrupted")
   (( not_run )) && counts+=("$not_run not run")
   local count_text="${(j: · :)counts}"
   print -u2 -r -- ""

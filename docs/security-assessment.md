@@ -1154,6 +1154,9 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   An incomplete inventory fails closed. Environment creation, Python pinning,
   and package mutations mask group and other write bits in their child
   processes while retaining stricter caller permissions.
+  Failed creation reports a partial target inside the reviewed project.
+  A verified rebuild publication remains distinguishable from workspace cleanup
+  failure, which calls for inspection of any partly removed old data.
   `venv-rebuild` replaces only the project `.venv` of a uv project: it
   freezes the project root, the `.venv` and interpreter identities, and the
   `pyproject.toml`, `uv.lock`, and `.python-version` fingerprints, refuses

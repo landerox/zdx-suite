@@ -294,3 +294,55 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"✔ Python 3.12 was already installed."* ]]
 }
+
+@test "py safety: a failed before-inventory cannot prove a runtime change" {
+  cat > "$TEST_MOCK_BIN/uv" <<'EOF'
+#!/bin/sh
+case "$*" in
+  'python list --only-installed --managed-python')
+    if [ ! -f "$HOME/installer-called" ]; then
+      if [ "$PY_INSTALL_BEFORE_INVENTORY" = malformed ]; then
+        printf 'unrecognized inventory record\n'
+        exit 0
+      fi
+      printf 'cpython-3.11.9-linux-x86_64-gnu    %s/bin/python3.11\n' "$HOME"
+      exit 17
+    fi
+    printf 'cpython-3.12.13-linux-x86_64-gnu    %s/bin/python3.12\n' "$HOME"
+    ;;
+  'python install 3.12') : > "$HOME/installer-called" ;;
+  *) exit 97 ;;
+esac
+EOF
+  chmod -- 700 "$TEST_MOCK_BIN/uv"
+
+  local inventory
+  for inventory in failed malformed; do
+    export PY_INSTALL_BEFORE_INVENTORY="$inventory"
+    rm -f -- "$HOME/installer-called"
+    run run_zsh 'venv-python-install 3.12 --yes'
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/installer-called" ]
+    [[ "$output" == *'uv completed the Python 3.12 installation.'* ]]
+    [[ "$output" != *'Installed Python 3.12.13.'* ]]
+    [[ "$output" == *'python3.12'*'PATH'* ]]
+  done
+}
+
+@test "py safety: create failure names a partial environment without removing it" {
+  cat > "$TEST_MOCK_BIN/uv" <<'EOF'
+#!/bin/sh
+[ "$#" -eq 3 ] && [ "$1" = venv ] && [ "$2" = --no-python-downloads ] \
+  && [ "$3" = "$HOME/project/.venv" ] && [ "$PWD" = "$HOME/project" ] || exit 97
+mkdir "$3" || exit 98
+printf 'partial\n' > "$3/backend-record"
+exit 42
+EOF
+  chmod -- 700 "$TEST_MOCK_BIN/uv"
+  mkdir "$HOME/project"
+
+  run run_zsh 'cd "$HOME/project" && venv-create --uv --yes'
+  [ "$status" -eq 42 ]
+  [ "$(cat "$HOME/project/.venv/backend-record")" = partial ]
+  [[ "$output" == *'Incomplete environment left at ~/project/.venv.'* ]]
+}
