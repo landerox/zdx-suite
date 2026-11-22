@@ -622,7 +622,12 @@ partial and failed transfers, malformed/oversized tag listings, query failures
 and non-integer release ages. Public refusal preserves project bytes and
 cleans staging; valid controls record the exact update backend. These are
 isolated response classes rather than live network acceptance or exhaustive
-metadata-normalization coverage.
+metadata-normalization coverage. Actions controls preserve genuine block
+anchor declarations and a leading UTF-8 byte-order mark. Nested unsupported
+mapping values and scalar list items remain data. Prompt callbacks and root
+swaps are finite protocol models. Private permission fixtures record actual
+removal returns without establishing native owner-host, terminal or
+physical-signal acceptance.
 
 | File | Covered boundary |
 | --- | --- |
@@ -634,6 +639,9 @@ metadata-normalization coverage.
 | `dev_output.bats` | A failing check's replayed tail and retry command, changed locked versions read from `uv.lock` and an unchanged refresh, one guard record for every hook revision, installed hook types from a flow-style list, the System owner's result kept through the delegated host toolchain step, and verbose-only policy notes |
 | `dev_gate_results.bats` | Finite ShellCheck and Bandit interruption statuses and stopped later batches, empty-input and pytest no-collection skipped outcomes, aggregate and standalone menu results, mixed verdicts and partial timing, closed-stdin captured-output isolation with bounded redacted failure tails, valid and malformed completed-result frames, replaced file/workspace identities with retained foreign canaries, and modeled cleanup failures that preserve primary statuses |
 | `dev_gate_metadata.bats` | Config-only Pyright in direct and aggregate plans, linked-config policy, bounded pytest configuration inspection and synchronized link replacement, explicit pytest operands, and exact uv columns with failed-query controls and a real distribution named `package` |
+| `dev_state_prompt_results.bats` | Private state excluded from Markdown discovery/fixing, literal custom state roots and unchanged discovery state, report-buffer separators, all eight current-shell confirmation consumers, decline/unavailable/yes and hook-trust preservation, and the retained private diff renderer's exact pager-free argv |
+| `dev_cleanup_output.bats` | Complete numbered plans beyond 25 targets, counted dry-run/decline/success/failure verdicts, Core and standalone literal path display, observed private removal results, ordered skipped/not-run targets, root-stop effects and reachable partial timing |
+| `dev_action_context.bats` | Genuine workflow job/step and composite references versus nested input/environment data, complete LF/CRLF and quote/comment preservation, planning/refusal and finite failed-query controls |
 | `dev_update_dispatch.bats` | Child-specific dependency gates, missing uv with independent Terraform inspection and cleanup, and maintenance help/error routing before probes |
 | `dev_update_recovery.bats` | Validated partial hook updates, refusal of unsafe or interrupted candidates and failed environment installation, independent package/Git backends, native HTTP stall settings, dry-run applicability, and retry summaries and removal of the pre-commit update's PyPI cache |
 | `dev_update_actions.bats` | GitHub Actions discovery across odd workflow names and nested composite actions without following links; a reference shared by several files, listed once per file in its plan row; pinned, tag, branch, reusable-workflow, local, and Docker references with block scalars ignored; annotated-tag peeling and SHA identification; patch, minor, `--major`, prerelease, and no-downgrade selection; the release-age cooldown with an authenticated, unauthenticated, absent, or failing `gh`; dry run, decline, non-interactive refusal, and `--yes`; per-file backups, preserved modes, and byte-for-byte formatting with CRLF and comments; rollback after a newly failing validator or a failed publication, and kept updates with pre-existing findings; an isolated failed query, the timeout batch stop, HTTPS-only credential-free queries, and refused invalid values; and the `dev-update-all` step, its dry-run preview, and the menu, batch, dependency, and completion surfaces. `git ls-remote`, `gh`, `actionlint`, and `zizmor` are PATH mocks, and host copies are hidden from capability probes |

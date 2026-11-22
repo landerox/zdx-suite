@@ -427,8 +427,8 @@ dev-update-all() {
   local maintenance_outcome="declined"
   {
     (( auto_yes )) && _DEV_AUTO_YES=1
-    maintenance_outcome=$(_dev_confirm_outcome \
-      "Execute this full maintenance plan?")
+    _dev_confirm_outcome "Execute this full maintenance plan?"
+    maintenance_outcome="$REPLY"
   } always {
     _DEV_AUTO_YES=$previous_auto_yes
   }

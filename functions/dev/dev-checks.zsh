@@ -1080,9 +1080,8 @@ dev-run-tflint() {
 
     if (( ! auto_yes )); then
       local confirmation
-      confirmation=$(
-        _dev_confirm_outcome "Download and initialize configured TFLint plugins?"
-      )
+      _dev_confirm_outcome "Download and initialize configured TFLint plugins?"
+      confirmation="$REPLY"
       case "$confirmation" in
         confirmed) ;;
         unavailable)

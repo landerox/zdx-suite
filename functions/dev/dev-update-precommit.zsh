@@ -683,8 +683,9 @@ dev-update-precommit() {
       local trust_outcome="declined"
       {
         (( auto_yes )) && _DEV_AUTO_YES=1
-        trust_outcome=$(_dev_confirm_outcome \
-          "Trust this upstream scope and install and execute its package and hook code?")
+        _dev_confirm_outcome \
+          "Trust this upstream scope and install and execute its package and hook code?"
+        trust_outcome="$REPLY"
       } always {
         _DEV_AUTO_YES=$previous_auto_yes
       }

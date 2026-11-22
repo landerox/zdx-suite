@@ -5,6 +5,8 @@
 #
 # Loaded by dev-menu.zsh before every module under functions/dev/.
 # Private helpers only; not a standalone public command.
+# Project discovery uses dev-state.zsh path/identity validators at call time,
+# after the suite loader completes; it never prepares a state directory.
 #
 
 if [[ -n "${_DEV_COMMON_SOURCED:-}" ]]; then
@@ -512,9 +514,9 @@ _dev_confirm() {
   esac
 }
 
-# Runs a confirmation for a mutating command and reports the outcome as one of
-# three words on stdout: "confirmed", "declined", or "unavailable". This keeps
-# the three-way decision identical at every call site.
+# Runs a confirmation in the current shell and sets REPLY to "confirmed",
+# "declined", or "unavailable". Callers copy REPLY immediately; the helper
+# emits no stdout and retains the same three-way decision at every call site.
 _dev_confirm_outcome() {
   local prompt="$1"
   local -i confirm_status=0
@@ -522,9 +524,9 @@ _dev_confirm_outcome() {
   _dev_confirm "$prompt" || confirm_status=$?
 
   case "$confirm_status" in
-    0) print -r -- "confirmed" ;;
-    2) print -r -- "unavailable" ;;
-    *) print -r -- "declined" ;;
+    0) REPLY="confirmed" ;;
+    2) REPLY="unavailable" ;;
+    *) REPLY="declined" ;;
   esac
   return 0
 }
@@ -1244,6 +1246,42 @@ _dev_project_find_path_pattern() {
   REPLY="$value"
 }
 
+# Sets reply to one pure find prune group for project-owned state paths.
+# Defaults are always excluded at the project root. Valid custom descendants
+# are added without creating directories, repairing modes or writing ignores.
+_dev_project_state_exclusion() {
+  reply=()
+  if (( ! ${+functions[_dev_state_resolve]} \
+    || ! ${+functions[_dev_directory_identity]} )); then
+    _dev_error "State path validation is unavailable for project discovery."
+    return 2
+  fi
+
+  local project_prefix="${${PWD:A}%/}/"
+  local configured state_path REPLY=""
+  local -a state_paths=('./.dev-suite-backups' './dev-suite-reports')
+  for configured in "$DEV_BACKUP_DIR" "$DEV_REPORT_DIR"; do
+    state_path="${configured:a}"
+    _dev_state_resolve "$configured" "project state" >/dev/null 2>&1 \
+      || continue
+    [[ "$state_path" == "$project_prefix"* ]] || continue
+    if [[ -e "$state_path" || -L "$state_path" ]]; then
+      _dev_directory_identity "$state_path" "project state directory" \
+        >/dev/null 2>&1 || continue
+    fi
+    state_paths+=("./${state_path#"$project_prefix"}")
+  done
+
+  local -a path_expression=()
+  for state_path in "${state_paths[@]}"; do
+    _dev_project_find_path_pattern "$state_path"
+    path_expression+=(-path "$REPLY" -o)
+  done
+  path_expression[-1]=()
+  reply=(\( -type d \( "${path_expression[@]}" \) -prune \))
+  return 0
+}
+
 # Sets `reply` to a bounded set of nested repository roots. Generated and bare
 # repository trees are pruned before marker discovery. Status 2 means the
 # inventory could not be trusted.
@@ -1256,6 +1294,9 @@ _dev_project_repository_roots() {
   _dev_validate_bounded_integer \
     "project repository limit" "$maximum_records" 1 10000 || return 2
   local -i limit=$(( 10#$maximum_records ))
+  _dev_project_state_exclusion || return 2
+  local -a state_exclusion=("${reply[@]}")
+  reply=()
 
   local repository_markers=""
   repository_markers=$(
@@ -1270,7 +1311,8 @@ _dev_project_repository_roots() {
         -o -name '.tox' -o -name '.nox' \
         -o -name '?*.git' \
       \) -prune \) -o \
-      \( -name '.git' -print0 -prune \) \
+      \( -name '.git' -print0 -prune \) -o \
+      "${state_exclusion[@]}" \
       | _dev_project_limit_nul_stream \
         "Nested repository marker inventory" "$limit"
     local -a pipeline_status=("${pipestatus[@]}")
@@ -1297,6 +1339,8 @@ _dev_project_repository_roots() {
 # inventories. Nested repository paths are treated as literal find patterns.
 _dev_project_exclusions() {
   local -a repository_roots=("$@")
+  _dev_project_state_exclusion || return 2
+  local -a state_exclusion=("${reply[@]}")
   reply=(
     \( -type d \( \
       -name '.git' -o -name '*.git' \
@@ -1308,11 +1352,13 @@ _dev_project_exclusions() {
     \) -prune \) -o
   )
 
+  reply+=("${state_exclusion[@]}" -o)
   local repository_root
   for repository_root in "${repository_roots[@]}"; do
     _dev_project_find_path_pattern "$repository_root"
     reply+=(\( -path "$REPLY" -prune \) -o)
   done
+  return 0
 }
 
 # Bounded project probe. Status 0 means a match, 1 means no match, and 2 means
@@ -1350,7 +1396,7 @@ _dev_project_has_files_within() {
   local -a reply=()
   _dev_project_repository_roots 512 "$depth" || return 2
   local -a repository_roots=("${reply[@]}")
-  _dev_project_exclusions "${repository_roots[@]}"
+  _dev_project_exclusions "${repository_roots[@]}" || return 2
   local -a exclusions=("${reply[@]}")
 
   local found=""
@@ -1395,7 +1441,7 @@ _dev_project_files() {
 
   _dev_project_repository_roots "$maximum_records" || return 1
   local -a repository_roots=("${reply[@]}")
-  _dev_project_exclusions "${repository_roots[@]}"
+  _dev_project_exclusions "${repository_roots[@]}" || return 1
   local -a exclusions=("${reply[@]}")
 
   local -i limit=$(( 10#$maximum_records ))
@@ -2036,13 +2082,13 @@ _dev_show_diff() {
   _dev_have_command git || return 0
 
   if _dev_have_command delta; then
-    command git diff --no-color -- "$file_name" 2>/dev/null \
+    command git --no-pager diff --no-color -- "$file_name" 2>/dev/null \
       | command delta --paging=never >&2
   elif _dev_have_command bat; then
-    command git diff --no-color -- "$file_name" 2>/dev/null \
+    command git --no-pager diff --no-color -- "$file_name" 2>/dev/null \
       | command bat -l diff --plain --paging=never >&2
   else
-    command git diff --no-color -- "$file_name" >&2
+    command git --no-pager diff --no-color -- "$file_name" >&2
   fi
 }
 

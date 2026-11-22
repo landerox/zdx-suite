@@ -207,8 +207,14 @@ returns `0` (or `1` only when the requested report cannot be saved).
 project-local file exists. Otherwise, Markdownlint retains its normal
 configuration discovery behavior. It lints the suite's bounded Markdown
 inventory in batches of at most 64 paths, never a `**/*.md` glob, so `--fix`
-cannot rewrite files in `node_modules`, vendored or generated trees, or nested
-repositories.
+cannot rewrite files in `node_modules`, vendored or generated trees, nested
+repositories, or the suite's own report and backup directories. Project discovery
+prunes the two project-root defaults and validated custom state directories
+strictly below the project, using literal paths. Valid overrides outside the
+project add no exclusion; invalid unused overrides do not hide project inputs
+or independently fail a gate. Discovery does not create state directories,
+repair modes or write ignore files. Actual collection failures still fail the
+gate; exclusion does not establish permission to write state.
 
 `dev-check-types` runs every type checker the project declares (`ty` or
 `pyright` in its dependencies, or a regular non-symlink `pyrightconfig.json`)
@@ -380,10 +386,16 @@ At most 256 files of up to 1 MiB each are read, as bytes, through a no-follow
 descriptor. Without either directory the command reports `skipped` and returns
 `0` before any probe.
 
-**Parsing.** A line-based parser finds step- and job-level `uses:` keys,
-including `- uses:`, single or double quotes, and a trailing comment, and
-skips the content of block scalars such as `run: |`, so a script that
-mentions `uses:` is never rewritten. Each value is classified:
+**Parsing.** A line-based parser tracks workflow jobs and steps and composite
+`runs.steps` containers. It recognizes their `uses:` keys, including `- uses:`,
+single or double quoted values and trailing comments. Simple block-container
+anchor declarations retain their context without expanding aliases. Nested
+input/environment values remain data, and block scalars such as `run: |` are
+skipped. Scalar list items and unsupported mapping values keep their indented
+content out of the reference inventory. A leading UTF-8 byte-order mark is
+preserved. The parser handles block syntax within these limits and leaves
+schema validation and alias, tag or flow resolution outside its scope. Each
+reference is classified:
 
 | Value | Treatment |
 | --- | --- |
@@ -823,13 +835,15 @@ Every `dev-clean-*` command implements the destructive sequence from
    workflow never recanonicalizes that relative target through a movable root.
    If the combined plan exceeds `DEV_CLEAN_MAX_TARGETS` unique targets, cleanup
    fails closed before displaying, confirming, or mutating.
-4. **Show the plan.** The first 25 targets are listed with their type, then a
-   count of the remainder.
-5. **Stop for `--dry-run`.** No confirmation is requested and nothing is
-   removed.
-6. **Confirm immediately before execution.** A declined confirmation returns
-   `0` and removes nothing. When no terminal is attached and `--yes` was not
-   passed, the command **fails closed** with status `1`.
+4. **Show the plan.** Every target in the bounded frozen plan appears in a
+   numbered Type/Target table, with one Project fact. HOME abbreviation and
+   quoting affect display only; mutation uses the original relative records.
+5. **Stop for `--dry-run`.** No confirmation is requested. The verdict is
+   `Dry run: N targets planned; nothing was removed.`, with counted nouns.
+6. **Confirm immediately before execution.** Confirmation runs in the current
+   shell. A decline prints `Cancelled: nothing was removed.`, returns `0` and
+   removes nothing. When no terminal is attached and `--yes` was not passed,
+   the command **fails closed** with status `1`.
 7. **Revalidate the root after authorization.** A renamed, replaced, or
    symlinked root stops execution before the first removal.
 8. **Revalidate and report per target.** The target identity and frozen root
@@ -839,6 +853,11 @@ Every `dev-clean-*` command implements the destructive sequence from
    Directory contents are checked again before each removal, followed by a
    renewed target identity check, so a repository or DuckDB file added during
    confirmation cannot be removed under an older directory fingerprint.
+   One result per target follows the frozen order: completed removal, already
+   absent, failed/blocked, or not run after a stop. A failed root check after
+   removal explicitly retains the observed removal effect. Counted verdicts
+   distinguish success, failure and partial failure; only fully completed
+   targets establish partial-success evidence for the existing timer.
 
 `--yes` bypasses only the prompt. It never bypasses root validation, scope
 proof, or the plan. User-derived confirmation text is visibly escaped before

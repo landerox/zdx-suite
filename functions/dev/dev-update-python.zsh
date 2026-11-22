@@ -258,8 +258,8 @@ dev-update-python() {
   local rebuild_outcome="declined"
   {
     (( auto_yes )) && _DEV_AUTO_YES=1
-    rebuild_outcome=$(_dev_confirm_outcome \
-      "Upgrade Python $python_request and rebuild .venv?")
+    _dev_confirm_outcome "Upgrade Python $python_request and rebuild .venv?"
+    rebuild_outcome="$REPLY"
   } always {
     _DEV_AUTO_YES=$previous_auto_yes
   }

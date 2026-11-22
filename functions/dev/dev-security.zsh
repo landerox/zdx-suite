@@ -68,10 +68,9 @@ dev-run-audit() {
     local confirmation="declined"
     {
       (( auto_yes )) && _DEV_AUTO_YES=1
-      confirmation=$(
-        _dev_confirm_outcome \
-          "Upgrade vulnerable packages in the project virtual environment?"
-      )
+      _dev_confirm_outcome \
+        "Upgrade vulnerable packages in the project virtual environment?"
+      confirmation="$REPLY"
     } always {
       _DEV_AUTO_YES=$previous_auto_yes
     }

@@ -242,6 +242,11 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Developer: keep private reports and backups out of quality gates, run
+  confirmations in the current shell, show complete cleanup plans with ordered
+  target results and truthful partial verdicts, and update only genuine
+  job/step action references while preserving nested data and block anchors.
+
 - Developer: preserve interrupted ShellCheck and Bandit batches, distinguish
   skipped checks from passed work in aggregate and menu results, include
   configuration-only Pyright in aggregate plans, and exclude uv table headers

@@ -1231,7 +1231,7 @@ EOF
       local -a plans=("${TMPDIR:-/tmp}"/zdx-dev-update.*/pyproject.toml(N))
       (( ${#plans[@]} == 1 )) || return 1
       print -r -- "# changed after review" >> "${plans[1]}" || return 1
-      print -r -- "confirmed"
+      REPLY=confirmed
     }
     _dev_backup_pyproject() {
       print -u2 -r -- "BACKUP_SHOULD_NOT_RUN"
@@ -1961,7 +1961,7 @@ EOF
   run run_zsh '
     cd "$DEV_PROJECT"
     _dev_confirm_outcome() {
-      print -r -- "declined"
+      REPLY=declined
     }
     _dev_delegate_py() { print -r -- "delegate: $*" >> "$UV_UPDATE_LOG"; }
 
@@ -2078,7 +2078,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_delegate_py() { print -r -- "delegate: $*" >> "$UV_UPDATE_LOG"; }
     py-menu() { print -r -- "py-menu: $*" >> "$UV_UPDATE_LOG"; }
-    _dev_confirm_outcome() { print -r -- "UNEXPECTED_PROMPT" >&2; print -r -- confirmed; }
+    _dev_confirm_outcome() { print -r -- "UNEXPECTED_PROMPT" >&2; REPLY=confirmed; }
     NO_COLOR=1 dev-update-python --dry-run
   '
 
@@ -2260,7 +2260,7 @@ EOF
     cd "$DEV_PROJECT"
     _dev_confirm_outcome() {
       print -r -- "3.12" > .python-version
-      print -r -- "confirmed"
+      REPLY=confirmed
     }
 
     dev-update-python
