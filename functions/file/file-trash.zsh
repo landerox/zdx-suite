@@ -239,7 +239,7 @@ _file_trash_same_filesystem() {
       local -A _file_mount_targets=()
     fi
     if [[ -z "$_file_mount_mode" ]]; then
-      _file_mount_snapshot || return 1
+      _file_mount_snapshot || return $?
     fi
     if [[ "$_file_mount_mode" == table ]]; then
       _file_trash_mount_root "$node"
@@ -1297,7 +1297,7 @@ _file_trash_put_execute() {
   }
   local info_identity="${reply[1]}" files_identity="${reply[2]}"
   local -a mv_command=()
-  _file_mv_no_clobber_command || return 1
+  _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
 
   local display=""
@@ -1537,7 +1537,7 @@ _file_trash_restore_execute() {
     (( ++index ))
   done
   local -a mv_command=()
-  _file_mv_no_clobber_command || return 1
+  _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
 
   local -i failures=0 action_rc=0
@@ -1759,7 +1759,7 @@ _file_trash_purge_execute() {
   _file_mount_mode=""
   _file_trash_purge_revalidate || return 1
   local -a mv_command=()
-  _file_mv_no_clobber_command || return 1
+  _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
 
   local -i failures=0 action_rc=0

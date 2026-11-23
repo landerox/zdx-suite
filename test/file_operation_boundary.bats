@@ -324,7 +324,7 @@ MOCK
   mkdir -p "$FILE_BOUNDARY_WORK/sub"
   printf 'candidate\n' > "$FILE_BOUNDARY_WORK/sub/item"
   run -0 run_zsh 'source "$FILE_BOUNDARY_SETUP"; file-compress --format tar.gz --output safe.tar.gz --dry-run -- ./sub/./item'
-  [[ "$output" == *'Dry run complete'* ]]
+  [[ "$output" == *'Dry run: 1 archive planned; nothing was created.'* ]]
   [ ! -e "$FILE_BOUNDARY_WORK/safe.tar.gz" ]
 }
 

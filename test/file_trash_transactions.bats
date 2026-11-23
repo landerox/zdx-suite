@@ -613,8 +613,48 @@ tx_validation_interruption() {
   [[ "$output" == *'Recovery path:'* && "$output" == *"${nested#"$HOME"}"* ]]
 }
 
+@test "file trash transactions: standalone mount validation names a missing timeout backend" {
+  printf 'first\n' > "$TX_WORK/one"
+  printf '#!%s -f\n' "$TX_ZSH" > "$TX_BIN/uname"
+  cat >> "$TX_BIN/uname" <<'MOCK'
+emulate -R zsh
+: > "$TX_ROOT/uname-ran"
+exit 97
+MOCK
+  chmod -- 700 "$TX_BIN/uname"
+  run --separate-stderr "$TX_ZSH" -f -c 'emulate -R zsh
+    export PATH="$TX_BIN"
+    source "$TEST_SUITE_ROOT/functions/file-menu.zsh" || exit 91
+    (( ! ${+functions[_zdx_run_with_timeout]} )) || exit 92
+    builtin cd -- "$TX_WORK" || exit 93
+    file-trash put --yes one'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *'Bounded File commands need timeout or gtimeout when the ZDX core is not loaded.'* ]]
+  [[ "$stderr" != *'Could not identify the host kernel'* ]]
+  [ "$(cat "$TX_WORK/one")" = first ]
+  [ ! -e "$TX_TRASH" ]
+  [ ! -e "$TX_ROOT/uname-ran" ]
+  [ ! -e "$TX_ROOT/operations" ]
+}
+
 @test "file trash transactions: standalone quarantine names and retries need no preloaded datetime" {
   printf 'first\n' > "$TX_WORK/one"
+  export TX_REAL_UNAME
+  TX_REAL_UNAME=$(type -P uname)
+  printf '#!%s -f\n' "$TX_ZSH" > "$TX_BIN/timeout"
+  cat >> "$TX_BIN/timeout" <<'MOCK'
+emulate -R zsh
+[[ $# == 5 && "$1" == -k && "$2" == 2s && "$3" == 10s ]] || exit 97
+shift 3
+if [[ "$1" == "$TX_REAL_UNAME" && "$2" == -s ]] \
+  || [[ "$1" == "$TX_BIN/mv" && "$2" == --version ]]; then
+  print -r -- "${1:t}:$2" >> "$TX_ROOT/timeout-probes"
+  exec "$@"
+fi
+exit 97
+MOCK
+  chmod -- 700 "$TX_BIN/timeout"
   export TX_PAYLOAD_RM_STATUS=1
   run "$TX_ZSH" -f -c 'emulate -R zsh
     export PATH="$TX_BIN:$PATH"
@@ -640,6 +680,8 @@ tx_validation_interruption() {
   [ "$status" -eq 0 ]
   [ ! -e "$retained" ]
   [ -z "$(find "$TX_TRASH/info" -mindepth 1 -maxdepth 1 -print -quit)" ]
+  grep -Fxq -- 'uname:-s' "$TX_ROOT/timeout-probes"
+  grep -Fxq -- 'mv:--version' "$TX_ROOT/timeout-probes"
 }
 
 @test "file trash transactions: the historical empty-timestamp quarantine can be finished" {

@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- File: qualify GNU TAR compressors before planning, bound capability
+  probes, accept UTF-8 TAR member names, and show numbered archive targets.
+  Standalone mount validation reports when it needs `timeout` or `gtimeout`.
+
 - Python: preserve the status of a single menu action, explain invalid CLI
   arguments before dependency work, document the command flags, and bound
   Python version probes and project and PyPI metadata reads.

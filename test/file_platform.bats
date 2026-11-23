@@ -99,6 +99,98 @@ FILE_HIDE_ZSTD='whence() {
   builtin whence "$@"
 }'
 
+@test "file platform: GNU TAR formats require their compressor before planning" {
+  mock_gnu_tar_zstd "$WORK/writer.log"
+  printf 'input\n' > "$WORK/data"
+  local format codec result=0
+  for format in tar.gz tar.xz tar.bz2; do
+    case "$format" in
+      tar.gz) codec=gzip ;;
+      tar.xz) codec=xz ;;
+      tar.bz2) codec=bzip2 ;;
+    esac
+    export FILE_COMPRESS_FORMAT="$format" FILE_COMPRESS_CODEC="$codec"
+    run --separate-stderr run_zsh '
+      cd "$WORK" || return 91
+      whence() {
+        [[ "${@[-1]}" == "$FILE_COMPRESS_CODEC" ]] && return 1
+        builtin whence "$@"
+      }
+      file-compress --format "$FILE_COMPRESS_FORMAT" --output output --dry-run -- data
+    '
+    if [[ "$status" != 1 || -n "$output" \
+      || "$stderr" != *"Creating $format archives requires $codec."* ]]; then
+      printf '%s status %s\n%s\n' "$format" "$status" "$stderr"
+      result=1
+    fi
+  done
+  [ "$result" -eq 0 ]
+  [ ! -e "$WORK/writer.log" ]
+  [ ! -e "$WORK/output" ]
+}
+
+@test "file platform: a stalled GNU TAR probe preserves its timeout" {
+  printf 'input\n' > "$WORK/data"
+  cat > "$TEST_MOCK_BIN/tar" <<'SH'
+#!/bin/sh
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 97
+printf 'started\n' > "$HOME/tar-started"
+sleep 3
+printf 'finished\n' > "$HOME/tar-finished"
+printf 'tar (GNU tar) 1.35\n'
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/tar"
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 91
+    functions[_file_test_watchdog]="${functions[_zdx_run_with_timeout]}"
+    _zdx_run_with_timeout() {
+      case "$2:${3-}" in
+        "$TEST_MOCK_BIN/tar:--version")
+          [[ "$1" == 10 && "$#" == 3 ]] || return 96
+          shift
+          _file_test_watchdog 1 "$@"
+          ;;
+        *) _file_test_watchdog "$@" ;;
+      esac
+    }
+    file-compress --format tar.gz --output output --dry-run -- data
+  '
+  [ "$status" -eq 124 ]
+  [ -z "$output" ]
+  [ -f "$HOME/tar-started" ]
+  [ ! -e "$HOME/tar-finished" ]
+  [ ! -e "$WORK/output" ]
+  [[ "$stderr" == *"GNU tar version probe timed out."* ]]
+}
+
+@test "file platform: an incomplete capability probe cannot select a fallback" {
+  mock_bsd_tar "$WORK/writer.log"
+  printf 'input\n' > "$WORK/data"
+  local rc result=0
+  for rc in 125 137; do
+    export FILE_PROBE_STATUS="$rc"
+    run --separate-stderr run_zsh '
+      cd "$WORK" || return 91
+      functions[_file_test_watchdog]="${functions[_zdx_run_with_timeout]}"
+      _zdx_run_with_timeout() {
+        if [[ "$2" == "$TEST_MOCK_BIN/tar" && "${3-}" == --version ]]; then
+          [[ "$1" == 10 && "$#" == 3 ]] || return 96
+          return "$FILE_PROBE_STATUS"
+        fi
+        _file_test_watchdog "$@"
+      }
+      file-compress --format tar.gz --output output --dry-run -- data
+    '
+    if [[ "$status" != "$rc" || -n "$output" || "$stderr" != *"probe"* ]]; then
+      printf 'expected status %s, got %s\n%s\n' "$rc" "$status" "$stderr"
+      result=1
+    fi
+  done
+  [ "$result" -eq 0 ]
+  [ ! -e "$WORK/writer.log" ]
+  [ ! -e "$WORK/output" ]
+}
+
 # mock_bsd_find: a find without the GNU predicates junk discovery uses.
 mock_bsd_find() {
   export FILE_REAL_FIND
@@ -515,7 +607,7 @@ SH
   run run_zsh 'cd "$WORK" && file-compress --format 7z --output out.7z --yes -- "a*"'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Inputs: 1"* ]]
+  printf '%s\n' "$output" | grep -Eq "^[[:space:]]*1[[:space:]]+~/'work/a[*]'$"
   # Without -spd, 7-Zip would match a* as a wildcard and add ab and ac.
   [ "$(cat "$WORK/out.7z")" = "$(printf '%s\n' TYPE=7z 'MEMBER=./a*')" ]
   grep -q '^7z a -spd -t7z -sae -- .*/out[.]7z [.]/a[*]$' "$FILE_7Z_LOG"
@@ -550,7 +642,7 @@ SH
     '
     [ "$status" -eq 0 ]
     printf '%s\n' "${lines[@]}" \
-      | grep -q -x -F -- "➜ Output: $WORK/$FILE_TEST_OUTPUT"
+      | awk -v target="~/work/$FILE_TEST_OUTPUT" '$1 == 1 && $2 == target && NF == 2 { found=1 } END { exit !found }'
     [ -f "$WORK/$FILE_TEST_OUTPUT" ]
   done
 
@@ -738,7 +830,7 @@ PY
   [[ "$output" == *"differ only by letter case"*"docs"* ]]
   run run_zsh 'cd "$WORK" && file-extract --destination out --dry-run -- UPPER.TAR.GZ'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Dry run complete; no files were extracted."* ]]
+  [[ "$output" == *"Dry run: 1 directory planned; nothing was extracted."* ]]
 
   mock_kernel Linux
   run run_zsh 'cd "$WORK" && file-extract --destination out --dry-run -- mixed.tar'
@@ -888,8 +980,8 @@ SH
   chmod +x "$TEST_MOCK_BIN/zstd"
   run run_zsh 'cd "$WORK" && file-compress --format tzst --output out.tzst --dry-run -- one'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Format: tar.zst"* ]]
-  [[ "$output" == *"Dry run complete; no archive was created."* ]]
+  printf '%s\n' "$output" | grep -Eq '^[[:space:]]*Format:[[:space:]]+tar[.]zst$'
+  [[ "$output" == *"Dry run: 1 archive planned; nothing was created."* ]]
 
   [ ! -e "$TEST_TEMP_DIR/tar-log" ]
   [ ! -e "$WORK/out" ]

@@ -39,7 +39,9 @@ unmarked because the other formats still work. The interactive format picker
 of `file-compress` uses the same form for each format whose backend is
 missing, such as `○ tar.zst (missing: zstd)` or `○ 7z (missing: 7z or 7zz or
 7za)`; choosing such a row reports the missing requirement before any
-further prompt and creates nothing.
+further prompt and creates nothing. A timed-out GNU tar version probe keeps
+the other actions available and marks the extraction row as requiring
+verified GNU tar.
 
 ## Command grammar
 
@@ -428,7 +430,10 @@ is checked before planning, so a dry run reports a missing backend too, with
 the requirement named, such as `Creating 7z archives requires 7z or 7zz or
 7za.` Input trees are bounded, reject links and special entries, and may not
 cross a mount or overlap another selected input. TAR archives are created with
-GNU tar when `tar` or `gtar` is GNU tar; it stores no macOS metadata.
+GNU tar when `tar` or `gtar` is GNU tar. For `tar.gz`, `tar.xz`, and
+`tar.bz2`, the format requires `gzip`, `xz`, or `bzip2`, respectively, before
+the format or its dry-run plan is offered. GNU tar uses those programs from
+`PATH` and stores no macOS metadata. macOS bsdtar uses its built-in codecs.
 Otherwise `tar` is used, with `--no-mac-metadata` and `--no-xattrs` when a
 capability probe shows it accepts them, as macOS bsdtar does. Every creation
 also exports `COPYFILE_DISABLE=1`, so archives made on macOS carry neither
@@ -452,6 +457,19 @@ extension. Every format is therefore published under exactly the reviewed
 output name, up to the 255-byte name limit, and `--format` alone selects the
 format: `--format 7z --output backup.zip` creates a 7z archive named
 `backup.zip`.
+
+The GNU tar version, TAR metadata options, kernel, `mv` implementation, and
+junk-discovery predicate probes use a ten-second deadline per invocation and
+closed stdin. Direct probes preserve deadline status `124` and interruption
+statuses `130` and `143`. Fallback capability selection requires a completed
+probe. Missing timeout infrastructure or failed execution keeps the capability
+unverified. Standalone sources use `timeout` or `gtimeout` for external probes
+and can use the Zsh walker for junk discovery.
+
+The creation plan lists the numbered archive target and each reviewed input.
+The extraction plan lists the numbered destination and the source archive,
+member count, and declared bytes. Plan paths abbreviate HOME to `~`. A dry run
+reports the one planned target and a decline names the unchanged outcome.
 
 Archive tools run without the default-option variables they read from the
 environment, so only the reviewed command line decides what they do: an
@@ -511,11 +529,14 @@ never used because its listings lack the escaped, typed fields the preflight
 parses. The one resolved program lists, preflights, and extracts the same
 snapshot. Archive extensions (`.tar`, `.tar.gz`, `.tgz`, `.tar.xz`,
 `.tar.bz2`, `.tar.zst`, `.tzst`) are matched without regard to letter case,
-so `.TAR.GZ` is accepted. Before extraction, the suite rejects:
+so `.TAR.GZ` is accepted. The listing decodes GNU tar's octal escapes for
+high bytes, so ordinary UTF-8 names retain their bytes through preflight and
+post-extraction validation. Before extraction, the suite rejects:
 
 - absolute paths and `..` traversal;
-- duplicate archive member names, and on macOS, whose default filesystems
-  ignore letter case, names or parent directories that differ only by case;
+- control bytes, the plan delimiter, and unsupported listing escapes;
+- duplicate archive member names and, on macOS, collisions found by folding
+  names and parent directory names to lowercase;
 - symbolic links, hard links, devices, FIFOs, and other special entries;
 - more than 4,096 entries;
 - an inventory larger than 1 MiB; and
@@ -533,7 +554,8 @@ The source archive is copied once into a private same-filesystem snapshot. Its
 digest is matched to the unchanged source, and preflight plus extraction read
 that same frozen snapshot. Extraction occurs in a private directory, and the
 realized tree must reproduce every explicit member with its planned type and
-exact regular-file size; only necessary implicit parent directories are
+exact regular-file size. If the filesystem coalesces names, the realized
+tree cannot match the reviewed members. Only necessary implicit parent directories are
 accepted, and realized bytes must equal the declared bounded total. A
 destination that was absent at review is then published without merging into
 existing data, through the same `mv` adapter as deletion; the published
@@ -563,6 +585,10 @@ other `file-trash` form and `file-clean-junk` write nothing to stdout. The
 trash needs `mv`, `ln`, `mkdir`, `mktemp`, `rm`, and `sha256sum` or `shasum`;
 its pickers need `fzf`, and `--json` needs `jq`. `tar.zst` archives need GNU
 tar with `--zstd` and `zstd`.
+
+Operations that validate mount boundaries use the core timeout service. A
+standalone source uses `timeout` or `gtimeout` for the kernel probe. If neither
+is available, mount validation reports the requirement and returns `1`.
 
 Content digests open the file without following a link and hash it through
 standard input with `sha256sum` or `shasum -a 256`, so a name with a

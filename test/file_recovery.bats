@@ -53,6 +53,81 @@ file_work_dir() {
   mkdir -p "$WORK"
 }
 
+@test "file recovery: GNU TAR roundtrips the suite's UTF-8 member names" {
+  file_gnu_tar_name >/dev/null || skip "hardened extraction requires GNU tar"
+  command -v gzip >/dev/null || skip "roundtrip requires gzip"
+  file_work_dir
+  export FILE_UTF8_NAME=$'caf\303\251-\346\227\245.txt'
+  printf 'contents\n' > "$WORK/$FILE_UTF8_NAME"
+
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 91
+    file-compress --format tar.gz --output bundled.tar.gz --yes -- "$FILE_UTF8_NAME" \
+      || return $?
+    file-extract --destination restored --yes -- bundled.tar.gz
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  cmp "$WORK/$FILE_UTF8_NAME" "$WORK/restored/$FILE_UTF8_NAME"
+}
+
+@test "file recovery: TAR name decoding accepts only high-byte octal escapes" {
+  run run_zsh '
+    _file_tar_decode_name "caf\303\251.txt" || return 91
+    [[ "$REPLY" == $'\''caf\303\251.txt'\'' ]] || return 92
+    for encoded in '\''literal\\303'\'' '\''line\n'\'' '\''nul\000'\'' '\''slash\057'\'' \
+      '\''incomplete\23'\'' '\''unknown\xC3'\'' '\''trailing\'\''; do
+      if _file_tar_decode_name "$encoded"; then
+        print -r -- "unexpectedly accepted: $encoded"
+        return 93
+      fi
+    done
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "file recovery: archive plans show numbered targets and truthful passive outcomes" {
+  file_gnu_tar_name >/dev/null || skip "hardened extraction requires GNU tar"
+  command -v gzip >/dev/null || skip "roundtrip requires gzip"
+  file_work_dir
+  printf 'contents\n' > "$WORK/input.txt"
+
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 91
+    NO_COLOR=1 file-compress --format tar.gz --output bundled.tar.gz --dry-run -- input.txt
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  printf '%s\n' "$stderr" | grep -Eq '^[[:space:]]*1[[:space:]]+~/work/bundled[.]tar[.]gz$'
+  [[ "$stderr" == *"Dry run: 1 archive planned; nothing was created."* ]]
+  [ ! -e "$WORK/bundled.tar.gz" ]
+
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 91
+    file-compress --format tar.gz --output bundled.tar.gz --yes -- input.txt || return $?
+    NO_COLOR=1 file-extract --destination restored --dry-run -- bundled.tar.gz
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  printf '%s\n' "$stderr" | grep -Eq '^[[:space:]]*1[[:space:]]+~/work/restored$'
+  [[ "$stderr" == *"Dry run: 1 directory planned; nothing was extracted."* ]]
+  [ ! -e "$WORK/restored" ]
+
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 91
+    _file_confirm() { return 1; }
+    file-compress --format tar.gz --output declined.tar.gz -- input.txt || return $?
+    file-extract --destination restored -- bundled.tar.gz
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"Cancelled: nothing was created."* ]]
+  [[ "$stderr" == *"Cancelled: nothing was extracted."* ]]
+  [ ! -e "$WORK/declined.tar.gz" ]
+  [ ! -e "$WORK/restored" ]
+}
+
 # file_mock_archive_backend NAME: a tar (identifying as GNU tar), zip, or 7z
 # that records which default-option variables it received, one line each, in
 # FILE_BACKEND_ENV_LOG, and writes the archive its arguments name with one
@@ -507,7 +582,7 @@ EOF
   '
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Members: 2"* ]]
+  printf '%s\n' "$output" | grep -Eq '^[[:space:]]*Members:[[:space:]]+2$'
   [ "$(cat "$WORK/restored/keep.txt")" = keep ]
   [ "$(cat "$WORK/restored/secret.txt")" = secret ]
   file_gzip_saw_no_options
@@ -651,7 +726,7 @@ SH
         && "$(command printenv LZOP)" == -9 ]] || exit 93
     '
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Dry run complete; no archive was created."* ]]
+    [[ "$output" == *"Dry run: 1 archive planned; nothing was created."* ]]
     # The dry run probes once, and the probe saw none of the variables.
     [ "$(cat "$FILE_PROBE_ENV_LOG")" = "${expected%$'\n'}" ]
     if [[ "$mode" == timeout ]]; then

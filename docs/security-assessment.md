@@ -1098,7 +1098,10 @@ wrong base directory causes deletion or overwrite outside the intended scope.
   first matches a private source snapshot, then uses that same object for
   preflight and extraction; it limits names, exact file sizes, total bytes,
   entries, types, traversal, links, and realized members before a new
-  destination is published. zstd TAR archives (`.tar.zst`, `.tzst`) take the
+  destination is published. Validation compares decoded high-byte octal
+  listing escapes with the realized member bytes and refuses unsupported
+  escapes. File capability probes close stdin and use ten-second deadlines.
+  zstd TAR archives (`.tar.zst`, `.tzst`) take the
   same path with explicit `--zstd`; every compressed extension similarly binds
   its one codec to both listings and extraction. Plain `.tar` reads the frozen
   snapshot on stdin and refuses compressed magic without an autodetected
