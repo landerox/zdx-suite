@@ -92,8 +92,9 @@ unset _py_menu_modules _py_menu_module _py_menu_module_path
 _py_menu_usage() {
   print -u2 -r -- "Usage:"
   print -u2 -r -- "  py-menu                       Open the interactive Py menu"
-  print -u2 -r -- "  py-menu --multi               Run selected read-only tasks"
-  print -u2 -r -- "  py-menu <command> [args...]   Run one command directly"
+  print -u2 -r -- "  py-menu -m|--multi            Run selected read-only tasks"
+  print -u2 -r -- "  py-menu <command> [flags] [args...]"
+  print -u2 -r -- "  py-menu <command> --help      Show command usage"
   print -u2 -r -- "  py-menu -h|--help             Show this help"
   print -u2 -r -- ""
   print -u2 -r -- "Canonical commands:"
@@ -113,36 +114,73 @@ _py_menu_usage() {
   print -u2 -r -- "  tool-install"
   print -u2 -r -- "  tool-uninstall"
   print -u2 -r -- "  tool-upgrade"
+  print -u2 -r -- ""
+  print -u2 -r -- "For supported changes, --dry-run previews the plan and --yes accepts it."
+  print -u2 -r -- "Use --path for supported environment commands and --backend for tool changes."
+  print -u2 -r -- "The interactive menu requires fzf."
 }
 
 _py_dispatch() {
+  emulate -L zsh
   local command_name="${1:-}"
   (( $# > 0 )) && shift
 
   case "$command_name" in
-    venv-list)           venv-list "$@" ;;
-    venv-create)         venv-create "$@" ;;
-    venv-activate)       venv-activate "$@" ;;
-    venv-info)           venv-info "$@" ;;
-    venv-rebuild)        venv-rebuild "$@" ;;
-    venv-remove)         venv-remove "$@" ;;
-    venv-python-list)    venv-python-list "$@" ;;
-    venv-python-install) venv-python-install "$@" ;;
-    venv-python-pin)     venv-python-pin "$@" ;;
-    package-search)      package-search "$@" ;;
-    package-install)     package-install "$@" ;;
-    package-uninstall)   package-uninstall "$@" ;;
-    tool-list)           tool-list "$@" ;;
-    tool-install)        tool-install "$@" ;;
-    tool-uninstall)      tool-uninstall "$@" ;;
-    tool-upgrade)        tool-upgrade "$@" ;;
+    venv-list)
+      _py_timed "py:venv-list" venv-list "$@"
+      ;;
+    venv-create)
+      _py_timed "py:venv-create" venv-create "$@"
+      ;;
+    venv-activate)
+      _py_timed "py:venv-activate" venv-activate "$@"
+      ;;
+    venv-info)
+      _py_timed "py:venv-info" venv-info "$@"
+      ;;
+    venv-rebuild)
+      _py_timed "py:venv-rebuild" venv-rebuild "$@"
+      ;;
+    venv-remove)
+      _py_timed "py:venv-remove" venv-remove "$@"
+      ;;
+    venv-python-list)
+      _py_timed "py:venv-python-list" venv-python-list "$@"
+      ;;
+    venv-python-install)
+      _py_timed "py:venv-python-install" venv-python-install "$@"
+      ;;
+    venv-python-pin)
+      _py_timed "py:venv-python-pin" venv-python-pin "$@"
+      ;;
+    package-search)
+      _py_timed "py:package-search" package-search "$@"
+      ;;
+    package-install)
+      _py_timed "py:package-install" package-install "$@"
+      ;;
+    package-uninstall)
+      _py_timed "py:package-uninstall" package-uninstall "$@"
+      ;;
+    tool-list)
+      _py_timed "py:tool-list" tool-list "$@"
+      ;;
+    tool-install)
+      _py_timed "py:tool-install" tool-install "$@"
+      ;;
+    tool-uninstall)
+      _py_timed "py:tool-uninstall" tool-uninstall "$@"
+      ;;
+    tool-upgrade)
+      _py_timed "py:tool-upgrade" tool-upgrade "$@"
+      ;;
     :)                   return 0 ;;
     "")
       _py_error "A Py command is required."
       return 2
       ;;
     *)
-      _py_error "Unknown command: $command_name"
+      _py_error "Unknown command. Use 'py-menu --help'."
       return 2
       ;;
   esac
@@ -344,8 +382,11 @@ _py_menu_interactive() {
   [[ -n "$selected" ]] || return 0
 
   local -a selected_rows=("${(@f)selected}") batch_tasks=()
+  if (( ! multi_select && ${#selected_rows} != 1 )); then
+    _py_error "Expected one selected Py action."
+    return 1
+  fi
   local selected_row="" command_name=""
-  local -i failures=0 runnable=0
   for selected_row in "${selected_rows[@]}"; do
     _py_array_contains_literal "$selected_row" "${snapshot[@]}" || {
       _py_error "A selected Py action was not in the menu snapshot."
@@ -361,25 +402,21 @@ _py_menu_interactive() {
       _py_error "Refusing a mutating action in multi-select mode."
       return 1
     fi
-    (( runnable++ ))
     if (( multi_select )); then
       batch_tasks+=("$command_name")
       continue
     fi
     _py_info "Executing: $command_name"
-    _py_timed "py:$command_name" _py_dispatch "$command_name" \
-      || (( failures++ ))
+    _py_dispatch "$command_name"
+    return $?
   done
 
-  (( runnable > 0 )) || {
-    _py_info "No runnable tasks selected."
-    return 0
-  }
-  if (( multi_select )); then
+  if (( ${#batch_tasks} )); then
     _py_run_task_batch "${batch_tasks[@]}"
-    return
+    return $?
   fi
-  (( failures == 0 ))
+  _py_info "No runnable tasks selected."
+  return 0
 }
 
 # Runs the read-only commands selected in multi-select as steps of one batch:
@@ -419,8 +456,7 @@ _py_run_task_batch() {
       summary_records+=("$task"$'\tnot-run\t\tbatch interrupted')
       continue
     fi
-    _py_step_exec _py_timed "py:$task" _py_dispatch "$task" \
-      || task_status=$?
+    _py_step_exec _py_dispatch "$task" || task_status=$?
     if (( pending_signal )); then
       interrupted_status=$pending_signal
     fi
@@ -470,10 +506,14 @@ _py_run_task_batch() {
 py-menu() {
   emulate -L zsh
 
-  case "${1:-}" in
-    "")
-      (( $# == 0 )) || return 2
-      _py_menu_interactive 0
+  if (( $# == 0 )); then
+    _py_menu_interactive 0
+    return $?
+  fi
+  case "$1" in
+    ""|*:*)
+      _py_error "Invalid command argument. Use 'py-menu --help'."
+      return 2
       ;;
     -m|--multi)
       (( $# == 1 )) || {
@@ -494,9 +534,7 @@ py-menu() {
       return 2
       ;;
     *)
-      local command_name="$1"
-      shift
-      _py_timed "py:$command_name" _py_dispatch "$command_name" "$@"
+      _py_dispatch "$@"
       ;;
   esac
 }

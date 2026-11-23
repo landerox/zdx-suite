@@ -128,7 +128,9 @@ generate_tool_probe() {
   grep -Fxq '#   Effects:   read-only; not implemented yet.' "$module"
   [ "$(tail -n 1 "$module")" = 'typeset -g _PY_TOOLS_SOURCED=1' ]
   # Uniform surfaces follow the anchor in each file.
-  grep -A1 -E '^    tool-upgrade\) ' "$menu" | grep -Fxq '    tool-probe)          tool-probe "$@" ;;'
+  grep -A3 -Fx '    tool-upgrade)' "$menu" | grep -Fxq '    tool-probe)'
+  grep -A2 -Fx '    tool-probe)' "$menu" \
+    | grep -Fxq '      _py_timed "py:tool-probe" tool-probe "$@"'
   grep -A1 -Fx '  print -u2 -r -- "  tool-upgrade"' "$menu" \
     | grep -Fxq '  print -u2 -r -- "  tool-probe"'
   grep -Fxq '    tool-probe|\' "$menu"
@@ -345,8 +347,7 @@ generate_tool_probe() {
   assert_copy_unchanged
 
   # A dispatcher arm with extra logic is not a shape the generator clones.
-  perl -pi -e 's/^(\s+tool-upgrade\)\s+)tool-upgrade "\$\@" ;;$/$1tool-upgrade "\$\@" || true ;;/' \
-    "$SCAFFOLD_REPO/functions/py-menu.zsh"
+  scaffold_timed_anchor extra_logic
   snapshot_copy
   generate_tool_probe
   [ "$SURFACE_STATUS" -eq 1 ]
@@ -392,8 +393,8 @@ my %bodies = (
 my $kind = $ENV{SCAFFOLD_ANCHOR_KIND};
 exists $bodies{$kind} or die "unknown fixture kind\n";
 my $replacement = "    tool-upgrade)\n      $bodies{$kind}\n      ;;";
-my $count = $source =~ s{^    tool-upgrade\)[ \t]+tool-upgrade "\$\@" ;;$}{$replacement}mg;
-$count == 1 or die "expected exactly one legacy fixture anchor, got $count\n";
+my $count = $source =~ s{^    tool-upgrade\)\n      _py_timed "py:tool-upgrade" tool-upgrade "\$\@"\n      ;;$}{$replacement}mg;
+$count == 1 or die "expected exactly one canonical fixture anchor, got $count\n";
 open my $output, '>', $path or die "$path: $!\n";
 print {$output} $source or die "$path: $!\n";
 close $output or die "$path: $!\n";

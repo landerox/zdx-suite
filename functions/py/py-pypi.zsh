@@ -53,15 +53,15 @@ _py_validate_project_file() {
 
 _py_project_uses_poetry() {
   local pyproject="$1"
-  local REPLY=""
-  local -i qualification_rc=0
+  local REPLY="" marker=""
+  local -i qualification_rc=0 reader_rc=0
   _py_require_tomllib || qualification_rc=$?
   case "$qualification_rc" in
     0) ;;
-    130|143) return "$qualification_rc" ;;
+    124|130|143) return "$qualification_rc" ;;
     *) return 2 ;;
   esac
-  command "$REPLY" -B -I -S -c '
+  marker=$(_py_run_with_timeout 15 "$REPLY" -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -75,9 +75,26 @@ tool = data.get("tool", {})
 if not isinstance(tool, dict):
     raise SystemExit(2)
 if "poetry" not in tool:
-    raise SystemExit(1)
-raise SystemExit(0 if isinstance(tool["poetry"], dict) else 2)
-' "$pyproject" </dev/null >/dev/null 2>&1
+    print("absent")
+elif isinstance(tool["poetry"], dict):
+    print("present")
+else:
+    raise SystemExit(2)
+' "$pyproject" </dev/null 2>/dev/null) || reader_rc=$?
+  case "$reader_rc" in
+    0) ;;
+    124)
+      _py_error "Poetry project metadata probe timed out."
+      return 124
+      ;;
+    130|143) return "$reader_rc" ;;
+    *) return 2 ;;
+  esac
+  case "$marker" in
+    present) return 0 ;;
+    absent) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 # Read-only identity of the selected installed Poetry program. Package
@@ -304,7 +321,7 @@ _py_detect_package_backend() {
     REPLY=""
     _py_project_uses_poetry "$pyproject" || poetry_marker_rc=$?
     case "$poetry_marker_rc" in
-      130|143) return "$poetry_marker_rc" ;;
+      124|130|143) return "$poetry_marker_rc" ;;
     esac
     if (( poetry_marker_rc > 1 )); then
       _py_error "Could not safely parse pyproject.toml; package backend selection failed closed."
@@ -422,6 +439,7 @@ _py_package_usage() {
 _py_fetch_package_metadata() {
   local package_name="$1"
   _py_check_command curl || return 1
+  _py_standalone_timeout_command || return $?
   # The response is JSON, so any Python 3 works; tomllib (3.11+) is not used.
   _py_resolve_python python3 || return $?
   local python_command="$REPLY"
@@ -516,7 +534,8 @@ _py_fetch_package_metadata() {
       }
     fi
     if (( query_rc == 0 )); then
-      metadata=$(command "$python_command" -B -I -S -c '
+      metadata=$(_py_capture_bounded_output 16384 "PyPI JSON parser" 15 \
+        "$python_command" -B -I -S -c '
 import json
 import pathlib
 import sys
@@ -578,7 +597,7 @@ for label, key, limit in (
     return "$query_rc"
   }
   case "$parse_rc" in
-    130|143) return "$parse_rc" ;;
+    124|130|143) return "$parse_rc" ;;
   esac
   (( parse_rc == 0 && cleanup_rc == 0 )) || {
     _py_error "PyPI returned invalid or unreadable metadata."
@@ -597,7 +616,10 @@ package-search() {
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_package_usage package-search
         return 0
         ;;
@@ -734,7 +756,10 @@ _py_package_change() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_package_usage "package-$operation"
         return 0
         ;;
@@ -890,7 +915,7 @@ _py_package_change() {
         local -i poetry_marker_rc=0
         _py_project_uses_poetry "$target/pyproject.toml" || poetry_marker_rc=$?
         case "$poetry_marker_rc" in
-          130|143) return "$poetry_marker_rc" ;;
+          124|130|143) return "$poetry_marker_rc" ;;
         esac
         (( poetry_marker_rc == 0 )) || {
           _py_error "The Poetry project marker changed after review."

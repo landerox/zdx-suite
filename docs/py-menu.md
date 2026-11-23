@@ -18,8 +18,9 @@ Available rows start with `●`. A row whose command cannot run at all keeps its
 command field in the canonical unavailable form: when the suite is sourced
 without the ZDX core and neither `timeout` nor `gtimeout` exists, the bounded
 `tool-list`, `tool-uninstall`, `tool-upgrade`, `venv-python-list`,
-`venv-python-install`, `venv-python-pin`, `venv-rebuild`, and `venv-remove`
-rows read, for example, `○ List Global Tools (missing: timeout or gtimeout)`.
+`venv-python-install`, `venv-python-pin`, `venv-rebuild`, `venv-remove`, and
+`package-search` rows read, for example,
+`○ List Global Tools (missing: timeout or gtimeout)`.
 With the core loaded, its watchdog bounds them on any host, so nothing is
 marked. Removal actions follow inspection, environment setup, and tool
 management. The create description states that Poetry environments are not
@@ -37,16 +38,18 @@ The 16 canonical commands are:
 | Isolated global tools | `tool-list`, `tool-install`, `tool-uninstall`, `tool-upgrade` |
 
 The frozen machine-readable surface is `test/fixtures/py-public-commands.tsv`;
-the menu, help, dispatcher, and completion name exactly these commands, and any
-other token, such as `py-menu venv-python`, returns `2` as an unknown
-command.
+the menu, help, dispatcher, and completion name exactly these commands. An
+empty, unknown, or section token is rejected with a usage diagnostic and status
+`2` before timing or dependency checks. A single menu selection returns the
+selected command's status. Each canonical dispatch owns one timing call.
 
 `py-menu` opens the interactive menu, routes one command directly, or accepts
-`--multi`. Multi-select is deliberately restricted to the non-interactive,
+`-m` or `--multi`. Multi-select is restricted to the non-interactive,
 read-only `venv-list`, `venv-python-list`, and `tool-list` commands. The
 selected commands run as one batch: a `[n/N]` banner and one result line per
 command, a `Task Summary`, and a counted verdict with the command that reruns
-each failure. A cancelled picker runs nothing and returns `0`.
+each failure. A cancelled picker runs nothing and returns `0`. Run
+`py-menu <command> --help` for the command's supported arguments and flags.
 
 ## Output presentation
 
@@ -374,15 +377,21 @@ mutation automatically.
 ## Bounded commands
 
 Inventories (`.virtualenvs`, `uv python list`, `uv tool list`,
-`pipx list --short`), the mount validation of removal and rebuild, and the
-rebuild's interpreter probes run one resolved program through
+`pipx list --short`) and the mount validation of removal and rebuild run
+one resolved program through
 `_py_run_with_timeout`. With the ZDX core loaded, it delegates to the
 core `_zdx_run_with_timeout`, which prefers `timeout`, then `gtimeout`, and
 otherwise uses a Zsh watchdog, so a stock macOS host needs neither. A
 standalone source of the suite prefers `timeout`, then `gtimeout`, and fails
 closed without either:
 `Bounded Py commands need timeout or gtimeout when the ZDX core is not loaded.`
-A deadline returns `124`, which the inventory reports as its failure status.
+The rebuild interpreter probe, stdlib creation version probes, `tomllib`
+qualification, Poetry and ancestor-workspace marker reads, and PyPI JSON
+parsing use a 15-second deadline per invocation with stdin closed. The
+metadata readers and stdlib version probes use `-B -I -S` on the selected
+absolute Python path and preserve `124` for a deadline or `130` and `143` for
+interruptions. Marker absence requires a successful parse. A failed or
+incomplete read stops backend selection without publishing metadata.
 
 ## Interpreter ownership
 

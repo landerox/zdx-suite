@@ -295,13 +295,19 @@ _py_resolve_python() {
 
 # REPLY retains the exact interpreter that passed the metadata probe.
 _py_require_tomllib() {
+  _py_standalone_timeout_command || return $?
   _py_resolve_python python3 || return $?
   local python_command="$REPLY"
   local -i probe_rc=0
-  command "$python_command" -B -I -S -c 'import tomllib' </dev/null >/dev/null 2>&1 \
+  _py_run_with_timeout 15 "$python_command" -B -I -S -c 'import tomllib' \
+    </dev/null >/dev/null 2>&1 \
     || probe_rc=$?
   case "$probe_rc" in
     0) REPLY="$python_command"; return 0 ;;
+    124)
+      _py_error "Python project metadata probe timed out."
+      return 124
+      ;;
     130|143) return "$probe_rc" ;;
     *)
       _py_error "Python 3.11 or newer is required for project metadata."
@@ -658,7 +664,7 @@ _py_menu_entry() {
 
 # REPLY lists the requirements without which a menu action cannot run at all
 # on this host; it is empty when the action can run. This is advisory: each
-# command repeats its own checks. Bounded inventories and mount validation
+# command repeats its own checks. Bounded readers and mount validation
 # use the core watchdog when timeout and gtimeout are absent, as on stock
 # macOS, so they are unavailable only in a standalone source without either.
 _py_menu_missing_requirements() {
@@ -667,7 +673,7 @@ _py_menu_missing_requirements() {
   case "$command_name" in
     tool-list|tool-uninstall|tool-upgrade|\
     venv-python-list|venv-python-install|venv-python-pin|venv-rebuild|\
-    venv-remove)
+    venv-remove|package-search)
       (( ${+functions[_zdx_run_with_timeout]} )) && return 0
       whence -p timeout &>/dev/null || whence -p gtimeout &>/dev/null \
         || REPLY="timeout or gtimeout"

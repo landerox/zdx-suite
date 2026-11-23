@@ -208,10 +208,10 @@ teardown() {
   done
 }
 
-@test "py metadata: qualification preserves interpreter interruptions" {
+@test "py metadata: qualification preserves interpreter timeouts and interruptions" {
   local rc
   local mismatch=0
-  for rc in 130 143; do
+  for rc in 124 130 143; do
     export PY_METADATA_READER_STATUS="$rc"
     run run_zsh '_py_require_tomllib'
     printf 'expected status %s; actual %s\n' "$rc" "$status"
@@ -220,13 +220,13 @@ teardown() {
   [ "$mismatch" -eq 0 ]
 }
 
-@test "py metadata: Poetry qualification and parsing interruptions cannot select another backend" {
+@test "py metadata: Poetry qualification and parsing timeouts and interruptions cannot select another backend" {
   printf '[tool.poetry]\nname="demo"\n' > "$HOME/project/pyproject.toml"
   printf '#!/bin/sh\nprintf called > "$HOME/uv-called"\nexit 97\n' > "$TEST_MOCK_BIN/uv"
   chmod -- 700 "$TEST_MOCK_BIN/uv"
   local rc reader
   local mismatch=0
-  for rc in 130 143; do
+  for rc in 124 130 143; do
     for reader in all reader; do
       export PY_METADATA_READER_STATUS="$rc" PY_METADATA_STATUS_SITE="$reader"
       run run_zsh '_py_project_uses_poetry "$HOME/project/pyproject.toml"'
@@ -241,12 +241,12 @@ teardown() {
   [ "$mismatch" -eq 0 ]
 }
 
-@test "py metadata: ancestor qualification and parsing preserve interpreter interruptions" {
+@test "py metadata: ancestor qualification and parsing preserve interpreter timeouts and interruptions" {
   mkdir -p "$HOME/project/member"
   printf '[project]\nname="parent"\n' > "$HOME/project/pyproject.toml"
   local rc reader
   local mismatch=0
-  for rc in 130 143; do
+  for rc in 124 130 143; do
     for reader in all reader; do
       export PY_METADATA_READER_STATUS="$rc" PY_METADATA_STATUS_SITE="$reader"
       run run_zsh 'cd "$HOME/project/member"; _py_assert_no_external_uv_workspace "$PWD"'
@@ -257,14 +257,17 @@ teardown() {
   [ "$mismatch" -eq 0 ]
 }
 
-@test "py metadata: JSON reader preserves interruptions and cleans private response files" {
+@test "py metadata: JSON reader preserves timeouts and interruptions and cleans private response files" {
   local rc
   local mismatch=0
-  for rc in 130 143; do
+  for rc in 124 130 143; do
     export PY_METADATA_READER_STATUS="$rc"
     run run_zsh 'package-search demo'
     printf 'expected status %s; actual %s\n' "$rc" "$status"
     [ "$status" -eq "$rc" ] || mismatch=1
+    if [ "$rc" -eq 124 ]; then
+      [[ "$output" == *'PyPI JSON parser failed (status 124)'* ]]
+    fi
     [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ]
   done
   [ "$mismatch" -eq 0 ]
@@ -314,4 +317,80 @@ teardown() {
     package-install demo --dry-run
   '
   [[ "$output" != *'Cancelled.'* ]]
+}
+
+@test "py metadata: failed marker readers do not prove the absence of a table" {
+  mkdir -p "$HOME/project/member"
+  printf '[project]\nname="parent"\n' > "$HOME/project/pyproject.toml"
+  export PY_METADATA_READER_STATUS=1 PY_METADATA_STATUS_SITE=reader
+
+  run -2 run_zsh '_py_project_uses_poetry "$HOME/project/pyproject.toml"'
+  run -1 run_zsh '_py_assert_no_external_uv_workspace "$HOME/project/member"'
+  [[ "$output" == *'Could not safely parse ancestor project metadata'* ]]
+}
+
+@test "py metadata: the stdlib version probe has a deadline before and after consent" {
+  cat > "$TEST_MOCK_BIN/python3" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/stdlib-args"
+case "$*" in
+  *"sys.version_info"*) printf '3.12.1\n' ;;
+  *) exit 97 ;;
+esac
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/python3"
+  run --separate-stderr run_zsh '
+    cd "$HOME/project" || return 97
+    typeset -i expected_call=1 actual=0
+    _zdx_run_with_timeout() {
+      [[ "$1" == 15 && "$2" == "$TEST_MOCK_BIN/python3" \
+        && "$3" == -B && "$4" == -I && "$5" == -S && "$6" == -c ]] || return 96
+      if read -r ignored; then return 95; fi
+      print -r -- called >>"$HOME/bounded-stdlib"
+      local -a calls=("${(@f)$(<"$HOME/bounded-stdlib")}")
+      (( ${#calls} < expected_call )) || return 124
+      shift
+      command "$@"
+    }
+    printf "callers stdin\n" > "$HOME/input"
+    venv-create --venv --yes <"$HOME/input" || actual=$?
+    [[ "$actual" == 124 ]] || return 94
+    expected_call=2 actual=0
+    : > "$HOME/bounded-stdlib"
+    venv-create --venv --yes <"$HOME/input" || actual=$?
+    [[ "$actual" == 124 && ! -e .venv ]]
+  '
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *'interpreter probe timed out'* ]]
+  [ "$(cat "$HOME/bounded-stdlib")" = $'called\ncalled' ]
+  [ "$(wc -l < "$HOME/stdlib-args")" -eq 1 ]
+}
+
+@test "py metadata: the timeout service stops a stalled qualification" {
+  cat > "$TEST_MOCK_BIN/python3" <<'SH'
+#!/bin/sh
+printf 'started\n' > "$HOME/reader-started"
+sleep 3
+printf 'finished\n' > "$HOME/reader-finished"
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/python3"
+  run --separate-stderr run_zsh '
+    functions[_py_test_watchdog]="${functions[_zdx_run_with_timeout]}"
+    _zdx_run_with_timeout() {
+      [[ "$#" == 7 && "$1" == 15 && "$2" == "$TEST_MOCK_BIN/python3" \
+        && "$3" == -B && "$4" == -I && "$5" == -S \
+        && "$6" == -c && "$7" == "import tomllib" ]] || return 97
+      shift
+      _py_test_watchdog 1 "$@"
+    }
+    _py_require_tomllib
+  '
+
+  [ "$status" -eq 124 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *'metadata probe timed out'* ]]
+  [ -f "$HOME/reader-started" ]
+  [ ! -e "$HOME/reader-finished" ]
 }

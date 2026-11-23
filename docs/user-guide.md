@@ -1782,10 +1782,11 @@ multi-line values, and comments, is listed in
 
 The Python suite owns validated project-local environments, uv-managed Python
 runtimes, project package changes, and isolated global tools. The menu header
-shows the project and the active environment and backend. `py-menu --multi`
-offers only the read-only `venv-list`, `venv-python-list`, and `tool-list`
-actions and runs the selection as one batch with a result line per command, a
-summary, and a verdict.
+shows the project and the active environment and backend. `py-menu -m` or
+`py-menu --multi` offers the read-only `venv-list`, `venv-python-list`, and
+`tool-list` actions. The selection runs as one batch with a result line per
+command, a summary, and a verdict. Use `py-menu <command> --help` for flags and
+operands.
 
 ### 🐍 Virtual Environment Lifecycle
 
