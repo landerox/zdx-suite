@@ -138,8 +138,8 @@ assert_no_rebuild_workspace() {
     '^environment=.*/project/[.]zdx-py-rebuild[.][^/]+/new-venv virtual_env=unset project=unset$' \
     "$UV_REBUILD_LOG"
   [ "$(wc -l < "$UV_REBUILD_LOG")" -eq 3 ]
-  [[ "$output" == *'$ uv venv --clear --managed-python --no-python-downloads --python 3.11 --relocatable ~/project/.zdx-py-rebuild.'*'/new-venv  (output shown on failure)'* ]]
-  [[ "$output" == *'$ UV_PROJECT_ENVIRONMENT=~/project/.zdx-py-rebuild.'*'/new-venv uv sync --locked --all-groups --no-python-downloads --python 3.11  (output shown on failure)'* ]]
+  [[ "$output" == *'$ uv --directory ~/project --project ~/project venv --clear --managed-python --no-python-downloads --python 3.11 --relocatable ~/project/.zdx-py-rebuild.'*'/new-venv  (output shown on failure)'* ]]
+  [[ "$output" == *'$ UV_PROJECT_ENVIRONMENT=~/project/.zdx-py-rebuild.'*'/new-venv uv --directory ~/project --project ~/project sync --locked --all-groups --no-python-downloads --python 3.11  (output shown on failure)'* ]]
   [[ "$output" == *"✔ Rebuilt ~/project/.venv: CPython 3.11.9 → 3.11.10."* ]]
   assert_no_rebuild_workspace
 }
@@ -243,6 +243,65 @@ assert_no_rebuild_workspace() {
   [ -f "$PY_PROJECT/.venv/original-marker" ]
   [ ! -e "$PY_PROJECT/.venv/sync-marker" ]
   assert_no_rebuild_workspace
+}
+
+@test "py rebuild: interrupted stage and sync retain their statuses and the original" {
+  write_rebuild_project
+  write_rebuild_uv_mock
+  export UV_STAGE_VENV_STATUS=130 UV_SYNC_STATUS=0
+  run run_zsh 'cd "$PY_PROJECT" && venv-rebuild --yes'
+  [ "$status" -eq 130 ]
+  [[ "$output" == *'interrupted (status 130)'* ]]
+  [[ "$output" != *'It needs an installed uv-managed CPython'* ]]
+  [ -f "$PY_PROJECT/.venv/original-marker" ]
+  assert_no_rebuild_workspace
+
+  export UV_STAGE_VENV_STATUS=0 UV_SYNC_STATUS=143
+  run run_zsh 'cd "$PY_PROJECT" && venv-rebuild --yes'
+  [ "$status" -eq 143 ]
+  [[ "$output" == *'interrupted (status 143)'* ]]
+  [[ "$output" != *'refresh it first'* ]]
+  [ -f "$PY_PROJECT/.venv/original-marker" ]
+  assert_no_rebuild_workspace
+}
+
+@test "py rebuild: cleanup failure reports the publication and retains partial old data" {
+  write_rebuild_project
+  write_rebuild_uv_mock
+  export UV_REBUILD_REAL_RM
+  UV_REBUILD_REAL_RM=$(type -P rm)
+  mkdir "$HOME/rebuild-cleanup-bin"
+  {
+    printf '#!%s\n' "$BASH"
+    cat <<'EOF'
+[[ $# == 3 && "$2" == -- ]] || exit 97
+if [[ "$1" == -rf && "$3" == "$PY_PROJECT"/.zdx-py-rebuild.* \
+  && "${3%/*}" == "$PY_PROJECT" && ! -L "$3" \
+  && ! -L "$3/original-venv" && -f "$3/original-venv/original-marker" ]]; then
+  "$UV_REBUILD_REAL_RM" -f -- "$3/original-venv/original-marker" || exit 98
+  exit 42
+fi
+[[ "$1" == -f && "$3" == "$TEST_TEMP_DIR"/* ]] || exit 97
+exec "$UV_REBUILD_REAL_RM" "$@"
+EOF
+  } > "$HOME/rebuild-cleanup-bin/rm"
+  chmod -- 700 "$HOME/rebuild-cleanup-bin/rm"
+
+  run run_zsh '
+    cd "$PY_PROJECT" || return
+    PATH="$HOME/rebuild-cleanup-bin:$PATH" venv-rebuild --yes
+  '
+  [ "$status" -eq 1 ]
+  [ -f "$PY_PROJECT/.venv/sync-marker" ]
+  grep -q 'version_info = 3.11.10' "$PY_PROJECT/.venv/pyvenv.cfg"
+  local retained
+  retained=$(find "$PY_PROJECT" -mindepth 1 -maxdepth 1 -type d -name '.zdx-py-rebuild.*' -print)
+  [ -n "$retained" ]
+  [ -f "$retained/original-venv/pyvenv.cfg" ]
+  [ ! -e "$retained/original-venv/original-marker" ]
+  [[ "$output" == *'Rebuilt ~/project/.venv'* ]]
+  [[ "$output" == *'Rebuild published with unfinished cleanup'* ]]
+  [[ "$output" != *'move it back to .venv'* ]]
 }
 
 @test "py rebuild: a lockfile change during sync blocks publication" {

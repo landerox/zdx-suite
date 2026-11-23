@@ -93,6 +93,10 @@ case "$backend:$*" in
   'poetry:--version') printf 'Poetry (version 1.8.5)\n'; exit 0 ;;
   'poetry:env info --path') printf '%s\n' "$root/.venv"; exit 0 ;;
   'uv:tool list'|'pipx:list --short')
+    if [[ "${PY_LAYER_BAD_AFTER_TOOL_LIST:-0}" == 1 && ! -e "$HOME/tools/$backend/ruff" ]]; then
+      printf 'unrecognized inventory row\n'
+      exit 0
+    fi
     if [[ "$PY_LAYER_INVENTORY_PARTIAL" == 1 ]]; then
       printf 'ruff v1.0.0\n- ruff\n'
     fi
@@ -132,8 +136,16 @@ printf '%s|%s|%s|%s\n' "$PWD" "${UV_PROJECT-unset}" \
 case "$backend:$*" in
   'uv:python pin '*)
     [[ "$PY_LAYER_PIN_WRITE" == 1 ]] && printf '%s\n' "${!#}" >"$root/.python-version" ;;
-  'uv:tool uninstall '*|'pipx:uninstall '*) rm -f "$HOME/tools/$backend/${!#}" ;;
-  'uv:tool install '*|'pipx:install '*) printf 'installed\n' >"$HOME/tools/$backend/${!#}" ;;
+  'uv:tool uninstall '*|'pipx:uninstall '*)
+    if [[ "${PY_LAYER_KEEP_TOOL:-0}" != 1 ]]; then
+      rm -f "$HOME/tools/$backend/${!#}"
+    fi
+    ;;
+  'uv:tool install '*|'pipx:install '*)
+    if [[ "${PY_LAYER_SKIP_TOOL_INSTALL:-0}" != 1 ]]; then
+      printf 'installed\n' >"$HOME/tools/$backend/${!#}"
+    fi
+    ;;
 esac
 exit 0
 EOF
@@ -317,7 +329,20 @@ assert_unrelated_preserved() {
   run run_py_layer_zsh 'package-install ruff --yes && package-uninstall ruff --yes'
   [ "$status" -eq 0 ]
   [ "$(cat "$PY_LAYER_LOG")" = $'python\t-I\t-m\tpip\tinstall\t--\truff\npython\t-I\t-m\tpip\tuninstall\t-y\t--\truff' ]
+  [[ "$output" == *'/.venv/bin/python -I -m pip install -- ruff'* ]]
+  [[ "$output" == *'/.venv/bin/python -I -m pip uninstall -y -- ruff'* ]]
+  [[ "$output" == *'Package install completed: ruff'* ]]
+  [[ "$output" == *'Package uninstall completed: ruff'* ]]
   assert_unrelated_preserved
+}
+
+@test "py layers: environment package commands reject the project-only development group" {
+  make_package_layer uv-environment
+  run run_py_layer_zsh 'package-install ruff --dev --yes'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'--dev requires a uv or Poetry project.'* ]]
+  [[ "$output" != *'development dependency)'* ]]
+  [ ! -s "$PY_LAYER_LOG" ]
 }
 
 @test "py layers: package dry runs cover install and uninstall without mutation" {
@@ -445,6 +470,41 @@ assert_unrelated_preserved() {
   [ "$status" -eq 1 ]
   [ ! -s "$PY_LAYER_LOG" ]
   [ -e "$HOME/tools/pipx/ruff" ]
+}
+
+@test "py layers: tool results distinguish no change from verified removal" {
+  run run_py_layer_zsh 'tool-install ruff --backend uv --yes'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ruff 1.0.0 was already installed with uv.'* ]]
+  [[ "$output" != *'Installed ruff 1.0.0'* ]]
+
+  export PY_LAYER_KEEP_TOOL=1
+  run run_py_layer_zsh 'tool-uninstall ruff --backend uv --yes'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'ruff is still present in the uv inventory.'* ]]
+  [ -f "$HOME/tools/uv/ruff" ]
+
+  export PY_LAYER_KEEP_TOOL=0
+  run run_py_layer_zsh 'tool-uninstall ruff --backend uv --yes'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Uninstalled ruff from uv.'* ]]
+  [ ! -e "$HOME/tools/uv/ruff" ]
+
+  export PY_LAYER_SKIP_TOOL_INSTALL=1
+  run run_py_layer_zsh 'tool-install ruff --backend uv --yes'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'ruff is absent from the uv inventory after installation.'* ]]
+  assert_unrelated_preserved
+}
+
+@test "py layers: malformed tool inventory cannot prove removal" {
+  export PY_LAYER_BAD_AFTER_TOOL_LIST=1
+  run run_py_layer_zsh 'tool-uninstall ruff --backend uv --yes'
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/tools/uv/ruff" ]
+  [[ "$output" == *'uv completed uninstallation for ruff.'* ]]
+  [[ "$output" != *'Uninstalled ruff from uv.'* ]]
+  assert_unrelated_preserved
 }
 
 @test "py layers: tool backend failures preserve returned statuses" {

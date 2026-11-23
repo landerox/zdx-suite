@@ -1833,8 +1833,9 @@ authorized project code whose other effects cannot be undone generically.
 - **List (`venv-python-list`)**: List installed uv-managed runtimes and their
   interpreters as a table.
 - **Install (`venv-python-install`)**: Review and install one validated Python
-  version through `uv`; the result names the version it added, or says that it
-  was already installed.
+  version through `uv`. The plan names the version-suffixed executable that uv
+  can add to `PATH`. Successful before and after inventories let the result
+  name an added version or show the version that was already present.
 - **Pin (`venv-python-pin`)**: Review and write a simple project Python pin
   through `uv`.
 
@@ -1845,7 +1846,8 @@ authorized project code whose other effects cannot be undone generically.
   supported Python, and project URL.
 - **Install/uninstall (`package-install`, `package-uninstall`)**: Use the
   detected uv/Poetry project or a validated local environment. Ambient `pip`
-  is never a fallback. The root and metadata are frozen across authorization;
+  is never a fallback. `--dev` applies to uv and Poetry projects. The root
+  and metadata are frozen across authorization;
   a uv member whose workspace root is above the reviewed project is refused.
   Poetry requires an existing validated `.venv` inside that project and
   Poetry 1.8 or later. Create it explicitly first when missing; external or

@@ -648,18 +648,18 @@ _py_run_package_change() {
   local REPLY
   case "$backend:$operation" in
     uv-project:install)
-      local -a uv_args=(add)
+      local -a uv_args=(--directory "$target" --project "$target" add)
       (( development )) && uv_args+=(--dev)
-      _py_command_display uv "${uv_args[@]}" "$package_name"
+      uv_args+=("$package_name")
+      _py_command_display uv "${uv_args[@]}"
       _py_run_captured "$REPLY" \
-        _py_run_uv_scoped --directory "$target" --project "$target" \
-        "${uv_args[@]}" "$package_name" || operation_rc=$?
+        _py_run_uv_scoped "${uv_args[@]}" || operation_rc=$?
       ;;
     uv-project:uninstall)
-      _py_command_display uv remove "$package_name"
+      local -a uv_args=(--directory "$target" --project "$target" remove "$package_name")
+      _py_command_display uv "${uv_args[@]}"
       _py_run_captured "$REPLY" \
-        _py_run_uv_scoped --directory "$target" --project "$target" \
-        remove "$package_name" || operation_rc=$?
+        _py_run_uv_scoped "${uv_args[@]}" || operation_rc=$?
       ;;
     poetry-project:install)
       (( ${#poetry_scope} == 9 )) || return 2
@@ -695,17 +695,16 @@ _py_run_package_change() {
         "$package_name" || operation_rc=$?
       ;;
     python-environment:install)
-      _py_command_display "$target/bin/python" -m pip install "$package_name"
+      local -a pip_args=("$target/bin/python" -I -m pip install -- "$package_name")
+      _py_command_display "${pip_args[@]}"
       _py_run_captured "$REPLY" \
-        command "$target/bin/python" -I -m pip install -- \
-        "$package_name" || operation_rc=$?
+        command "${pip_args[@]}" || operation_rc=$?
       ;;
     python-environment:uninstall)
-      _py_command_display "$target/bin/python" -m pip uninstall -y \
-        "$package_name"
+      local -a pip_args=("$target/bin/python" -I -m pip uninstall -y -- "$package_name")
+      _py_command_display "${pip_args[@]}"
       _py_run_captured "$REPLY" \
-        command "$target/bin/python" -I -m pip uninstall -y -- \
-        "$package_name" || operation_rc=$?
+        command "${pip_args[@]}" || operation_rc=$?
       ;;
     *)
       _py_error "Unsupported package transaction: $backend/$operation"
@@ -779,6 +778,10 @@ _py_package_change() {
   (( backend_rc == 0 )) || return "$backend_rc"
   local backend_plan="$REPLY"
   local backend="${REPLY%%$'\t'*}"
+  if (( development )) && [[ "$backend" == *-environment ]]; then
+    _py_error "--dev requires a uv or Poetry project."
+    return 2
+  fi
   local backend_record="${REPLY#*$'\t'}"
   local target="${backend_record%%$'\t'*}"
   backend_record="${backend_record#*$'\t'}"
@@ -929,7 +932,7 @@ _py_package_change() {
     _py_error "Package $operation failed (status $operation_rc)."
     return "$operation_rc"
   }
-  _py_success "Package $verb: $package_name ($backend_label)."
+  _py_success "Package $operation completed: $package_name ($backend_label)."
 }
 
 package-install() {
