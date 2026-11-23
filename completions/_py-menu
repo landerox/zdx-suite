@@ -27,7 +27,7 @@ local command_name=""
 if [[ "$service" == py-menu ]]; then
   _arguments -C \
     '(- *)'{-h,--help}'[show usage]' \
-    '(- *)'{-m,--multi}'[select non-interactive read-only tasks]' \
+    '(- *)'{-m,--multi}'[run selected non-interactive read-only tasks]' \
     '1:Py command:->command' \
     '*::command argument:->arguments'
   case "$state" in

@@ -403,6 +403,7 @@ SH
   [[ "$output" == *$'\n  ○ List Global Tools (missing: timeout or gtimeout)|tool-list|'* ]]
   [[ "$output" == *$'\n  ○ Remove Environment (missing: timeout or gtimeout)|venv-remove|'* ]]
   [[ "$output" == *$'\n  ○ Rebuild Project Environment (missing: timeout or gtimeout)|venv-rebuild|'* ]]
+  [[ "$output" == *$'\n  ○ Inspect Package (missing: timeout or gtimeout)|package-search|'* ]]
   [[ "$output" == *$'\n  ● List Environments|venv-list|'* ]]
   [[ "$output" == *$'\n  ● Install Global Tool|tool-install|'* ]]
 }

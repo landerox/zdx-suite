@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Python: preserve the status of a single menu action, explain invalid CLI
+  arguments before dependency work, document the command flags, and bound
+  Python version probes and project and PyPI metadata reads.
+
 - Python: preserve terminal interruption reports and staged rebuild statuses,
   distinguish published rebuilds from unfinished cleanup, and report package,
   tool, and runtime outcomes with the available evidence.

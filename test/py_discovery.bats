@@ -196,7 +196,8 @@ EOF
   cat > "$TEST_MOCK_BIN/python3" <<'EOF'
 #!/bin/sh
 printf '%s\n' invoked >> "$HOME/python-probes"
-if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = -c ]; then
+if [ "$#" -eq 5 ] && [ "$1" = -B ] && [ "$2" = -I ] \
+  && [ "$3" = -S ] && [ "$4" = -c ]; then
   printf '3.12.1\n'
 else
   exit 97

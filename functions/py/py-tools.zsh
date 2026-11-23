@@ -202,9 +202,17 @@ _py_resolve_tool_record() {
 tool-list() {
   emulate -L zsh
   case "${1:-}" in
-    "") (( $# == 0 )) || return 2 ;;
+    "")
+      (( $# == 0 )) || {
+        _py_error "Invalid tool-list argument. The operand is empty."
+        return 2
+      }
+      ;;
     -h|--help)
-      (( $# == 1 )) || return 2
+      (( $# == 1 )) || {
+        _py_error "Help does not accept additional arguments."
+        return 2
+      }
       _py_tool_usage tool-list
       return 0
       ;;
@@ -307,7 +315,10 @@ tool-install() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_tool_usage tool-install
         return 0
         ;;
@@ -330,6 +341,11 @@ tool-install() {
     shift
   done
 
+  [[ -z "$backend" ]] || _py_validate_tool_backend "$backend" || {
+    _py_error "Tool backend must be uv or pipx."
+    return 2
+  }
+
   if [[ -z "$package_name" ]]; then
     _py_prompt_package_name "Tool to install"
     local prompt_rc=$?
@@ -351,10 +367,6 @@ tool-install() {
       return 1
     fi
   fi
-  _py_validate_tool_backend "$backend" || {
-    _py_error "Tool backend must be uv or pipx."
-    return 2
-  }
   _py_check_command "$backend" || return 1
 
   _py_header "Install Isolated Python Tool"
@@ -415,8 +427,7 @@ tool-uninstall() {
   while (( $# > 0 )); do
     case "$1" in
       --backend)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
           _py_error "--backend requires uv or pipx."
           return 2
         }
@@ -433,7 +444,10 @@ tool-uninstall() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_tool_usage tool-uninstall
         return 0
         ;;
@@ -442,7 +456,10 @@ tool-uninstall() {
         return 2
         ;;
       *)
-        [[ -z "$package_name" ]] || return 2
+        [[ -z "$package_name" ]] || {
+          _py_error "Only one tool may be specified."
+          return 2
+        }
         [[ -n "$1" ]] || {
           _py_error "Tool operands may not be empty."
           return 2
@@ -541,8 +558,7 @@ tool-upgrade() {
     case "$1" in
       --all) upgrade_all=1 ;;
       --backend)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
           _py_error "--backend requires uv or pipx."
           return 2
         }
@@ -559,7 +575,10 @@ tool-upgrade() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_tool_usage tool-upgrade
         return 0
         ;;
@@ -568,7 +587,10 @@ tool-upgrade() {
         return 2
         ;;
       *)
-        [[ -z "$package_name" ]] || return 2
+        [[ -z "$package_name" ]] || {
+          _py_error "Only one tool may be specified."
+          return 2
+        }
         [[ -n "$1" ]] || {
           _py_error "Tool operands may not be empty."
           return 2

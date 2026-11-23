@@ -893,8 +893,10 @@ and reaps its child for a real Ctrl-C observation; TERM cases model returned
 This does not establish native macOS or general SIGTERM acceptance.
 
 `py_metadata_isolation.bats` covers all four `-B -I -S` reader starts,
-original argv and runtime flags, leading curl `-q`, interruption propagation,
-private cleanup, and genuine or stale picker cancellation. Its no-site
+original argv and runtime flags, leading curl `-q`, deadline and interruption
+propagation, marker failures, private cleanup, and genuine or stale picker
+cancellation. It observes both stdlib version probes and uses the real timeout
+service with a shortened deadline and a finite stalled interpreter. Its no-site
 startup evidence is a private external-semantics model using real
 `site.addsitedir`; no installed site-packages or runtime prefix is changed.
 Existing cwd/PYTHONPATH controls prove isolated imports separately. Returned
@@ -927,7 +929,7 @@ checks both the reported command status and the child exit status.
 | File | Covered boundary |
 | --- | --- |
 | `py.bats` | Double/failed sourcing, help and stream behavior, menu-record validation, the project scope line, read-only multi-select batches with step results, summary, verdict, and rerun hints, cancellation without a batch, and foreground result capture |
-| `py_contract.bats` | Frozen 16-command fixture, function/module ownership, menu membership, exact help and dispatcher-arm parity, representative dispatch forwarding, and exact completion coverage |
+| `py_contract.bats` | Frozen 16-command fixture, function/module ownership, menu membership, exact help and dispatcher-arm parity, literal dispatch and single-selection status forwarding, canonical timing, diagnostics before dependency work, and exact completion coverage |
 | `py_discovery.bats` | Empty and unsafe inventories, intact healthy siblings and foreign targets, implicit active-environment selection, trusted activation aliases, private writer modes and modeled Apple launcher qualification |
 | `py_safety.bats` | Existing-target create refusal, create/remove dry runs with key-value facts and no displayed identities, non-interactive confirmation, external-environment refusal, rebuild refusal outside a uv project, activation-script revalidation, option-like package refusal, ambient-pip refusal, tool dry-run, Python-version validation, uv `version_info` metadata, tool and runtime tables without backend diagnostics, runtime-install version evidence, and PyPI metadata that keeps the caller umask and removes its private files on success and failure |
 | `py_recovery.bats` | Interrupted and ordinary partial tool upgrades with step results, summary rows, counted verdicts, and exact retry commands, version evidence for updated versus current tools, failure-only replay of captured backend output, real offline relocatable uv activation, stable descriptor resolution in subshells, ordinary descriptor fallback, unsupported-host refusal, and restoration of known activation state after failure |

@@ -349,8 +349,11 @@ snippet and executes unintended code.
 
 - The four Python metadata starts use `-B -I -S`, excluding bytecode writes,
   ambient Python import configuration and site startup. PyPI curl starts with
-  `-q` so default curlrc options cannot alter the private query. Metadata
-  interruptions remain failures through immediate callers; genuine picker
+  `-q` so default curlrc options cannot alter the private query. The metadata
+  readers and stdlib creation version probes use a resolved interpreter and
+  15-second deadlines with stdin closed. A marker must be read successfully
+  to establish presence or absence. Timeouts and interruptions remain
+  visible through immediate callers. Genuine picker
   cancellation has a separate invocation-local marker. Private startup-hook
   fixtures model real Python flags and standard-library site behavior without
   writing installed runtimes; they do not sandbox a compromised interpreter

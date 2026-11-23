@@ -547,7 +547,7 @@ _py_assert_no_external_uv_workspace() {
   local python_command="$REPLY"
 
   local ancestor="${project_root:h}"
-  local metadata_file="" metadata_fingerprint=""
+  local metadata_file="" metadata_fingerprint="" marker=""
   local -i workspace_rc=0
   while true; do
     metadata_file="$ancestor/pyproject.toml"
@@ -559,7 +559,7 @@ _py_assert_no_external_uv_workspace() {
       }
       metadata_fingerprint="$REPLY"
       workspace_rc=0
-      command "$python_command" -B -I -S -c '
+      marker=$(_py_run_with_timeout 15 "$python_command" -B -I -S -c '
 import pathlib
 import sys
 import tomllib
@@ -576,19 +576,28 @@ if not isinstance(uv, dict):
     raise SystemExit(2)
 workspace = uv.get("workspace")
 if workspace is None:
-    raise SystemExit(1)
-raise SystemExit(0 if isinstance(workspace, dict) else 2)
-' "$metadata_file" </dev/null >/dev/null 2>&1 || workspace_rc=$?
+    print("absent")
+elif isinstance(workspace, dict):
+    print("present")
+else:
+    raise SystemExit(2)
+' "$metadata_file" </dev/null 2>/dev/null) || workspace_rc=$?
+      case "$workspace_rc" in
+        124)
+          _py_error "Ancestor workspace metadata probe timed out: $metadata_file"
+          return 124
+          ;;
+        130|143) return "$workspace_rc" ;;
+      esac
       _py_fingerprint_owned_file \
         "$metadata_file" $(( 2 * 1024 * 1024 )) \
         "$metadata_fingerprint" || return $?
-      case "$workspace_rc" in
-        130|143) return "$workspace_rc" ;;
-        0)
+      case "$workspace_rc:$marker" in
+        0:present)
           _py_error "Refusing a uv project inside an external workspace: $ancestor"
           return 1
           ;;
-        1) ;;
+        0:absent) ;;
         *)
           _py_error "Could not safely parse ancestor project metadata: $metadata_file"
           return 1
@@ -631,9 +640,17 @@ _py_print_venv_usage() {
 venv-list() {
   emulate -L zsh
   case "${1:-}" in
-    "") (( $# == 0 )) || return 2 ;;
+    "")
+      (( $# == 0 )) || {
+        _py_error "Invalid venv-list argument. The operand is empty."
+        return 2
+      }
+      ;;
     -h|--help)
-      (( $# == 1 )) || return 2
+      (( $# == 1 )) || {
+        _py_error "Help does not accept additional arguments."
+        return 2
+      }
       _py_print_venv_usage venv-list
       return 0
       ;;
@@ -680,6 +697,27 @@ venv-list() {
   _py_table $'Environment\tPython\tState' "${rows[@]}"
 }
 
+# Read-only probe of the already resolved stdlib interpreter.
+_py_stdlib_version() {
+  local executable="$1" failure_message="$2"
+  local -i probe_rc=0
+  _py_run_with_timeout 15 "$executable" -B -I -S -c \
+    'import sys; print(".".join(map(str, sys.version_info[:3])))' \
+    </dev/null 2>/dev/null || probe_rc=$?
+  case "$probe_rc" in
+    0) return 0 ;;
+    124)
+      _py_error "Standard-library interpreter probe timed out."
+      return 124
+      ;;
+    130|143) return "$probe_rc" ;;
+    *)
+      _py_error "$failure_message"
+      return 1
+      ;;
+  esac
+}
+
 venv-create() {
   emulate -L zsh
   local backend="" python_version=""
@@ -717,7 +755,10 @@ venv-create() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_usage venv-create
         return 0
         ;;
@@ -776,6 +817,7 @@ venv-create() {
       executable=uv
       ;;
     stdlib)
+      _py_standalone_timeout_command || return $?
       executable=python3
       if [[ -n "$python_version" ]]; then
         if [[ "$python_version" == *.*.* ]]; then
@@ -787,13 +829,9 @@ venv-create() {
       _py_resolve_python "$executable" || return $?
       executable="$REPLY"
       resolved_python_version=$(
-        command "$executable" -I -c \
-          'import sys; print(".".join(map(str, sys.version_info[:3])))' \
-          </dev/null 2>/dev/null
-      ) || {
-        _py_error "Could not inspect the requested standard-library interpreter."
-        return 1
-      }
+        _py_stdlib_version "$executable" \
+          "Could not inspect the requested standard-library interpreter."
+      ) || return $?
       _py_validate_python_version "$resolved_python_version" \
         && [[ "$resolved_python_version" != *$'\n'* \
           && ${#resolved_python_version} -le 32 ]] || {
@@ -862,13 +900,9 @@ venv-create() {
     _py_resolve_python "$executable" || return $?
     local current_python_version=""
     current_python_version=$(
-      command "$executable" -I -c \
-        'import sys; print(".".join(map(str, sys.version_info[:3])))' \
-        </dev/null 2>/dev/null
-    ) || {
-      _py_error "Could not revalidate the standard-library interpreter."
-      return 1
-    }
+      _py_stdlib_version "$executable" \
+        "Could not revalidate the standard-library interpreter."
+    ) || return $?
     [[ "$current_python_version" == "$resolved_python_version" ]] || {
       _py_error "The standard-library interpreter changed after review."
       return 1
@@ -910,9 +944,8 @@ venv-activate() {
   while (( $# > 0 )); do
     case "$1" in
       --path)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
-          _py_error "--path requires a non-empty path."
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _py_error "--path requires a directory."
           return 2
         }
         requested_path="$2"
@@ -921,7 +954,10 @@ venv-activate() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_usage venv-activate
         return 0
         ;;
@@ -1108,16 +1144,18 @@ venv-info() {
   while (( $# > 0 )); do
     case "$1" in
       --path)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
-          _py_error "--path requires a non-empty path."
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _py_error "--path requires a directory."
           return 2
         }
         requested_path="$2"
         shift
         ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_usage venv-info
         return 0
         ;;
@@ -1481,9 +1519,8 @@ venv-remove() {
   while (( $# > 0 )); do
     case "$1" in
       --path)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
-          _py_error "--path requires a non-empty path."
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _py_error "--path requires a directory."
           return 2
         }
         requested_path="$2"
@@ -1492,7 +1529,10 @@ venv-remove() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_usage venv-remove
         return 0
         ;;
@@ -1934,9 +1974,8 @@ venv-rebuild() {
   while (( $# > 0 )); do
     case "$1" in
       --path)
-        (( $# >= 2 )) || return 2
-        [[ -n "$2" ]] || {
-          _py_error "--path requires a non-empty path."
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _py_error "--path requires a directory."
           return 2
         }
         requested_path="$2"
@@ -1945,7 +1984,10 @@ venv-rebuild() {
       --dry-run) dry_run=1 ;;
       --yes) assume_yes=1 ;;
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_usage venv-rebuild
         return 0
         ;;
@@ -2236,7 +2278,10 @@ _py_venv_python() {
   case "$subcommand" in
     list)
       if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _py_error "Help does not accept additional arguments."
+          return 2
+        }
         _py_print_venv_python_usage
         return 0
       fi
@@ -2271,7 +2316,10 @@ _py_venv_python() {
           --dry-run) dry_run=1 ;;
           --yes) assume_yes=1 ;;
           -h|--help)
-            (( $# == 1 )) || return 2
+            (( $# == 1 )) || {
+              _py_error "Help does not accept additional arguments."
+              return 2
+            }
             _py_print_venv_python_usage
             return 0
             ;;
