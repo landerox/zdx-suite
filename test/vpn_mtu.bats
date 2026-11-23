@@ -409,18 +409,23 @@ EOF
 # --- Bounds -----------------------------------------------------------------
 
 @test "vpn mtu: a hanging reachability ping ends at the probe deadline" {
+  _zdx_test_prepare_monotonic_clock
   export MOCK_PING_HANG_ABOVE=0
-  local started=$SECONDS
+  local started ended
+  started=$(_zdx_test_monotonic_ns)
   run run_zsh "$LINUX"' _VPN_MTU_PROBE_SECONDS=1; vpn-mtu-probe'
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Path MTU not measured: no reply within 1 second."* ]]
-  (( SECONDS - started < 8 ))
+  ended=$(_zdx_test_monotonic_ns)
+  (( ended >= started && ended - started < 8000000000 ))
 }
 
 @test "vpn mtu: the time budget stops a search that keeps hanging" {
+  _zdx_test_prepare_monotonic_clock
   export MOCK_PING_HANG_ABOVE=1364
-  local started=$SECONDS
+  local started ended
+  started=$(_zdx_test_monotonic_ns)
   # A program whose clock reading goes negative is charged its whole deadline
   # and grace, 3 s here, as when WSL2 steps the clock back 2 s during one of
   # the bounded programs before the search. The 6 s budget leaves room for the
@@ -446,7 +451,8 @@ EOF
   [[ "$(value 'Probes')" == "$sent in "* ]]
   [[ "$output" == *"No change is recommended from a partial measurement."* ]]
   [[ "$output" != *"Recommendations"* ]]
-  (( SECONDS - started < 12 ))
+  ended=$(_zdx_test_monotonic_ns)
+  (( ended >= started && ended - started < 12000000000 ))
 }
 
 @test "vpn mtu: a wall-clock jump never shrinks the accounted budget" {
