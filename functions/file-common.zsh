@@ -1866,6 +1866,7 @@ _file_mount_snapshot() {
   (( ${+_file_mount_mode} && ${+_file_mount_targets} )) || return 1
   _file_mount_mode=""
   _file_mount_targets=()
+  _file_timeout_available || return $?
   local REPLY=""
   _file_host_kernel || {
     local -i probe_rc=$?

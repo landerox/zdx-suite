@@ -586,6 +586,10 @@ trash needs `mv`, `ln`, `mkdir`, `mktemp`, `rm`, and `sha256sum` or `shasum`;
 its pickers need `fzf`, and `--json` needs `jq`. `tar.zst` archives need GNU
 tar with `--zstd` and `zstd`.
 
+Operations that validate mount boundaries use the core timeout service. A
+standalone source uses `timeout` or `gtimeout` for the kernel probe. If neither
+is available, mount validation reports the requirement and returns `1`.
+
 Content digests open the file without following a link and hash it through
 standard input with `sha256sum` or `shasum -a 256`, so a name with a
 backslash, which both tools escape in their output, and a FIFO, which could

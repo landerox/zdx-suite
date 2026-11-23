@@ -816,6 +816,10 @@ plans and passive outcomes. `file_platform.bats` checks missing GNU TAR
 compressors and uses the real timeout service with a shortened deadline and
 a finite stalled TAR version process.
 
+The standalone trash fixtures verify the missing timeout diagnostic with
+the original target intact. The quarantine naming and retry case supplies
+a recorder for the exact kernel and move version probes.
+
 `file_operation_boundary.bats` covers stale cwd/PWD, raw traversal, ancestor
 and reviewed-parent changes, complete scan records, unsafe or replaced staging
 objects/descriptors, renewed large-file size criteria and exact junk names.
