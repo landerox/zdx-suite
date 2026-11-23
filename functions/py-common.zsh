@@ -3,7 +3,7 @@
 # Py Common: shared UI, validation, confirmation, and picker helpers
 # =============================================================================
 #
-# Sourced by py-menu.zsh before loading modules under py/.
+# Loaded by py-menu.zsh before every module under functions/py/.
 # Idempotent and free of source-time capability probes.
 #
 
@@ -325,10 +325,6 @@ _py_timed() {
   fi
 }
 
-_py_confirmation_available() {
-  [[ -t 0 && -t 2 ]]
-}
-
 # Asks one yes/no question through the core _zdx_confirm_prompt, or its
 # generated copy below in a shell without the core: 0 yes, 1 no, 2 no
 # terminal, 3 picker failure.
@@ -456,19 +452,6 @@ _py_confirm() {
       return 1
       ;;
     *) return 130 ;;
-  esac
-}
-
-_py_confirm_or_cancel() {
-  _py_confirm "$1"
-  local confirm_rc=$?
-  case "$confirm_rc" in
-    0) return 0 ;;
-    130)
-      _py_info "Cancelled."
-      return 130
-      ;;
-    *) return "$confirm_rc" ;;
   esac
 }
 
@@ -1138,6 +1121,29 @@ _py_validate_package_name() {
       return 1 ;;
   esac
   return 0
+}
+
+# Read one interactive package or tool operand into REPLY.
+_py_prompt_package_name() {
+  local purpose="${1:-Package}"
+  [[ -t 0 && -t 2 ]] || {
+    _py_error "A package name is required in non-interactive mode."
+    return 1
+  }
+  print -nu2 -r -- "$purpose name: "
+  local package_name=""
+  IFS= read -r package_name
+  local -i read_rc=$?
+  if (( read_rc != 0 )); then
+    print -u2 -r -- ""
+    _py_info "Cancelled."
+    return 130
+  fi
+  _py_validate_package_name "$package_name" || {
+    _py_error "Package names may contain only letters, digits, dot, underscore, and hyphen."
+    return 2
+  }
+  REPLY="$package_name"
 }
 
 _py_validate_python_version() {
