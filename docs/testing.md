@@ -810,6 +810,12 @@ fixtures. Direct fixture tools clear inherited archive options and retain
 their source canaries; non-root permission failure is separate from remover
 models and does not establish native macOS/WSL acceptance.
 
+`file_recovery.bats` also roundtrips UTF-8 names, checks high-byte octal
+listing escapes and invalid escape forms, and verifies the numbered archive
+plans and passive outcomes. `file_platform.bats` checks missing GNU TAR
+compressors and uses the real timeout service with a shortened deadline and
+a finite stalled TAR version process.
+
 `file_operation_boundary.bats` covers stale cwd/PWD, raw traversal, ancestor
 and reviewed-parent changes, complete scan records, unsafe or replaced staging
 objects/descriptors, renewed large-file size criteria and exact junk names.

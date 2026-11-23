@@ -218,6 +218,43 @@ _file_run_with_timeout() {
   return 1
 }
 
+# Checks whether bounded probes can run through the core or standalone.
+_file_timeout_available() {
+  (( ${+functions[_zdx_run_with_timeout]} )) && return 0
+  local candidate="" timeout_command=""
+  for candidate in timeout gtimeout; do
+    timeout_command=$(whence -p -- "$candidate" 2>/dev/null) \
+      || timeout_command=""
+    [[ "$timeout_command" == /* && -x "$timeout_command" ]] || continue
+    return 0
+  done
+  if [[ "${1-}" != --quiet ]]; then
+    _file_error \
+      "Bounded File commands need timeout or gtimeout when the ZDX core is not loaded."
+  fi
+  return 1
+}
+
+# Distinguish a failed capability observation from an unavailable capability.
+_file_probe_interruption() {
+  case "$1" in
+    124)
+      _file_error "$2 probe timed out."
+      return 124
+      ;;
+    125|126|127)
+      _file_error "Could not run the $2 probe (status $1)."
+      return "$1"
+      ;;
+    137)
+      _file_error "$2 probe was killed."
+      return 137
+      ;;
+    130|143) return "$1" ;;
+    *) return 0 ;;
+  esac
+}
+
 # --- Host platform and external tools ----------------------------------------
 # Platform branches follow the kernel that uname reports, so tests select a
 # branch with a uname mock instead of the host.
@@ -226,7 +263,10 @@ _file_run_with_timeout() {
 _file_host_kernel() {
   REPLY=""
   local kernel=""
-  kernel=$(command uname -s </dev/null 2>/dev/null) || return 1
+  local -i probe_rc=0
+  kernel=$(_file_run_with_timeout 10 uname -s </dev/null 2>/dev/null) || probe_rc=$?
+  _file_probe_interruption "$probe_rc" "Host kernel" || return $?
+  (( probe_rc == 0 )) || return 1
   kernel="${kernel%%$'\n'*}"
   [[ -n "$kernel" && "$kernel" != *[^A-Za-z0-9_.-]* ]] || return 1
   REPLY="$kernel"
@@ -237,7 +277,8 @@ _file_host_kernel() {
 # Microsoft kernel release. The optional argument replaces /proc for fixtures.
 _file_host_is_wsl() {
   local proc_root="${1:-/proc}" kernel_release="" REPLY=""
-  _file_host_kernel && [[ "$REPLY" == Linux ]] || return 1
+  _file_host_kernel || return $?
+  [[ "$REPLY" == Linux ]] || return 1
   [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ]] && return 0
   [[ -e "$proc_root/sys/fs/binfmt_misc/WSLInterop" \
     || -e "$proc_root/sys/fs/binfmt_misc/WSLInterop-late" ]] && return 0
@@ -304,11 +345,15 @@ _file_run_archive_tool() {
 _file_gnu_tar_command() {
   REPLY=""
   local candidate="" resolved="" version_text=""
+  local -i probe_rc=0
   for candidate in tar gtar; do
     resolved=$(whence -p "$candidate" 2>/dev/null) || continue
     [[ "$resolved" == /* && -x "$resolved" ]] || continue
-    version_text=$(LC_ALL=C _file_run_archive_tool "$resolved" --version \
-      </dev/null 2>/dev/null) || continue
+    probe_rc=0
+    version_text=$(LC_ALL=C _file_run_archive_tool --timeout 10 "$resolved" --version \
+      </dev/null 2>/dev/null) || probe_rc=$?
+    _file_probe_interruption "$probe_rc" "GNU tar version" || return $?
+    (( probe_rc == 0 )) || continue
     [[ "${version_text%%$'\n'*}" == *"GNU tar"* ]] || continue
     REPLY="$resolved"
     return 0
@@ -328,14 +373,25 @@ _file_tar_zstd_command() {
   reply=()
   local tar_command="" zstd_command=""
   local -a missing=()
-  if _file_gnu_tar_command; then
+  local -i probe_rc=0
+  _file_timeout_available --quiet || {
+    reply=("timeout or gtimeout")
+    return 1
+  }
+  _file_gnu_tar_command || probe_rc=$?
+  case "$probe_rc" in
+    124|125|126|127|130|137|143) return "$probe_rc" ;;
+  esac
+  if (( probe_rc == 0 )); then
     tar_command="$REPLY"
     REPLY=""
     _file_run_archive_tool --timeout 10 "$tar_command" --zstd --version \
-      </dev/null >/dev/null 2>&1 || {
+      </dev/null >/dev/null 2>&1 || probe_rc=$?
+    _file_probe_interruption "$probe_rc" "GNU tar zstd support" || return $?
+    if (( probe_rc != 0 )); then
       missing+=("GNU tar with --zstd")
       tar_command=""
-    }
+    fi
   else
     missing+=("GNU tar")
   fi
@@ -358,31 +414,72 @@ _file_tar_zstd_command() {
 _file_require_tar_zstd() {
   local purpose="${1:-This operation}"
   local -a reply=()
-  _file_tar_zstd_command && return 0
+  local -i probe_rc=0
+  _file_tar_zstd_command || probe_rc=$?
+  case "$probe_rc" in
+    0|124|125|126|127|130|137|143) return "$probe_rc" ;;
+  esac
   _file_error "$purpose requires GNU tar with --zstd and zstd (missing: ${(j:, :)reply})."
-  _file_dim "Install zstd and GNU tar 1.31 or newer; on macOS: brew install gnu-tar zstd."
+  if [[ "${reply[1]-}" != "timeout or gtimeout" ]]; then
+    _file_dim "Install zstd and GNU tar 1.31 or newer; on macOS: brew install gnu-tar zstd."
+  fi
   return 1
 }
 
-# reply is the command that creates a TAR archive without platform metadata.
+# On success, reply is the command prefix for the requested TAR format. On
+# an unavailable backend, reply names the missing tools.
 # GNU tar (tar or gtar) is preferred: it stores no macOS metadata by default.
 # Otherwise tar is used, with --no-mac-metadata and --no-xattrs when it
 # accepts them, as bsdtar on a stock macOS host does, so neither AppleDouble
 # ._* members nor extended-attribute headers enter the archive. Callers also
 # export COPYFILE_DISABLE=1, which stops macOS tools from adding ._* copies.
 _file_tar_create_command() {
+  local format="$1"
   reply=()
-  local REPLY=""
-  if _file_gnu_tar_command; then
-    reply=("$REPLY")
+  local REPLY="" tar_command="" codec="" codec_command=""
+  local -i probe_rc=0
+  _file_timeout_available --quiet || {
+    reply=("timeout or gtimeout")
+    return 1
+  }
+  _file_gnu_tar_command || probe_rc=$?
+  case "$probe_rc" in
+    124|125|126|127|130|137|143) return "$probe_rc" ;;
+  esac
+  if (( probe_rc == 0 )); then
+    tar_command="$REPLY"
+    case "$format" in
+      tar.gz) codec=gzip ;;
+      tar.xz) codec=xz ;;
+      tar.bz2) codec=bzip2 ;;
+      *) return 2 ;;
+    esac
+    codec_command=$(whence -p -- "$codec" 2>/dev/null) || codec_command=""
+    if [[ -n "$codec_command" && "${codec_command:A}" == /mnt/[[:alpha:]]/* ]]; then
+      _file_host_is_wsl || probe_rc=$?
+      case "$probe_rc" in
+        0) codec_command="" ;;
+        124|125|126|127|130|137|143) return "$probe_rc" ;;
+      esac
+    fi
+    [[ "$codec_command" == /* && -f "$codec_command" && -x "$codec_command" ]] || {
+      reply=("$codec")
+      return 1
+    }
+    reply=("$tar_command")
     return 0
   fi
-  local tar_command=""
   tar_command=$(whence -p tar 2>/dev/null) || tar_command=""
-  [[ "$tar_command" == /* && -x "$tar_command" ]] || return 1
+  [[ "$tar_command" == /* && -x "$tar_command" ]] || {
+    reply=(tar)
+    return 1
+  }
   # Capability probe: an empty archive written to /dev/null.
-  if _file_run_archive_tool "$tar_command" --no-mac-metadata --no-xattrs \
-    -cf /dev/null -T /dev/null </dev/null >/dev/null 2>&1; then
+  probe_rc=0
+  _file_run_archive_tool --timeout 10 "$tar_command" --no-mac-metadata --no-xattrs \
+    -cf /dev/null -T /dev/null </dev/null >/dev/null 2>&1 || probe_rc=$?
+  _file_probe_interruption "$probe_rc" "TAR metadata options" || return $?
+  if (( probe_rc == 0 )); then
     reply=("$tar_command" --no-mac-metadata --no-xattrs)
   else
     reply=("$tar_command")
@@ -410,14 +507,18 @@ _file_7z_command() {
 # directory that appeared after the last check.
 _file_mv_no_clobber_command() {
   reply=()
-  local mv_command="" version_text=""
+  local mv_command="" version_text="" REPLY=""
+  local -i probe_rc=0
   mv_command=$(whence -p mv 2>/dev/null) || mv_command=""
   [[ "$mv_command" == /* && -x "$mv_command" ]] || {
     _file_error "mv is required to move a reviewed path."
     return 1
   }
-  version_text=$(LC_ALL=C command "$mv_command" --version \
-    </dev/null 2>/dev/null) || version_text=""
+  _file_timeout_available || return $?
+  version_text=$(LC_ALL=C _file_run_with_timeout 10 "$mv_command" --version \
+    </dev/null 2>/dev/null) || probe_rc=$?
+  _file_probe_interruption "$probe_rc" "mv version" || return $?
+  (( probe_rc == 0 )) || version_text=""
   version_text="${version_text%%$'\n'*}"
   if [[ "$version_text" == *"GNU coreutils"* \
     || "$version_text" == *"uutils coreutils"* ]]; then
@@ -778,7 +879,7 @@ _file_menu_entry() {
   fi
 
   local REPLY=""
-  _file_menu_missing_requirements "$command_name"
+  _file_menu_missing_requirements "$command_name" || return $?
   # docs/menu-spec.md: an unavailable action keeps its command field and is
   # marked by a leading circle plus the requirement written in text.
   if [[ -n "$REPLY" ]]; then
@@ -795,9 +896,20 @@ _file_menu_entry() {
 # leaves the other compression formats available.
 _file_menu_missing_requirements() {
   local command_name="${1-}" missing=""
+  local -i probe_rc=0
   case "$command_name" in
     file-extract)
-      _file_gnu_tar_command || missing="GNU tar"
+      if _file_timeout_available --quiet; then
+        _file_gnu_tar_command || probe_rc=$?
+        case "$probe_rc" in
+          0) ;;
+          124|125|126|127|137) missing="verified GNU tar" ;;
+          130|143) return "$probe_rc" ;;
+          *) missing="GNU tar" ;;
+        esac
+      else
+        missing="timeout or gtimeout"
+      fi
       ;;
     file-compress)
       if ! command -v tar &>/dev/null && ! command -v zip &>/dev/null \
@@ -1157,7 +1269,10 @@ _file_path_is_displayable() {
 # True when find supports the GNU predicates junk discovery uses
 # (-readable, -executable, and -printf). BSD find on macOS does not.
 _file_find_has_gnu_predicates() {
-  command find . -maxdepth 0 -readable -executable -printf '' \
+  local find_command=""
+  find_command=$(whence -p -- find 2>/dev/null) || return 1
+  [[ "$find_command" == /* && -f "$find_command" && -x "$find_command" ]] || return 1
+  _file_run_with_timeout 10 "$find_command" . -maxdepth 0 -readable -executable -printf '' \
     </dev/null >/dev/null 2>&1
 }
 
@@ -1258,9 +1373,17 @@ _file_collect_paths() {
       return 2
       ;;
   esac
-  if [[ "$node_filter" == "junk" ]] && ! _file_find_has_gnu_predicates; then
-    producer_command=(_file_junk_walk "$scan_root")
-  elif [[ "$node_filter" == "junk" ]]; then
+  if [[ "$node_filter" == junk ]]; then
+    local -i probe_rc=0
+    if _file_timeout_available --quiet; then
+      _file_find_has_gnu_predicates || probe_rc=$?
+      _file_probe_interruption "$probe_rc" "find predicate" || return $?
+    else
+      probe_rc=1
+    fi
+    (( probe_rc == 0 )) || producer_command=(_file_junk_walk "$scan_root")
+  fi
+  if [[ "$node_filter" == junk && ${#producer_command} == 0 ]]; then
     # Regular files with an exact junk name only; links are never followed
     # or returned. Repository metadata and generated, vendored, and
     # installed-package trees are pruned. A directory that cannot be listed
@@ -1280,7 +1403,7 @@ _file_collect_paths() {
         -o -name Thumbs.db -o -name desktop.ini
       \) -print0 \)
     )
-  else
+  elif [[ "$node_filter" != junk ]]; then
     find_command+=(
       \(
         -name .git
@@ -1745,8 +1868,9 @@ _file_mount_snapshot() {
   _file_mount_targets=()
   local REPLY=""
   _file_host_kernel || {
+    local -i probe_rc=$?
     _file_error "Could not identify the host kernel for mount-boundary validation."
-    return 1
+    return "$probe_rc"
   }
   case "$REPLY" in
     Darwin)

@@ -28,7 +28,7 @@ _file_validate_tree_for_transfer() {
     local -A _file_mount_targets=()
   fi
   if [[ -z "$_file_mount_mode" ]]; then
-    _file_mount_snapshot || return 1
+    _file_mount_snapshot || return $?
   fi
   # The staging helper returns through reply; callers such as
   # _file_archive_inputs_plan accumulate their own results in reply.
@@ -134,7 +134,7 @@ _file_quarantine_delete() {
   local -a mv_command=("$@")
   if (( ${#mv_command[@]} == 0 )); then
     local -a reply=()
-    _file_mv_no_clobber_command || return 1
+    _file_mv_no_clobber_command || return $?
     mv_command=("${reply[@]}")
   fi
   if [[ -d "$target" && ! -L "$target" ]]; then
@@ -372,7 +372,7 @@ _file_delete_execute() {
   _file_delete_revalidate targets "$identities_text" || return 1
   _file_mount_mode=""
   local -a mv_command=()
-  _file_mv_no_clobber_command || return 1
+  _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
 
   local -a identities=("${(@f)identities_text}")

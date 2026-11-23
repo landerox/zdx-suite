@@ -128,10 +128,12 @@ _file_archive_format_missing() {
   local -a reply=()
   case "$format" in
     tar.gz|tar.xz|tar.bz2)
-      _file_tar_create_command || missing="tar"
+      _file_tar_create_command "$format" || probe_rc=$?
+      (( probe_rc == 0 )) || missing="${(j:, :)reply}"
       ;;
     tar.zst)
-      _file_tar_zstd_command || missing="${(j:, :)reply}"
+      _file_tar_zstd_command || probe_rc=$?
+      missing="${(j:, :)reply}"
       ;;
     zip)
       whence -p zip &>/dev/null || missing="zip"
@@ -139,11 +141,13 @@ _file_archive_format_missing() {
     7z)
       _file_7z_create_command
       probe_rc=$?
-      if (( probe_rc == 130 || probe_rc == 143 )); then
-        REPLY=""
-        return $probe_rc
-      fi
       (( probe_rc == 0 )) || missing="${(j:, :)reply}"
+      ;;
+  esac
+  case "$probe_rc" in
+    124|125|126|127|130|137|143)
+      REPLY=""
+      return "$probe_rc"
       ;;
   esac
   REPLY="$missing"
@@ -161,7 +165,7 @@ _file_archive_require_format() {
     _file_require_7z_create "Creating 7z archives"
     return
   fi
-  _file_archive_format_missing "$format"
+  _file_archive_format_missing "$format" || return $?
   [[ -z "$REPLY" ]] && return 0
   _file_error "Creating $format archives requires $REPLY."
   return 1
@@ -442,21 +446,33 @@ _file_compress_execute() {
   fi
 
   _file_header "Archive Creation Plan"
-  _file_info "Format: $format"
-  _file_info "Output: $destination"
-  _file_info "Inputs: ${#inputs[@]}"
+  _file_path_display "$destination"
+  local displayed_destination="$REPLY"
+  _file_table $'#\tArchive' "1"$'\t'"$displayed_destination"
+  _file_label "Format" "$format"
+  if [[ "$output_state" != absent ]]; then
+    _file_label "Action" "Replace existing archive"
+  fi
+  local -a input_rows=()
+  local -i input_number=0
   for input in "${inputs[@]}"; do
-    _file_dim "$input"
+    _file_path_display "$input"
+    (( ++input_number ))
+    input_rows+=("$input_number"$'\t'"$REPLY")
   done
+  _file_table $'#\tInput' "${input_rows[@]}"
+  _file_count_noun 1 archive
+  local planned="$REPLY"
   if [[ "$dry_run" == "yes" ]]; then
-    _file_success "Dry run complete; no archive was created."
+    _file_info "Dry run: $planned planned; nothing was created."
     return 0
   fi
 
-  local confirmation_prompt="Create this archive?"
+  local confirmation_prompt="Create $planned?"
   [[ "$output_state" == "absent" ]] \
-    || confirmation_prompt="Create this archive and replace the existing output?"
-  _file_confirm_mutation "$confirmation_prompt" "$auto_yes"
+    || confirmation_prompt="Replace $planned?"
+  _file_confirm_mutation "$confirmation_prompt" "$auto_yes" \
+    "Cancelled: nothing was created."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
     (( confirm_rc == 130 )) && return 0
@@ -483,13 +499,16 @@ _file_compress_execute() {
       tar.zst)
         # GNU tar only: extraction needs it anyway, and it stores no macOS
         # metadata.
-        _file_require_tar_zstd "Creating tar.zst archives" || return 1
+        _file_require_tar_zstd "Creating tar.zst archives" || return $?
         archive_command=("$REPLY" --zstd -cf "$staged_file" --)
         ;;
       tar.*)
-        _file_tar_create_command || {
-          _file_error "tar is required for $format creation."
-          return 1
+        _file_tar_create_command "$format" || {
+          local -i probe_rc=$?
+          if (( probe_rc == 1 )); then
+            _file_error "Creating $format archives requires ${(j:, :)reply}."
+          fi
+          return "$probe_rc"
         }
         archive_command=("${reply[@]}")
         case "$format" in
@@ -550,7 +569,7 @@ _file_compress_execute() {
           "$destination_parent_identity" || operation_rc=$?
       fi
       if (( operation_rc == 0 )); then
-        _file_success "Created archive: $destination"
+        _file_success "$displayed_destination"
       fi
     fi
   } always {
@@ -562,6 +581,7 @@ _file_compress_execute() {
       operation_rc=$cleanup_rc
     fi
   }
+  (( operation_rc == 0 )) && _file_success "Archive creation completed: $planned created."
   return $operation_rc
 }
 
@@ -583,9 +603,22 @@ file-compress() {
     # check names the missing requirement before any further prompt.
     local -a format_rows=()
     local format_name=""
+    local -i format_probe_rc=0 tar_probe_failed=0
     for format_name in tar.gz zip tar.xz tar.bz2 tar.zst 7z; do
-      # An interrupted probe stops the command before the picker opens.
-      _file_archive_format_missing "$format_name" || return $?
+      if (( tar_probe_failed )) && [[ "$format_name" == tar.* ]]; then
+        REPLY="verified TAR capability"
+      else
+        format_probe_rc=0
+        _file_archive_format_missing "$format_name" || format_probe_rc=$?
+        case "$format_probe_rc" in
+          0) ;;
+          124|125|126|127|137)
+            REPLY="verified archive capability"
+            [[ "$format_name" == tar.* ]] && tar_probe_failed=1
+            ;;
+          *) return "$format_probe_rc" ;;
+        esac
+      fi
       if [[ -n "$REPLY" ]]; then
         format_rows+=("○ $format_name (missing: $REPLY)")
       else
@@ -674,6 +707,23 @@ _file_extract_max_bytes() {
   REPLY="$(( 10#$limit_gib * 1073741824 ))"
 }
 
+# GNU tar's C-locale escape style octal-quotes high bytes. Decode those
+# bytes as data and keep the existing refusal of ASCII escapes.
+_file_tar_decode_name() {
+  emulate -L zsh
+  unsetopt multibyte
+  local encoded="$1" piece="" byte=""
+  local -a pieces=()
+  IFS='\' read -rA pieces <<< "$encoded" || return 1
+  local decoded="${pieces[1]}"
+  for piece in "${pieces[@]:1}"; do
+    [[ "$piece" == [23][0-7][0-7]* ]] || return 1
+    printf -v byte '%b' "\\0${piece[1,3]}" || return 1
+    decoded+="$byte${piece[4,-1]}"
+  done
+  REPLY="$decoded"
+}
+
 # Lists a TAR archive with GNU tar and validates every member before any
 # extraction. The codec is fixed from the original validated archive name.
 # Usage: _file_tar_preflight <gnu-tar-command> <archive> <max-bytes> <codec-flag>
@@ -703,7 +753,12 @@ _file_tar_preflight() {
   # Names that differ only by letter case collide on macOS's default
   # case-insensitive filesystems, so Darwin compares them case-folded.
   local fold_case=no
-  _file_host_kernel && [[ "$REPLY" == Darwin ]] && fold_case=yes
+  _file_host_kernel || {
+    local -i kernel_rc=$?
+    _file_error "Could not identify the host kernel for TAR preflight."
+    return "$kernel_rc"
+  }
+  [[ "$REPLY" == Darwin ]] && fold_case=yes
 
   local list_dir=""
   _file_archive_stage_dir "${TMPDIR:-/tmp}" || return 1
@@ -762,6 +817,13 @@ _file_tar_preflight() {
         _file_error "Archive exceeds the $_FILE_MAX_ARCHIVE_ENTRIES entry limit."
         return 1
       }
+      if [[ "$member_name" == *\\* ]]; then
+        _file_tar_decode_name "$member_name" || {
+          _file_error "Archive contains an unsafe or unrepresentable member name."
+          return 1
+        }
+        member_name="$REPLY"
+      fi
       [[ -n "$member_name" \
         && "$member_name" != /* \
         && "$member_name" != *'|'* \
@@ -1023,27 +1085,38 @@ _file_extract_snapshot_run() {
   local codec_flag="${10-}"
 
   # The same GNU tar lists, preflights, and extracts the frozen snapshot.
+  _file_timeout_available || return $?
   _file_gnu_tar_command || {
-    _file_error "Extraction requires GNU tar, installed as tar or gtar."
-    return 1
+    local -i probe_rc=$?
+    if (( probe_rc == 1 )); then
+      _file_error "Extraction requires GNU tar, installed as tar or gtar."
+    fi
+    return "$probe_rc"
   }
   local tar_command="$REPLY"
   _file_tar_preflight "$tar_command" "$archive_snapshot" "$max_bytes" "$codec_flag" \
-    || return 1
+    || return $?
   local -a members=("${reply[@]}")
   local expanded_bytes="${REPLY%%|*}"
   local archive_digest="${REPLY#*|}"
   _file_header "Archive Extraction Plan"
-  _file_info "Archive: $archive_absolute"
-  _file_info "Destination: $destination"
-  _file_info "Members: ${#members[@]}"
-  _file_info "Declared bytes: $expanded_bytes"
+  _file_path_display "$destination"
+  local displayed_destination="$REPLY"
+  _file_table $'#\tDestination' "1"$'\t'"$displayed_destination"
+  _file_path_display "$archive_absolute"
+  _file_label "Archive" "$REPLY"
+  _file_label "Members" "${#members[@]}"
+  _file_label "Declared bytes" "$expanded_bytes"
+  _file_count_noun 1 directory directories
+  local planned="$REPLY"
   if [[ "$dry_run" == "yes" ]]; then
-    _file_success "Dry run complete; no files were extracted."
+    _file_info "Dry run: $planned planned; nothing was extracted."
     return 0
   fi
 
-  _file_confirm_mutation "Extract this archive into a new directory?" "$auto_yes"
+  _file_count_noun 1 "new directory" "new directories"
+  _file_confirm_mutation "Extract into $REPLY?" "$auto_yes" \
+    "Cancelled: nothing was extracted."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
     (( confirm_rc == 130 )) && return 0
@@ -1071,7 +1144,7 @@ _file_extract_snapshot_run() {
   }
 
   local -a mv_command=()
-  _file_mv_no_clobber_command || return 1
+  _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
   _file_archive_stage_dir "${destination:h}" || return 1
   local stage_dir="${reply[1]}"
@@ -1129,7 +1202,8 @@ _file_extract_snapshot_run() {
     _file_revalidate_parent "$destination" "$destination_parent_identity" \
       || return 1
     stage_dir=""
-    _file_success "Extracted archive to: $destination"
+    _file_success "$displayed_destination"
+    _file_success "Archive extraction completed: $planned published."
     operation_rc=0
   } always {
     if [[ -n "$stage_dir" ]]; then
@@ -1176,7 +1250,7 @@ _file_extract_execute() {
   local codec_flag="$REPLY"
   case "${archive_absolute:t:l}" in
     *.tar.zst|*.tzst)
-      _file_require_tar_zstd "Extracting zstd TAR archives" || return 1
+      _file_require_tar_zstd "Extracting zstd TAR archives" || return $?
       ;;
   esac
 

@@ -118,7 +118,7 @@ SH
     file-compress --format tar.gz --output tree.tar.gz --yes -- tree
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Inputs: 1"* ]]
+  printf '%s\n' "$output" | grep -Eq '^[[:space:]]*1[[:space:]]+~/work/tree$'
   [[ "$output" != *".zdx-file-archive."* ]]
   [ -f "$HOME/work/tree.tar.gz" ]
   run tar -tzf "$HOME/work/tree.tar.gz"
@@ -194,14 +194,14 @@ PY
   export FILE_EXTRACT_MAX_GIB=2
   run run_zsh 'cd "$HOME" && file-extract --destination out --dry-run -- big.tar'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Declared bytes: 1073741825"* ]]
+  printf '%s\n' "$output" | grep -Eq '^[[:space:]]*Declared bytes:[[:space:]]+1073741825$'
 
   # 64 GiB is the upper bound; its 11-digit size still parses.
   export FILE_EXTRACT_MAX_GIB=64
   mock_gnu_tar_listing 68719476736
   run run_zsh 'cd "$HOME" && file-extract --destination out --dry-run -- big.tar'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Declared bytes: 68719476736"* ]]
+  printf '%s\n' "$output" | grep -Eq '^[[:space:]]*Declared bytes:[[:space:]]+68719476736$'
   mock_gnu_tar_listing 68719476737
   run run_zsh 'cd "$HOME" && file-extract --destination out --dry-run -- big.tar'
   [ "$status" -eq 1 ]
