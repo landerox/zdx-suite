@@ -53,7 +53,7 @@ teardown() {
   # run_zsh redirects stdin from /dev/null, so no terminal is attached.
   run run_zsh 'cd "$JUNK_BASE" && file-clean-junk'
 
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"pass --yes"* ]]
   [ -f "$JUNK_BASE/.DS_Store" ]
 }

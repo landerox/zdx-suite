@@ -2329,8 +2329,11 @@ unintended targets.
   exactly three known lines without NUL or control characters, strict `%XX`
   escapes, an absolute normalized path of at most 4,096 bytes outside the
   trash and protected roots, and a real local time; any other record can be
-  purged but never restored. Inventories stop at 4,096 entries per
-  directory. Read-only actions never create the trash.
+  purged but never restored. Full inventories refuse containers with more
+  than 4,096 entries. Put checks this capacity when planning and again
+  after consent. Concurrent reservations can exceed the observed capacity.
+  An explicit restore or purge ID is validated independently of the full
+  inventory. Read-only actions never create the trash.
 - Py project state, environment markers, lockfiles, exact interpreters, and
   removal quarantines are ownership-, mode-, boundary-, and identity-checked.
   Activation sources the reviewed open descriptor. A stable path through the

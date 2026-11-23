@@ -19,6 +19,8 @@ _file_find_large_usage() {
   print -u2 -r -- ""
   print -u2 -r -- \
     "Without --delete, matching paths are written to stdout."
+  print -u2 -r -- \
+    "Searches to depth 5, pruning .git, node_modules, .venv, and .tmp."
 }
 
 _file_size_to_bytes() {
@@ -128,12 +130,18 @@ file-find-large() {
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _file_error "--help accepts no additional arguments."
+          return 2
+        }
         _file_find_large_usage
         return 0
         ;;
       --min-size)
-        (( $# >= 2 )) || return 2
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _file_error "--min-size requires a size."
+          return 2
+        }
         minimum="$2"
         shift 2
         ;;
@@ -157,7 +165,10 @@ file-find-large() {
   _file_directory_identity "$_file_operation_base" || return 1
   _file_operation_base_identity="$REPLY"
   local -a matches=("${reply[@]}")
-  (( ${#matches[@]} > 0 )) || return 0
+  if (( ${#matches[@]} == 0 )); then
+    [[ "$delete_mode" == yes ]] && _file_info "No files meet the minimum size."
+    return 0
+  fi
   if [[ "$delete_mode" == "yes" ]]; then
     _file_delete_execute --minimum-bytes "$minimum_bytes" \
       "$dry_run" "$auto_yes" "${matches[@]}"

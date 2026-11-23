@@ -22,7 +22,11 @@ functions must stay aligned with it.
 
 `file-menu` with no arguments opens the interactive menu. It also accepts one
 canonical command followed by that command's unchanged arguments. Invalid
-syntax returns `2`; an interactive cancellation returns success.
+syntax returns `2` with a diagnostic, and an interactive cancellation returns
+`0`. A mutation that requires consent returns `1` when there is no terminal
+and the caller omits `--yes`.
+An interrupted confirmation leaves the targets in place and retains the
+returned status `130` or `143`.
 
 The interactive menu follows [`menu-spec.md`](menu-spec.md): large-file
 inspection comes first, followed by archives and the trash, and junk-file
@@ -292,7 +296,10 @@ private and the existing no-group/world-write payload rule is unchanged.
   read-only input policy. The plan shows `Directory:`, `Trash:`, and a
   `# · Path · Type` table, a dry run ends with
   `Dry run: 2 items planned; nothing was moved.`, and the question is
-  `Move 2 items to the trash?`.
+  `Move 2 items to the trash?`. The plan and the post-consent recheck count
+  existing entries in each private trash container, including reserved and
+  retained names. If a check shows that the full move would take a
+  container above 4,096 entries, the put is refused before moving any item.
 - **`list [--json]`** is read-only. It shows `ID`, `Deleted`, `Type`, `Size`,
   and `Original path`, newest first; a directory's size is the apparent size
   of its regular files. Entries that cannot be restored, a record without an
@@ -301,7 +308,11 @@ private and the existing no-group/world-write payload rule is unchanged.
   `ZDX_VERBOSE=1`. Reserved deletion quarantines left directly in `files/`
   or `info/` are named separately on stderr for manual inspection or a new
   reviewed `purge --all`; they add no IDs or JSON fields and cannot be restored
-  by this interface.
+  by this interface. Listing, picker selection, and broad purge require a
+  complete inventory within the 4,096-entry limit per container. Explicit
+  restore and purge IDs are looked up individually with the ordinary
+  identity and record checks, so exact recovery remains available in a
+  larger trash.
 - **`restore [ID...]`** moves valid entries back. Nothing may exist at the
   original path, and its parent must still exist as a canonical directory
   that the user owns and others cannot write, below trusted ancestors; a
@@ -391,8 +402,10 @@ is labeled `Unverified path` and is neither deleted nor recursively chmodded.
 
 `file-trash list --json` prints one compact document, a single line, and
 nothing else on stdout; it never opens `fzf` or prompts, and its exit status
-equals the text mode's. jq builds the document from the records it reads as
-raw lines on stdin, so no data becomes program text. Without `jq`, it
+equals the text mode's. `jq -cM` builds the compact monochrome document
+from raw lines on stdin. The command captures a successful render before
+publishing it. A failed producer or renderer returns its status with empty
+stdout. Without `jq`, it
 reports the missing capability on stderr and returns `1`. Expanded for
 reading, the document looks like this:
 
@@ -578,7 +591,9 @@ permission repair is attempted.
 ## Streams, dependencies, and residual limits
 
 UI, plans, warnings, and prompts use stderr. Without `--delete`,
-`file-find-large` writes its documented data to stdout: one matching path per
+`file-find-large` searches to depth 5 from the invocation directory and
+prunes `.git`, `node_modules`, `.venv`, and `.tmp`. It writes data to stdout
+as one matching path per
 line, or the selected paths after the interactive `show` action.
 `file-trash list --json` writes its one `zdx.file-trash.v1` document; every
 other `file-trash` form and `file-clean-junk` write nothing to stdout. The

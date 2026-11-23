@@ -61,6 +61,28 @@ SH
   [ "$status" -eq 0 ]
 }
 
+@test "file safety: returned confirmation interruptions leave the deletion target intact" {
+  mkdir "$HOME/large"
+  printf '%s\n' payload > "$HOME/large/victim"
+  local status_to_return
+  for status_to_return in 130 143; do
+    export FILE_CONFIRM_STATUS="$status_to_return"
+    run --separate-stderr run_zsh '
+      builtin cd -- "$HOME/large" || return 97
+      _file_confirm() {
+        print -r -- "$FILE_CONFIRM_STATUS" >> "$HOME/confirm-attempts"
+        return "$FILE_CONFIRM_STATUS"
+      }
+      file-find-large --min-size 1 --delete
+    '
+    [ "$status" -eq "$status_to_return" ]
+    [ -z "$output" ]
+    [[ "$stderr" != *Cancelled* ]]
+    [ "$(cat "$HOME/large/victim")" = payload ]
+  done
+  [ "$(cat "$HOME/confirm-attempts")" = "$(printf '%s\n' 130 143)" ]
+}
+
 @test "file safety: large-file deletion still refuses the whole plan for an unsafe target" {
   # shellcheck disable=SC2016
   run run_zsh '

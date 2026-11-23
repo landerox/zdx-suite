@@ -47,6 +47,86 @@ write_record() {
   printf 'payload\n' > "$TRASH/files/$id"
 }
 
+@test "file trash: exact recovery refuses an unsearchable container" {
+  local id=20260101-000000-abcdef
+  write_record "$id" "$WORK/restored"
+  chmod -- 600 "$TRASH/files"
+  [[ ! -x "$TRASH/files" ]] || skip "the effective user can search this directory"
+  export FILE_EXACT_ID="$id"
+  run --separate-stderr run_zsh 'file-trash restore --dry-run "$FILE_EXACT_ID"'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"Trash directories must be real, owned by you, and private"* ]]
+  [ ! -e "$WORK/restored" ]
+  chmod -- 700 "$TRASH/files"
+  [ "$(cat "$TRASH/files/$id")" = payload ]
+  [ -f "$TRASH/info/$id.trashinfo" ]
+}
+
+@test "file trash: capacity refuses a whole put but permits exact recovery" {
+  local restore_id=20260101-000000-abcdef purge_id=20260101-000001-abcdea
+  write_record "$restore_id" "$WORK/restored"
+  write_record "$purge_id" "$WORK/discarded"
+  printf 'first\n' > "$WORK/first"
+  printf 'second\n' > "$WORK/second"
+  local index
+  for ((index=0; index<4093; ++index)); do
+    : > "$TRASH/files/.occupied-$index"
+  done
+
+  run --separate-stderr run_zsh '
+    cd "$WORK" || return 90
+    file-trash put --dry-run -- first second
+  '
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *'4,096'* || "$stderr" == *'4096'* ]]
+  [ -f "$WORK/first" ]
+  [ -f "$WORK/second" ]
+
+  run -0 run_zsh 'cd "$WORK"; file-trash put --yes -- first'
+  [ ! -e "$WORK/first" ]
+  [ "$(cat "$WORK/second")" = second ]
+  : > "$TRASH/files/.retained-a"
+  : > "$TRASH/files/.retained-b"
+  run -1 run_zsh 'file-trash list'
+  export FILE_RESTORE_ID="$restore_id" FILE_PURGE_ID="$purge_id"
+
+  run -0 run_zsh 'file-trash restore --yes "$FILE_RESTORE_ID"'
+  [ "$(cat "$WORK/restored")" = payload ]
+  [ ! -e "$TRASH/files/$restore_id" ]
+  run -1 run_zsh 'file-trash list'
+
+  run -0 run_zsh 'file-trash purge --yes "$FILE_PURGE_ID"'
+  [ ! -e "$TRASH/files/$purge_id" ]
+  [ ! -e "$TRASH/info/$purge_id.trashinfo" ]
+  [ -f "$TRASH/files/.retained-a" ]
+  [ -f "$TRASH/files/.retained-b" ]
+  [ "$(cat "$WORK/second")" = second ]
+}
+
+@test "file trash: failed jq output is private and keeps the status" {
+  cat > "$TEST_MOCK_BIN/jq" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" > "$HOME/jq-arguments"
+cat >/dev/null
+printf '{"schema":"zdx.file-trash.v1"}\n'
+exit "$FILE_TRASH_JQ_STATUS"
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/jq"
+  local rc result=0
+  for rc in 42 130 143; do
+    export FILE_TRASH_JQ_STATUS="$rc"
+    run --separate-stderr run_zsh 'file-trash list --json'
+    if [[ "$status" != "$rc" || -n "$output" ]]; then
+      printf 'wanted status %s and no JSON, got %s and %s\n' "$rc" "$status" "$output"
+      result=1
+    fi
+  done
+  [ "$result" -eq 0 ]
+  [ "$(head -n 1 "$HOME/jq-arguments")" = -cM ]
+}
+
 # mock_kernel NAME: uname -s reports NAME.
 mock_kernel() {
   cat > "$TEST_MOCK_BIN/uname" <<SH
@@ -334,7 +414,7 @@ mount_table() {
 
   # run_zsh redirects stdin from /dev/null, so no terminal is attached.
   run run_zsh 'cd "$WORK" && file-trash put one'
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"pass --yes"* ]]
   [ -f "$WORK/one" ]
   [ ! -e "$HOME/.local/share/zdx" ]
@@ -565,14 +645,14 @@ SH
   [ "$status" -eq 0 ]
   [[ "$output" == *"Dry run: 1 item planned; nothing was restored."* ]]
   run run_zsh "file-trash restore $id"
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"pass --yes"* ]]
   run run_zsh "file-trash purge --dry-run $id"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Purged items cannot be restored."* ]]
   [[ "$output" == *"Dry run: 1 item planned; nothing was deleted."* ]]
   run run_zsh 'file-trash purge --all'
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   run run_zsh '
     _file_confirm() { return 1; }
     file-trash purge --all

@@ -96,7 +96,7 @@ _file_trash_private_dir() {
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
   local directory="$1"
   local -A state=()
-  [[ -d "$directory" && ! -L "$directory" \
+  [[ -d "$directory" && ! -L "$directory" && -x "$directory" \
     && "$directory" == "${directory:A}" ]] \
     && zstat -LH state -- "$directory" 2>/dev/null \
     && (( state[uid] == EUID && (state[mode] & 8#77) == 0 )) || {
@@ -437,7 +437,36 @@ _file_trash_tree_bytes() {
   REPLY="$total"
 }
 
-# Loads every trash entry. reply holds one record per ID:
+# Returns at most the requested number of names in a private trash container.
+# A limited glob stops walking once it has enough entries to prove overflow.
+_file_trash_container_names() {
+  local directory="$1" limit="$2"
+  reply=()
+  [[ -e "$directory" || -L "$directory" ]] || return 0
+  _file_trash_private_dir "$directory" || return $?
+  [[ -r "$directory" && -x "$directory" ]] || {
+    _file_error "Could not enumerate the private trash directory: $directory"
+    return 1
+  }
+  reply=("$directory"/*(DNY${limit}:t))
+}
+
+_file_trash_check_capacity() {
+  local trash_dir="$1" container=""
+  local -i incoming="$2" limit=$(( _FILE_MAX_CANDIDATES + 1 ))
+  local -a reply=()
+  for container in files info; do
+    _file_trash_container_names "$trash_dir/$container" "$limit" || return $?
+    (( ${#reply} + incoming <= _FILE_MAX_CANDIDATES )) || {
+      _file_error "This put would exceed the $_FILE_MAX_CANDIDATES entry limit in the trash."
+      _file_dim "Restore or purge reviewed items by exact ID to make room."
+      return 1
+    }
+  done
+}
+
+# Loads the trash inventory, or just the supplied IDs. reply holds one record
+# per ID:
 #   id, state, epoch, date, type, size, item fingerprint, record
 #   fingerprint, original path
 # joined by TABs, with "-" for an unknown field. The state is valid,
@@ -446,23 +475,37 @@ _file_trash_tree_bytes() {
 # unsafe-item (not a file, directory, or link you own). Valid entries come
 # first, newest first; the rest follow by ID. Names that are not IDs, such
 # as staging and quarantine files, are ignored.
-# Usage: _file_trash_load <trash-dir>
+# Usage: _file_trash_load <trash-dir> [ID...]
 _file_trash_load() {
   emulate -L zsh
   zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
   local trash_dir="$1"
+  shift
   local files_dir="$trash_dir/files" info_dir="$trash_dir/info"
   reply=()
   local -a item_names=() info_names=()
-  [[ -d "$files_dir" ]] && item_names=("$files_dir"/*(DN:t))
-  [[ -d "$info_dir" ]] && info_names=("$info_dir"/*(DN:t))
-  (( ${#item_names[@]} <= _FILE_MAX_CANDIDATES \
-    && ${#info_names[@]} <= _FILE_MAX_CANDIDATES )) || {
-    _file_error "The trash holds more than $_FILE_MAX_CANDIDATES entries; purge older items first."
-    return 1
-  }
-  local -A has_item=() has_info=()
   local name=""
+  if (( $# > 0 )); then
+    for name in "$@"; do
+      _file_trash_is_id "$name" || return 2
+      [[ -e "$files_dir/$name" || -L "$files_dir/$name" ]] && item_names+=("$name")
+      [[ -e "$info_dir/$name.trashinfo" || -L "$info_dir/$name.trashinfo" ]] \
+        && info_names+=("$name.trashinfo")
+    done
+  else
+    local -i limit=$(( _FILE_MAX_CANDIDATES + 1 ))
+    _file_trash_container_names "$files_dir" "$limit" || return $?
+    item_names=("${reply[@]}")
+    _file_trash_container_names "$info_dir" "$limit" || return $?
+    info_names=("${reply[@]}")
+    reply=()
+    (( ${#item_names} < limit && ${#info_names} < limit )) || {
+      _file_error "The trash holds more than $_FILE_MAX_CANDIDATES entries."
+      _file_dim "Restore or purge reviewed items by exact ID."
+      return 1
+    }
+  fi
+  local -A has_item=() has_info=()
   for name in "${item_names[@]}"; do
     _file_trash_is_id "$name" && has_item[$name]=1
   done
@@ -651,6 +694,7 @@ _file_trash_pick() {
 # Usage: _file_trash_list_json <trash-dir> <record...>
 _file_trash_list_json() {
   emulate -L zsh
+  setopt pipefail
   zmodload -F zsh/datetime b:strftime 2>/dev/null || return 1
   local trash_dir="$1"
   shift
@@ -670,9 +714,10 @@ _file_trash_list_json() {
       lines+=("skipped"$'\t'"${fields[1]}"$'\t'"${fields[2]//-/_}")
     fi
   done
-  {
+  local document=""
+  document=$({
     (( ${#lines[@]} == 0 )) || print -rl -- "${lines[@]}"
-  } | command jq -c -n -R \
+  } | command jq -cM -n -R \
     --arg schema zdx.file-trash.v1 \
     --arg trash_dir "$trash_dir" '
       [inputs | split("\t")] as $rows
@@ -691,7 +736,12 @@ _file_trash_list_json() {
             id: .[1],
             reason: .[2]
           }]
-        }'
+        }') || return $?
+  [[ "$document" == '{'*'}' && "$document" != *$'\n'* ]] || {
+    _file_error "Could not render a complete trash JSON document."
+    return 1
+  }
+  print -r -- "$document"
 }
 
 # Prints the trash inventory as a table on stderr, followed by one counted
@@ -1257,6 +1307,7 @@ _file_trash_put_execute() {
   local -a targets=("${reply[@]}")
   local identities_text="$REPLY"
   local -a identities=("${(@f)identities_text}")
+  _file_trash_check_capacity "$trash_dir" "${#targets}" || return $?
   local -A _file_reviewed_parent_ids=()
   _file_snapshot_parent_identities targets || return 1
 
@@ -1285,7 +1336,7 @@ _file_trash_put_execute() {
     "Cancelled: nothing was moved."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
   _file_mount_mode=""
@@ -1296,6 +1347,7 @@ _file_trash_put_execute() {
     return 1
   }
   local info_identity="${reply[1]}" files_identity="${reply[2]}"
+  _file_trash_check_capacity "$trash_dir" "${#targets}" || return $?
   local -a mv_command=()
   _file_mv_no_clobber_command || return $?
   mv_command=("${reply[@]}")
@@ -1435,7 +1487,7 @@ _file_trash_restore_execute() {
   local trash_dir="$REPLY"
   local -a entries=()
   if [[ "${reply[1]}" == present ]]; then
-    _file_trash_load "$trash_dir" || return 1
+    _file_trash_load "$trash_dir" "${requested_ids[@]}" || return $?
     entries=("${reply[@]}")
   fi
   local -A records=()
@@ -1518,7 +1570,7 @@ _file_trash_restore_execute() {
     "Cancelled: nothing was restored."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
   # Revalidate the complete plan before the first move.
@@ -1631,7 +1683,7 @@ _file_trash_purge_execute() {
   local trash_dir="$REPLY"
   local -a entries=() selected=() fields=() recoveries=()
   if [[ "${reply[1]}" == present ]]; then
-    _file_trash_load "$trash_dir" || return 1
+    _file_trash_load "$trash_dir" "${requested_ids[@]}" || return $?
     entries=("${reply[@]}")
     if [[ "$selector" == all ]]; then
       _file_trash_recovery_paths "$trash_dir" || return 1
@@ -1752,7 +1804,7 @@ _file_trash_purge_execute() {
     "Cancelled: nothing was deleted."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
   # Renew every tree before deleting the first item, including retained data.
