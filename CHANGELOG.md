@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- File: enforce trash capacity before put while keeping exact-ID recovery,
+  preserve failed scan and JSON renderer statuses, and diagnose invalid CLI
+  input and missing terminal consent.
+
 - File: qualify GNU TAR compressors before planning, bound capability
   probes, accept UTF-8 TAR member names, and show numbered archive targets.
   Standalone mount validation reports when it needs `timeout` or `gtimeout`.

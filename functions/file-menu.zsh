@@ -182,16 +182,20 @@ _file_menu_interactive() {
 
   local command_name="${${selected#*|}%%|*}"
   [[ "$command_name" == ":" ]] && return 0
-  _file_timed "file:$command_name" _file_dispatch "$command_name"
+  _file_dispatch "$command_name"
 }
 
 file-menu() {
   emulate -L zsh
 
-  case "${1:-}" in
-    "")
-      (( $# == 0 )) || return 2
-      _file_menu_interactive
+  if (( $# == 0 )); then
+    _file_menu_interactive
+    return $?
+  fi
+  case "$1" in
+    ""|*:*)
+      _file_error "Invalid command argument. Use 'file-menu --help'."
+      return 2
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -205,10 +209,7 @@ file-menu() {
       return 2
       ;;
     *)
-      local command_name="$1"
-      shift
-      _file_timed "file:$command_name" \
-        _file_dispatch "$command_name" "$@"
+      _file_dispatch "$@"
       ;;
   esac
 }

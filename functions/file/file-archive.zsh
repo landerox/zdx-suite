@@ -475,7 +475,7 @@ _file_compress_execute() {
     "Cancelled: nothing was created."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
 
@@ -646,12 +646,15 @@ file-compress() {
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _file_error "--help accepts no additional arguments."
+          return 2
+        }
         _file_compress_usage
         return 0
         ;;
       --format)
-        (( $# >= 2 )) || {
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
           _file_error "--format requires a value."
           return 2
         }
@@ -659,7 +662,7 @@ file-compress() {
         shift 2
         ;;
       --output)
-        (( $# >= 2 )) || {
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
           _file_error "--output requires a value."
           return 2
         }
@@ -1119,7 +1122,7 @@ _file_extract_snapshot_run() {
     "Cancelled: nothing was extracted."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
   _file_revalidate_mutation_target \
@@ -1352,13 +1355,16 @@ file-extract() {
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
-        (( $# == 1 )) || return 2
+        (( $# == 1 )) || {
+          _file_error "--help accepts no additional arguments."
+          return 2
+        }
         _file_extract_usage
         return 0
         ;;
       --destination)
-        (( $# >= 2 )) || {
-          _file_error "--destination requires a value."
+        (( $# >= 2 )) && [[ -n "$2" ]] || {
+          _file_error "--destination requires a directory."
           return 2
         }
         destination_dir="$2"

@@ -792,6 +792,10 @@ not a substitute for a real macOS host run.
 
 ### File coverage
 
+`file_safety.bats` verifies returned confirmation interruptions preserve the
+exact deletion target. `file_trash.bats` covers exact-ID recovery when a
+private trash container cannot be searched.
+
 `file_trash_transactions.bats` covers a real synchronized second invocation
 that consumes a reservation, container and same-content record replacement,
 no-clobber compensation and retained/nested recovery paths, interrupted
@@ -823,9 +827,16 @@ a recorder for the exact kernel and move version probes.
 `file_operation_boundary.bats` covers stale cwd/PWD, raw traversal, ancestor
 and reviewed-parent changes, complete scan records, unsafe or replaced staging
 objects/descriptors, renewed large-file size criteria and exact junk names.
+It also verifies the collector's actual returned producer statuses on
+list and delete routes with an external fixture that emits partial data.
 Two strict mktemp-recorder escape controls remain fixture evidence. All
 mutations are confined to disposable roots; native fixture execution does not
 establish macOS/WSL host acceptance or general producer-status conformance.
+
+`file_trash.bats` exercises the 4,096-entry boundary, refusal of a whole put
+that would cross it, and exact-ID restore and purge in oversized private
+containers. Its jq fixture emits data before returning failure and checks
+that the command keeps the status and withholds all JSON bytes.
 
 | File | Covered boundary |
 | --- | --- |

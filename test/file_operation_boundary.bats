@@ -333,15 +333,40 @@ MOCK
   printf '#!%s -f\n' "$(type -P zsh)" > "$FILE_BOUNDARY_BIN/find"
   cat >> "$FILE_BOUNDARY_BIN/find" <<'MOCK'
 emulate -R zsh
-[[ "$PWD" == "$FILE_BOUNDARY_WORK" ]] || exit 97
-print -rn -- "$FILE_BOUNDARY_WORK/item"$'\0'
-exit 42
+[[ "$PWD" == "$FILE_BOUNDARY_WORK" && "$1" == "$FILE_BOUNDARY_WORK" ]] || exit 97
+[[ "$FILE_SCAN_STATUS" == (0|42|130|143) ]] || exit 97
+print -r -- "$FILE_SCAN_STATUS" >> "$FILE_BOUNDARY_ROOT/find-receipts"
+print -rn -- "$1/item"$'\0'
+exit "$FILE_SCAN_STATUS"
 MOCK
   chmod -- 700 "$FILE_BOUNDARY_BIN/find"
-  run run_zsh 'source "$FILE_BOUNDARY_SETUP"; file-find-large --min-size 1 --delete --yes > "$FILE_BOUNDARY_ROOT/results"'
-  [ "$status" -ne 0 ]
-  [ ! -s "$FILE_BOUNDARY_ROOT/results" ]
-  [ -f "$FILE_BOUNDARY_WORK/item" ]
+  export FILE_SCAN_STATUS=0
+  run --separate-stderr run_zsh 'source "$FILE_BOUNDARY_SETUP"; file-find-large --min-size 1'
+  [ "$status" -eq 0 ]
+  [ "$output" = item ]
+
+  local rc result=0
+  for rc in 42 130 143; do
+    export FILE_SCAN_STATUS="$rc"
+    run --separate-stderr run_zsh '
+      source "$FILE_BOUNDARY_SETUP" || return $?
+      file-find-large --min-size 1
+    '
+    if [[ "$status" != "$rc" || -n "$output" ]]; then
+      printf 'listing wanted status %s, got %s\n%s\n' "$rc" "$status" "$stderr"
+      result=1
+    fi
+    run --separate-stderr run_zsh '
+      source "$FILE_BOUNDARY_SETUP" || return $?
+      file-find-large --min-size 1 --delete --yes
+    '
+    if [[ "$status" != "$rc" || -n "$output" || ! -f "$FILE_BOUNDARY_WORK/item" ]]; then
+      printf 'deletion wanted status %s, got %s\n%s\n' "$rc" "$status" "$stderr"
+      result=1
+    fi
+  done
+  [ "$result" -eq 0 ]
+  [ "$(cat "$FILE_BOUNDARY_ROOT/find-receipts")" = $'0\n42\n42\n130\n130\n143\n143' ]
 }
 
 @test "file boundary: archive execution rechecks its scope after an execution callback" {

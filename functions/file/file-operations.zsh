@@ -199,7 +199,8 @@ _file_quarantine_delete() {
         && _file_fingerprint_node_identity "$REPLY" \
         && [[ "$REPLY" == "$expected_node_identity" ]]; then
         _file_error "Deletion was incomplete; recovery data was retained."
-        _file_dim "Recovery path: $quarantine"
+        _file_path_display "$quarantine"
+        _file_label "Recovery path" "$REPLY"
       else
         _file_error "The deletion quarantine changed; its replacement was kept."
         _file_dim "Unverified path: $quarantine"
@@ -366,7 +367,7 @@ _file_delete_execute() {
     "Cancelled: nothing was deleted."
   local -i confirm_rc=$?
   (( confirm_rc == 0 )) || {
-    (( confirm_rc == 130 )) && return 0
+    (( confirm_rc == 3 )) && return 0
     return $confirm_rc
   }
   _file_delete_revalidate targets "$identities_text" || return 1

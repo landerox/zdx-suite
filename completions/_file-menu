@@ -55,7 +55,7 @@ fi
 case "$command_name" in
   file-compress)
     _arguments \
-      '(-h --help)'{-h,--help}'[show command help]' \
+      '(- *)'{-h,--help}'[show command help]' \
       '--format[archive format]:format:(tar.gz tar.xz tar.bz2 tar.zst zip 7z)' \
       '--output[output archive]:archive:_files' \
       '--overwrite[replace one unchanged regular output]' \
@@ -65,15 +65,15 @@ case "$command_name" in
     ;;
   file-extract)
     _arguments \
-      '(-h --help)'{-h,--help}'[show command help]' \
+      '(- *)'{-h,--help}'[show command help]' \
       '--destination[new extraction directory]:directory:_directories' \
       '--dry-run[validate and print the plan]' \
       '--yes[confirm the reviewed plan non-interactively]' \
-      '1:TAR archive:_files -g "*.(tar|tar.gz|tgz|tar.xz|tar.bz2|tar.zst|tzst)"'
+      '1:TAR archive:_files -g "(#i)*.(tar|tar.gz|tgz|tar.xz|tar.bz2|tar.zst|tzst)"'
     ;;
   file-find-large)
     _arguments \
-      '(-h --help)'{-h,--help}'[show command help]' \
+      '(- *)'{-h,--help}'[show command help]' \
       '--min-size[minimum byte size with optional K/M/G/T suffix]:size:' \
       '--delete[plan deletion of every match]' \
       '--dry-run[print the deletion plan without mutation]' \

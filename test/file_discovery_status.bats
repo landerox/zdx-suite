@@ -24,6 +24,35 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+@test "file discovery: the bounded search and empty deletion plan keep their streams" {
+  mkdir -p "$HOME/tree/a/b/c/d/e" "$HOME/tree/.git" "$HOME/tree/.tmp" \
+    "$HOME/tree/.venv" "$HOME/tree/node_modules"
+  local fixture
+  for fixture in a/b/c/d/at-five a/b/c/d/e/at-six .git/hidden .tmp/hidden \
+    .venv/hidden node_modules/hidden; do
+    printf 'data\n' > "$HOME/tree/$fixture"
+  done
+
+  run --separate-stderr run_zsh 'cd "$HOME/tree"; file-find-large --min-size 1'
+  [ "$status" -eq 0 ]
+  [ "$output" = a/b/c/d/at-five ]
+  [[ "$stderr" != *"No files meet the minimum size."* ]]
+
+  run --separate-stderr run_zsh 'cd "$HOME/tree"; file-find-large --min-size 1G'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" != *"No files meet the minimum size."* ]]
+
+  run --separate-stderr run_zsh '
+    cd "$HOME/tree"
+    file-find-large --min-size 1G --delete --dry-run
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"No files meet the minimum size."* ]]
+  [ -f "$HOME/tree/a/b/c/d/at-five" ]
+}
+
 @test "file discovery: inventory failures preserve status and suppress partial paths" {
   run run_zsh '
     file-menu --help >/dev/null 2>&1 || exit

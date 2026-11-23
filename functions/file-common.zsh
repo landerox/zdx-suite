@@ -811,7 +811,8 @@ _file_confirm() {
 }
 
 # Usage: _file_confirm_mutation <prompt> [auto-yes] [cancellation message]
-# Status 130 means the user declined; 2 means no terminal and no --yes.
+# Status 3 is an explicit decline. Missing or failed consent returns 1.
+# Returned interruptions keep their 130 or 143 status.
 _file_confirm_mutation() {
   local prompt="$1"
   local auto_yes="${2:-no}"
@@ -823,11 +824,16 @@ _file_confirm_mutation() {
     0) return 0 ;;
     1)
       _file_info "$cancelled_message"
-      return 130
+      return 3
       ;;
-    *)
+    2)
       _file_error "Confirmation requires a terminal; pass --yes to proceed."
-      return "$confirm_rc"
+      return 1
+      ;;
+    130|143) return "$confirm_rc" ;;
+    *)
+      _file_error "Could not obtain confirmation (status $confirm_rc)."
+      return 1
       ;;
   esac
 }
@@ -1463,7 +1469,9 @@ _file_collect_paths() {
     "${producer_command[@]}" 2>/dev/null \
       | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
         1>&$(( write_fd ))
-    scan_rc=$?
+    local -a scan_statuses=("${pipestatus[@]}")
+    scan_rc="${scan_statuses[1]}"
+    local -i limiter_rc="${scan_statuses[2]}"
     exec {write_fd}>&-
     write_fd=-1
 
@@ -1479,88 +1487,91 @@ _file_collect_paths() {
         "Candidate inventory exceeds the $_FILE_MAX_PICKER_BYTES byte limit."
       return 1
     }
-    (( scan_rc == 0 )) || {
-      _file_error "Could not scan candidate paths."
-      return 1
-    }
-    if ! sysopen -r -o nofollow,cloexec -u read_fd \
-      -- "$inventory_file" 2>/dev/null; then
-      return 1
+    if (( scan_rc != 0 )); then
+      _file_error "Could not scan candidate paths (status $scan_rc)."
+    elif (( limiter_rc != 0 )); then
+      _file_error "Could not bound the candidate inventory (status $limiter_rc)."
+      scan_rc=$limiter_rc
+    else
+      if ! sysopen -r -o nofollow,cloexec -u read_fd \
+        -- "$inventory_file" 2>/dev/null; then
+        return 1
+      fi
+      descriptor_state=()
+      zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
+        && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
+          == "$inventory_identity" ]] \
+        && (( descriptor_state[size] == current_state[size] )) || return 1
+      written_size=${descriptor_state[size]}
+      while true; do
+        chunk=""
+        chunk_bytes=0
+        sysread -c chunk_bytes -s 65536 -i "$read_fd" chunk
+        read_rc=$?
+        (( read_rc == 0 )) || break
+        (( total_bytes += chunk_bytes ))
+        (( total_bytes <= _FILE_MAX_PICKER_BYTES )) || return 1
+        content+="$chunk"
+      done
+      (( read_rc == 5 && total_bytes == written_size )) || {
+        _file_error "Could not read the complete path inventory."
+        return 1
+      }
+      descriptor_state=()
+      zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
+        && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
+          == "$inventory_identity" ]] \
+        && (( descriptor_state[size] == written_size )) || return 1
+      if [[ -n "$content" ]]; then
+        [[ "${content[-1]}" == $'\0' && "$content" != $'\0'* \
+          && "$content" != *$'\0\0'* ]] || {
+          _file_error "The path inventory contains an incomplete or empty record."
+          return 1
+        }
+        content="${content%$'\0'}"
+        records=("${(@ps:\0:)content}")
+      fi
+      for candidate in "${records[@]}"; do
+        node="${candidate%/}"
+        [[ "$node" == "${scan_root%/}/"* && "$node" == "${node:a}" ]] || {
+          _file_error "The path inventory contains an out-of-scope record."
+          return 1
+        }
+        relative="${candidate#"${scan_root%/}/"}"
+        [[ "/$relative" == */.git || "/$relative" == */.git/* \
+          || "/$relative" == */node_modules || "/$relative" == */node_modules/* \
+          || "/$relative" == */.venv || "/$relative" == */.venv/* \
+          || "/$relative" == */.tmp || "/$relative" == */.tmp/* ]] && continue
+        [[ "$node_filter" == "junk" \
+          && "/$relative" == */(vendor|vendored|site-packages|dist-packages|.tox|.nox|*.git)/* ]] \
+          && continue
+        [[ "$requested_root" == /* ]] || candidate="${candidate#"${cwd_base%/}/"}"
+        _file_path_is_displayable "$candidate" || {
+          if [[ "$node_filter" == "junk" ]]; then
+            _file_warn "Skipped a path whose name contains control characters."
+          else
+            _file_warn "Excluded a path that cannot be represented safely in fzf."
+          fi
+          continue
+        }
+        scanned_paths+=("$candidate")
+        (( ++count <= _FILE_MAX_CANDIDATES )) || {
+          _file_error \
+            "Candidate inventory exceeds the $_FILE_MAX_CANDIDATES entry limit."
+          return 1
+        }
+      done
+      exec {read_fd}>&-
+      read_fd=-1
+      _file_current_base "$PWD" || return 1
+      [[ "$REPLY" == "$cwd_base" ]] || return 1
+      _file_directory_identity "$cwd_base" \
+        && [[ "$REPLY" == "$cwd_identity" ]] || return 1
+      _file_directory_identity "$scan_root" \
+        && [[ "$REPLY" == "$scan_identity" ]] || return 1
+      reply=("${scanned_paths[@]}")
+      scan_rc=0
     fi
-    descriptor_state=()
-    zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
-      && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
-        == "$inventory_identity" ]] \
-      && (( descriptor_state[size] == current_state[size] )) || return 1
-    written_size=${descriptor_state[size]}
-    while true; do
-      chunk=""
-      chunk_bytes=0
-      sysread -c chunk_bytes -s 65536 -i "$read_fd" chunk
-      read_rc=$?
-      (( read_rc == 0 )) || break
-      (( total_bytes += chunk_bytes ))
-      (( total_bytes <= _FILE_MAX_PICKER_BYTES )) || return 1
-      content+="$chunk"
-    done
-    (( read_rc == 5 && total_bytes == written_size )) || {
-      _file_error "Could not read the complete path inventory."
-      return 1
-    }
-    descriptor_state=()
-    zstat -H descriptor_state -f "$read_fd" 2>/dev/null \
-      && [[ "${descriptor_state[device]}:${descriptor_state[inode]}:${descriptor_state[mode]}:${descriptor_state[uid]}:${descriptor_state[nlink]}" \
-        == "$inventory_identity" ]] \
-      && (( descriptor_state[size] == written_size )) || return 1
-    if [[ -n "$content" ]]; then
-      [[ "${content[-1]}" == $'\0' && "$content" != $'\0'* \
-        && "$content" != *$'\0\0'* ]] || {
-        _file_error "The path inventory contains an incomplete or empty record."
-        return 1
-      }
-      content="${content%$'\0'}"
-      records=("${(@ps:\0:)content}")
-    fi
-    for candidate in "${records[@]}"; do
-      node="${candidate%/}"
-      [[ "$node" == "${scan_root%/}/"* && "$node" == "${node:a}" ]] || {
-        _file_error "The path inventory contains an out-of-scope record."
-        return 1
-      }
-      relative="${candidate#"${scan_root%/}/"}"
-      [[ "/$relative" == */.git || "/$relative" == */.git/* \
-        || "/$relative" == */node_modules || "/$relative" == */node_modules/* \
-        || "/$relative" == */.venv || "/$relative" == */.venv/* \
-        || "/$relative" == */.tmp || "/$relative" == */.tmp/* ]] && continue
-      [[ "$node_filter" == "junk" \
-        && "/$relative" == */(vendor|vendored|site-packages|dist-packages|.tox|.nox|*.git)/* ]] \
-        && continue
-      [[ "$requested_root" == /* ]] || candidate="${candidate#"${cwd_base%/}/"}"
-      _file_path_is_displayable "$candidate" || {
-        if [[ "$node_filter" == "junk" ]]; then
-          _file_warn "Skipped a path whose name contains control characters."
-        else
-          _file_warn "Excluded a path that cannot be represented safely in fzf."
-        fi
-        continue
-      }
-      scanned_paths+=("$candidate")
-      (( ++count <= _FILE_MAX_CANDIDATES )) || {
-        _file_error \
-          "Candidate inventory exceeds the $_FILE_MAX_CANDIDATES entry limit."
-        return 1
-      }
-    done
-    exec {read_fd}>&-
-    read_fd=-1
-    _file_current_base "$PWD" || return 1
-    [[ "$REPLY" == "$cwd_base" ]] || return 1
-    _file_directory_identity "$cwd_base" \
-      && [[ "$REPLY" == "$cwd_identity" ]] || return 1
-    _file_directory_identity "$scan_root" \
-      && [[ "$REPLY" == "$scan_identity" ]] || return 1
-    reply=("${scanned_paths[@]}")
-    scan_rc=0
   } always {
     (( write_fd >= 0 )) && exec {write_fd}>&-
     (( read_fd >= 0 )) && exec {read_fd}>&-
@@ -2349,18 +2360,29 @@ _file_publish_staged_file() {
 # --- Dispatcher -------------------------------------------------------------
 
 _file_dispatch() {
+  emulate -L zsh
   local command_name="${1:-}"
   shift 2>/dev/null || true
 
   case "$command_name" in
-    file-compress)   file-compress "$@" ;;
-    file-extract)    file-extract "$@" ;;
-    file-find-large) file-find-large "$@" ;;
-    file-trash)      file-trash "$@" ;;
-    file-clean-junk) file-clean-junk "$@" ;;
+    file-compress)
+      _file_timed "file:file-compress" file-compress "$@"
+      ;;
+    file-extract)
+      _file_timed "file:file-extract" file-extract "$@"
+      ;;
+    file-find-large)
+      _file_timed "file:file-find-large" file-find-large "$@"
+      ;;
+    file-trash)
+      _file_timed "file:file-trash" file-trash "$@"
+      ;;
+    file-clean-junk)
+      _file_timed "file:file-clean-junk" file-clean-junk "$@"
+      ;;
     :)               return 0 ;;
     *)
-      _file_error "Unknown command: $command_name"
+      _file_error "Unknown command. Use 'file-menu --help'."
       return 2
       ;;
   esac

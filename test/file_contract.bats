@@ -8,6 +8,30 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "file contract: invalid tokens are diagnosed before timing or dependency work" {
+  run run_zsh '
+    _file_timed() { print -r -- "$1 $2" >> "$HOME/timing"; shift; "$@"; }
+    forged-file-action() { print -r -- reached >> "$HOME/unexpected"; }
+    fzf() { print -r -- reached >> "$HOME/unexpected"; return 130; }
+    typeset -i actual=0
+    for token in "" : forged-file-action; do
+      actual=0
+      file-menu "$token" >"$HOME/data" 2>"$HOME/ui" || actual=$?
+      [[ "$actual" == 2 && ! -s "$HOME/data" && -s "$HOME/ui" ]] || return 91
+    done
+    _file_dispatch : || return 92
+    [[ ! -e "$HOME/timing" && ! -e "$HOME/unexpected" ]] || return 93
+
+    file-compress() { print -r -- "$#:$1"; return 42; }
+    setopt shwordsplit
+    _file_dispatch file-compress "literal argument" || actual=$?
+    [[ "$actual" == 42 && -o shwordsplit ]] || return 94
+    command cat "$HOME/timing"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'1:literal argument\nfile:file-compress file-compress' ]
+}
+
 @test "file contract: snapshot membership treats full rows literally" {
   run run_zsh '
     local selected="Archive|file-archive|Files, folders (bounded)."
@@ -176,7 +200,7 @@ file_fixture_unique() {
     [[ "$extract_help" == *"$extension"* ]]
     grep -Fq "\`$extension\`" "$TEST_SUITE_ROOT/docs/file-menu.md"
   done
-  grep -Fq '_files -g "*.(tar|tar.gz|tgz|tar.xz|tar.bz2|tar.zst|tzst)"' "$completion"
+  grep -Fq '_files -g "(#i)*.(tar|tar.gz|tgz|tar.xz|tar.bz2|tar.zst|tzst)"' "$completion"
 
   # The extraction limit is documented wherever settings are.
   [[ "$extract_help" == *"FILE_EXTRACT_MAX_GIB (1-64, default 1)"* ]]

@@ -51,7 +51,7 @@ teardown() {
     print -r -- data > victim
     file-find-large --min-size 1 --delete
   '
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [ -f "$HOME/large/victim" ]
   [[ "$output" == *"pass --yes"* ]]
 }
