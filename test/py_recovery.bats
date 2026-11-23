@@ -2,8 +2,10 @@
 # shellcheck disable=SC2016,SC2030,SC2031
 
 setup() {
-  export PY_RECOVERY_REAL_PYTHON PY_RECOVERY_REAL_UV
+  unset PY_RECOVERY_INTERACTIVE_MODE
+  export PY_RECOVERY_REAL_PYTHON PY_RECOVERY_REAL_UV PY_RECOVERY_REAL_ZSH
   PY_RECOVERY_REAL_PYTHON="$(type -P python3)"
+  PY_RECOVERY_REAL_ZSH="$(type -P zsh)"
   PY_RECOVERY_REAL_UV="$(type -P uv || true)"
   load test_helper
   export PY_RECOVERY_LOG="$HOME/python.calls"
@@ -28,8 +30,8 @@ case "$*" in
   'tool upgrade '* )
     print -r -- "uv:$3" >> "$PY_RECOVERY_LOG"
     print -r -- "Resolved 1 package for $3"
-    if [[ -n "${PY_RECOVERY_SIGNAL_READY:-}" ]]; then
-      : > "$PY_RECOVERY_SIGNAL_READY"
+    if [[ "${PY_RECOVERY_INTERACTIVE_MODE:-}" == tool ]]; then
+      print -r -- ZDX_PY_RECOVERY_READY > /dev/tty || exit 94
       command sleep 8
       exit 98
     fi
@@ -103,7 +105,6 @@ EOF
 }
 
 @test "py recovery: private terminal Ctrl-C keeps the public tool and batch reports" {
-  export PY_RECOVERY_SIGNAL_READY="$HOME/interrupt-ready"
   export PY_RECOVERY_DRIVER="$HOME/interrupt-driver.zsh"
   cat > "$PY_RECOVERY_DRIVER" <<'EOF'
 emulate -R zsh
@@ -118,60 +119,42 @@ else
     command awk -F '|' '$2 == "venv-list" || $2 == "tool-list" { print }'
   }
   venv-list() {
-    : > "$PY_RECOVERY_SIGNAL_READY"
-    command sleep 8
+    command "$PY_RECOVERY_REAL_ZSH" -f -c '
+      emulate -R zsh
+      print -r -- ZDX_PY_RECOVERY_READY > /dev/tty || exit 94
+      exec sleep 8
+    ' || return $?
     return 98
   }
   tool-list() { print -u2 -r -- "UNEXPECTED_LATER_TASK"; }
   py-menu --multi
 fi
-local result=$?
+local result=$? acknowledgement
 print -r -- "PTY_COMMAND_RETURN:$result"
+print -r -- ZDX_PY_RECOVERY_REPORT_COMPLETE
+IFS= read -r -t 5 acknowledgement || exit 95
+[[ -z "$acknowledgement" ]] || exit 96
 exit "$result"
 EOF
 
   local mode
   for mode in tool batch; do
     export PY_RECOVERY_INTERACTIVE_MODE="$mode"
-    rm -f -- "$PY_RECOVERY_SIGNAL_READY"
-    run run_zsh '
-      zmodload zsh/zpty && zmodload zsh/datetime || return 90
-      zpty -b PY_RECOVERY_PTY zsh -f -i "${(q)PY_RECOVERY_DRIVER}" || return 91
-      local output="" chunk=""
-      local -i sent=0
-      local -F deadline=$(( EPOCHREALTIME + 12 ))
-      {
-        while (( EPOCHREALTIME < deadline )); do
-          if zpty -r -t PY_RECOVERY_PTY chunk 2>/dev/null; then
-            output+="$chunk"
-          fi
-          if (( ! sent )) && [[ -f "$PY_RECOVERY_SIGNAL_READY" ]]; then
-            zpty -n -w PY_RECOVERY_PTY $'\''\003'\'' || return 92
-            sent=1
-          fi
-          [[ "$output" == *PTY_COMMAND_RETURN:* ]] && break
-          zpty -t PY_RECOVERY_PTY || break
-          command sleep 0.02
-        done
-        while zpty -r -t PY_RECOVERY_PTY chunk 2>/dev/null; do
-          output+="$chunk"
-        done
-      } always {
-        zpty -d PY_RECOVERY_PTY 2>/dev/null
-      }
-      print -r -- "${output//$'\''\r'\''/}"
-      (( sent )) || return 93
-      [[ "$output" == *PTY_COMMAND_RETURN:130* ]]
-    '
+    run -130 "$PY_RECOVERY_REAL_PYTHON" -B -I -S "$TEST_SUITE_ROOT/test/fixtures/private-terminal.py" \
+      ZDX_PY_RECOVERY_READY ZDX_PY_RECOVERY_REPORT_COMPLETE \
+      "$PY_RECOVERY_REAL_ZSH" -f -i "$PY_RECOVERY_DRIVER"
 
-    [ "$status" -eq 0 ]
+    [[ "$output" == *'PTY_CTRL_C_SENT:True'* ]]
+    [[ "$output" == *'PTY_CHILD_STATUS:130'* ]]
     [[ "$output" == *'PTY_COMMAND_RETURN:130'* ]]
     if [[ "$mode" == tool ]]; then
       [[ "$output" == *'Tool upgrades interrupted (status 130): 1 interrupted · 2 not run.'* ]]
       [[ "$output" == *'tool-upgrade alpha --backend uv'* ]]
       [ "$(cat "$PY_RECOVERY_LOG")" = 'uv:alpha' ]
     else
-      [[ "$output" == *'Task Summary'*'– not run'* ]]
+      [[ "$output" == *'Task Summary'* ]]
+      printf '%s\n' "$output" | grep -Eq '^  venv-list +✘ interrupted .*status 130$'
+      printf '%s\n' "$output" | grep -Eq '^  tool-list +– not run .*batch interrupted$'
       [[ "$output" == *'Tasks were interrupted (status 130)'* ]]
       [[ "$output" != *'UNEXPECTED_LATER_TASK'* ]]
     fi

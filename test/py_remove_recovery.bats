@@ -107,86 +107,6 @@ _py_assert_no_mounts_under() {
 }
 cd -q -- "$PY_REMOVE_PROJECT" || return 1
 ZSH
-  cat > "$HOME/remove-pty.py" <<'PY'
-import errno
-import os
-import pty
-import select
-import signal
-import sys
-import time
-
-# Own exactly the child returned by forkpty. Ctrl-C goes only to its private
-# terminal; fallback signals address that still-unreaped child, never a group.
-pid, terminal = pty.fork()
-if pid == 0:
-    program = ('emulate -R zsh; source "$PY_REMOVE_SETUP" || exit $?; '
-               'venv-remove --path "$PY_REMOVE_PROJECT/.venv" --yes')
-    os.execv(os.environ['PY_REMOVE_REAL_ZSH'],
-             [os.environ['PY_REMOVE_REAL_ZSH'], '-f', '-i', '-c', program])
-output = bytearray()
-status = None
-sent = False
-deadline = time.monotonic() + 12
-try:
-    while time.monotonic() < deadline:
-        if select.select([terminal], [], [], 0.05)[0]:
-            try:
-                data = os.read(terminal, 65536)
-            except OSError as error:
-                if error.errno != errno.EIO:
-                    raise
-                data = b''
-            output.extend(data)
-            if len(output) > 1024 * 1024:
-                raise RuntimeError('private terminal output exceeded its limit')
-            if not sent and b'ZDX_REMOVE_READY' in output:
-                os.write(terminal, b'\x03')
-                sent = True
-            if not data:
-                break
-        found, child_status = os.waitpid(pid, os.WNOHANG)
-        if found:
-            status = child_status
-            # Drain queued output after the tracked child exits.
-            while select.select([terminal], [], [], 0.05)[0]:
-                try:
-                    data = os.read(terminal, 65536)
-                except OSError as error:
-                    if error.errno != errno.EIO:
-                        raise
-                    break
-                if not data:
-                    break
-                output.extend(data)
-            break
-finally:
-    if status is None:
-        found, child_status = os.waitpid(pid, os.WNOHANG)
-        if found:
-            status = child_status
-        else:
-            # This PID is still our own unreaped forkpty child.
-            os.kill(pid, signal.SIGTERM)
-            limit = time.monotonic() + 2
-            while time.monotonic() < limit:
-                found, child_status = os.waitpid(pid, os.WNOHANG)
-                if found:
-                    status = child_status
-                    break
-                time.sleep(0.02)
-            if status is None:
-                os.kill(pid, signal.SIGKILL)
-                _, status = os.waitpid(pid, 0)
-    os.close(terminal)
-sys.stdout.write(output.decode('utf-8', 'replace').replace('\r', ''))
-code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
-print('PTY_CTRL_C_SENT:' + str(sent))
-print('PTY_CHILD_STATUS:' + str(code))
-if not sent:
-    raise SystemExit(97)
-raise SystemExit(code if code >= 0 else 128 - code)
-PY
 }
 
 teardown() {
@@ -207,7 +127,12 @@ assert_retained_environment() {
 
 @test "py remove recovery: real private-terminal Ctrl-C reports the retained environment" {
   export PY_REMOVE_MODE=terminal
-  run -130 "$PY_REMOVE_REAL_PYTHON" -B -I -S "$HOME/remove-pty.py"
+  run -130 "$PY_REMOVE_REAL_PYTHON" -B -I -S "$TEST_SUITE_ROOT/test/fixtures/private-terminal.py" \
+    ZDX_REMOVE_READY "" "$PY_REMOVE_REAL_ZSH" -f -i -c '
+      emulate -R zsh
+      source "$PY_REMOVE_SETUP" || exit $?
+      venv-remove --path "$PY_REMOVE_PROJECT/.venv" --yes
+    '
   [[ "$output" == *'PTY_CTRL_C_SENT:True'* ]]
   [[ "$output" == *'PTY_CHILD_STATUS:130'* ]]
   assert_retained_environment

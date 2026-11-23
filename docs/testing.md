@@ -919,7 +919,10 @@ The Python result fixtures exercise exact `python -I -m pip` display, environmen
 refusal of `--dev`, tool no-change and removal evidence, failed runtime
 inventory, partial creation, and interrupted rebuild staging and sync.
 `py_recovery.bats` also sends Ctrl-C through a private terminal and checks the
-reports and return statuses of tool upgrades and read-only batches.
+reports and return statuses of tool upgrades and read-only batches. It
+uses the same private terminal reader as the removal test. The driver
+consumes the complete report before the terminal closes, and the test
+checks both the reported command status and the child exit status.
 
 | File | Covered boundary |
 | --- | --- |
