@@ -3,35 +3,13 @@
 # Py PyPI: bounded metadata inspection and environment-scoped package changes
 # =============================================================================
 #
-# Sourced by py-menu.zsh. Depends on py-common and py-venv.
+# Loaded by py-menu.zsh after py-common.zsh and py-venv.zsh.
 # Idempotent and free of source-time capability probes.
 #
 
 if [[ -n "${_PY_PYPI_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
-
-_py_prompt_package_name() {
-  local purpose="${1:-Package}"
-  [[ -t 0 && -t 2 ]] || {
-    _py_error "A package name is required in non-interactive mode."
-    return 1
-  }
-  print -nu2 -r -- "$purpose name: "
-  local package_name=""
-  IFS= read -r package_name
-  local -i read_rc=$?
-  if (( read_rc != 0 )); then
-    print -u2 -r -- ""
-    _py_info "Cancelled."
-    return 130
-  fi
-  _py_validate_package_name "$package_name" || {
-    _py_error "Package names may contain only letters, digits, dot, underscore, and hyphen."
-    return 2
-  }
-  REPLY="$package_name"
-}
 
 _py_validate_project_file() {
   local file_path="${1:-}"

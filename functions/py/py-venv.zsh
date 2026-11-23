@@ -3,7 +3,7 @@
 # Py Venv: validated local environments and uv-managed Python runtimes
 # =============================================================================
 #
-# Sourced by py-menu.zsh. Depends on py-common.
+# Loaded by py-menu.zsh after py-common.zsh.
 # Idempotent and free of source-time capability probes.
 #
 

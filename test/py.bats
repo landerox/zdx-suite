@@ -8,6 +8,23 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "py: the tools module needs only its declared common helpers" {
+  run --separate-stderr zsh -f -c '
+    emulate -R zsh
+    source "$1/functions/py-common.zsh" || exit 90
+    source "$1/functions/py/py-tools.zsh" || exit 91
+    source "$1/functions/py/py-tools.zsh" || exit 92
+    (( ! ${+functions[package-install]} && ! ${+functions[venv-create]} )) || exit 93
+    _py_check_command() { print -r -- reached > "$HOME/tool-dependency"; return 94; }
+    tool-install </dev/null
+  ' _ "$TEST_SUITE_ROOT"
+
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"A package name is required in non-interactive mode."* ]]
+  [ ! -e "$HOME/tool-dependency" ]
+}
+
 @test "py: sourcing twice is silent and performs no capability probes" {
   local backend
   for backend in fzf uv pipx curl python3; do
