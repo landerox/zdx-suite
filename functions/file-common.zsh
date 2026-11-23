@@ -2017,6 +2017,218 @@ _file_mount_table_clear_below() {
   done
 }
 
+# Shared private staging for archives and transfer tree inventories.
+_file_archive_stage_dir() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  _file_validate_temp_parent "$1" "archive staging" || return 1
+  local parent_dir="$REPLY"
+  reply=()
+
+  local stage_dir=""
+  stage_dir=$(umask 077; command mktemp -d \
+    "${parent_dir}/.zdx-file-archive.XXXXXX" 2>/dev/null) || {
+    _file_error "Could not create a private archive staging directory."
+    return 1
+  }
+  _file_validate_private_temp \
+    "$stage_dir" "$parent_dir" ".zdx-file-archive." directory || {
+    _file_error "Refusing an unsafe archive staging directory."
+    return 1
+  }
+
+  local -A state=()
+  if [[ "$stage_dir" != "${stage_dir:a}" \
+    || "$stage_dir" != "${stage_dir:A}" \
+    || "${stage_dir:h}" != "$parent_dir" \
+    || "${stage_dir:t}" != .zdx-file-archive.* \
+    || ! -d "$stage_dir" || -L "$stage_dir" ]] \
+    || ! zstat -LH state -- "$stage_dir" 2>/dev/null \
+    || (( (state[mode] & 8#170000) != 8#040000 \
+      || state[uid] != EUID \
+      || (state[mode] & 8#77) != 0 )); then
+    _file_error "Refusing an unsafe archive staging directory."
+    return 1
+  fi
+
+  reply=(
+    "$stage_dir"
+    "${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}"
+  )
+}
+
+# Report only an object that still matches the original device/inode/owner as
+# recovery data. A replacement pathname remains unverified and is never read.
+_file_archive_stage_retained() {
+  emulate -L zsh
+  local stage_dir="$1" expected_identity="$2" label="Unverified path"
+  local -a expected=("${(@s/:/)expected_identity}")
+  local -A state=()
+  if [[ ! -e "$stage_dir" && ! -L "$stage_dir" ]] \
+    && _file_archive_stage_parent_accessible "$stage_dir"; then
+    return 0
+  fi
+  if (( ${#expected} == 4 )) && [[ -d "$stage_dir" && ! -L "$stage_dir" ]] \
+    && zstat -LH state -- "$stage_dir" 2>/dev/null \
+    && [[ "${state[device]}:${state[inode]}:${state[uid]}" \
+      == "${expected[1]}:${expected[2]}:${expected[4]}" ]]; then
+    label="Recovery path"
+    _file_warn "Archive staging remains; its contents may be incomplete or unvalidated."
+  else
+    _file_warn "The staging path no longer identifies the reviewed object; inspect it separately."
+  fi
+  _file_path_display "$stage_dir"
+  _file_label "$label" "$REPLY"
+}
+
+# Negative path predicates establish absence only through a searchable,
+# canonical parent. An inaccessible parent leaves the observation unknown.
+_file_archive_stage_parent_accessible() {
+  emulate -L zsh
+  local parent_dir="${1:h}" REPLY=""
+  [[ -d "$parent_dir" && ! -L "$parent_dir" && -x "$parent_dir" \
+    && "$parent_dir" == "${parent_dir:A}" ]] \
+    && _file_validate_ancestor_chain "$1" 2>/dev/null
+}
+
+_file_archive_cleanup_stage() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local stage_dir="$1"
+  local expected_identity="$2"
+  [[ -n "$stage_dir" && -n "$expected_identity" ]] || return 0
+  [[ -d "$stage_dir" && ! -L "$stage_dir" \
+    && "$stage_dir" == "${stage_dir:a}" \
+    && "$stage_dir" == "${stage_dir:A}" \
+    && "${stage_dir:t}" == .zdx-file-archive.* ]] || {
+    _file_warn "The archive staging path changed; refusing cleanup."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    return 1
+  }
+  local -A state=()
+  zstat -LH state -- "$stage_dir" 2>/dev/null || {
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    return 1
+  }
+  [[ "${state[device]}:${state[inode]}:${state[mode]}:${state[uid]}" \
+    == "$expected_identity" ]] || {
+    _file_warn "The archive staging identity changed; refusing cleanup."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    return 1
+  }
+  local -i removal_rc=0
+  command rm -rf -- "$stage_dir" 2>/dev/null || removal_rc=$?
+  if (( removal_rc != 0 )) || [[ -e "$stage_dir" || -L "$stage_dir" ]] \
+    || ! _file_archive_stage_parent_accessible "$stage_dir"; then
+    _file_warn "Could not remove archive staging completely."
+    _file_archive_stage_retained "$stage_dir" "$expected_identity"
+    (( removal_rc == 0 )) || return "$removal_rc"
+    return 1
+  fi
+  return 0
+}
+
+# Validates every node of a recursive transfer or deletion target: owned, not
+# group/world-writable, singly linked when a regular file, representable, and
+# free of links, special files, and mounts. The mount checks share the
+# caller's pass snapshot when one is declared (see _file_mount_snapshot).
+_file_validate_tree_for_transfer() {
+  emulate -L zsh
+  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+  local tree_root="$1" require_owner_rwx="${2:-no}"
+  [[ "$require_owner_rwx" == no || "$require_owner_rwx" == yes ]] || return 2
+  [[ ( -f "$tree_root" || -d "$tree_root" ) && ! -L "$tree_root" ]] \
+    || return 1
+  _file_require_cmd head "bounded tree inventory" || return 1
+  if (( ! ${+_file_mount_mode} )); then
+    local _file_mount_mode=""
+    local -A _file_mount_targets=()
+  fi
+  if [[ -z "$_file_mount_mode" ]]; then
+    _file_mount_snapshot || return $?
+  fi
+  # The staging helper returns through reply; callers such as
+  # _file_archive_inputs_plan accumulate their own results in reply.
+  local -a reply=()
+  _file_archive_stage_dir "${TMPDIR:-/tmp}" || return 1
+  local inventory_dir="${reply[1]}"
+  local inventory_identity="${reply[2]}"
+  local inventory_file="${inventory_dir}/tree"
+  local entry=""
+  local -i entry_count=0 scan_rc=1 producer_rc=1 cleanup_rc=0
+  {
+    setopt local_options pipefail
+    command find "$tree_root" -mindepth 1 -print0 2>/dev/null \
+      | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
+        > "$inventory_file"
+    producer_rc=$?
+    local -A inventory_state=()
+    zmodload -F zsh/stat b:zstat 2>/dev/null \
+      && zstat -LH inventory_state -- "$inventory_file" 2>/dev/null \
+      || return 1
+    (( inventory_state[size] <= _FILE_MAX_PICKER_BYTES )) || {
+      _file_error "Transfer inventory exceeds the byte limit: $tree_root"
+      return 1
+    }
+    (( producer_rc == 0 )) || {
+      _file_error "Could not inventory transfer target: $tree_root"
+      if [[ "$require_owner_rwx" == yes ]]; then
+        _file_dim "Review tree directory access; trash requires owner read, write, and search permission. Use chmod u+rwx only after reviewing the affected directories."
+      fi
+      return 1
+    }
+    local -a inspected_entries=("$tree_root")
+    while IFS= read -r -d '' entry; do
+      (( ++entry_count <= _FILE_MAX_CANDIDATES )) || {
+        _file_error "Transfer inventory exceeds the entry limit: $tree_root"
+        return 1
+      }
+      if [[ -L "$entry" \
+        || ( ! -f "$entry" && ! -d "$entry" ) ]]; then
+        _file_error "Transfers refuse links and special files: $entry"
+        return 1
+      fi
+      inspected_entries+=("$entry")
+    done < "$inventory_file"
+    local inspected_entry=""
+    local -A entry_state=()
+    for inspected_entry in "${inspected_entries[@]}"; do
+      _file_path_is_displayable "$inspected_entry" \
+        && [[ "$inspected_entry" != *'|'* ]] || {
+        _file_error "Transfers refuse unrepresentable tree names."
+        return 1
+      }
+      entry_state=()
+      zstat -LH entry_state -- "$inspected_entry" 2>/dev/null || return 1
+      (( entry_state[uid] == EUID \
+        && (entry_state[mode] & 8#22) == 0 )) || {
+        _file_error \
+          "Transfers require owned, non-writable tree entries: $inspected_entry"
+        return 1
+      }
+      if [[ "$require_owner_rwx" == yes && -d "$inspected_entry" ]] \
+        && (( (entry_state[mode] & 8#700) != 8#700 )); then
+        _file_error "Trash requires owner read, write, and search permission: $inspected_entry"
+        _file_dim "Review the directory and use chmod u+rwx before retrying."
+        return 1
+      fi
+      if [[ -f "$inspected_entry" ]] && (( entry_state[nlink] != 1 )); then
+        _file_error \
+          "Transfers refuse hard-linked regular files: $inspected_entry"
+        return 1
+      fi
+      _file_mountpoint_clear "$inspected_entry" || return 1
+    done
+    _file_mount_table_clear_below "$tree_root" || return 1
+    scan_rc=0
+  } always {
+    _file_archive_cleanup_stage "$inventory_dir" "$inventory_identity" \
+      || cleanup_rc=$?
+    (( cleanup_rc == 0 )) || scan_rc=1
+  }
+  return $scan_rc
+}
+
 _file_delete_mounts_clear() {
   local target="$1"
   if [[ -d "$target" && ! -L "$target" ]]; then

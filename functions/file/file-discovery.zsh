@@ -3,7 +3,7 @@
 # File Discovery: bounded large-file inspection and junk-file cleanup
 # =============================================================================
 #
-# Loaded by file-menu.zsh after file-common.zsh.
+# Loaded by file-menu.zsh after file-common.zsh and file-operations.zsh.
 # Safe to re-source; defines functions only.
 #
 
