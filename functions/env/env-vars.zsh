@@ -20,8 +20,7 @@ _env_exported_keys() {
     key="${key#type:}"
     [[ "$key" =~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$' ]] || continue
     parameter_type="${_env_export_snapshot[type:$key]-}"
-    [[ "$parameter_type" == scalar* \
-      && "$parameter_type" == *export* ]] || continue
+    _env_export_type_is_scalar "$parameter_type" || continue
     exported_keys+=("$key")
     (( ${#exported_keys[@]} <= _ENV_MAX_RECORDS * 8 )) || {
       _env_error "The exported-variable inventory exceeds its safe limit."
@@ -51,8 +50,7 @@ _env_copy_exported_variable() {
     return 1
   }
   local parameter_type="${_env_export_snapshot[type:$key]-}"
-  [[ "$parameter_type" == scalar* \
-    && "$parameter_type" == *export* ]] || {
+  _env_export_type_is_scalar "$parameter_type" || {
     _env_error "No exported scalar variable named '$key' exists."
     return 1
   }
@@ -282,7 +280,7 @@ _env_path_snapshot() {
 
     if [[ -z "$entry" ]]; then
       entry_state="current-directory"
-      [[ -w "$PWD" ]] && writable_state="yes" || writable_state="no"
+      [[ -w . ]] && writable_state="yes" || writable_state="no"
     elif [[ -d "$entry" ]]; then
       entry_state="exists"
       [[ -w "$entry" ]] && writable_state="yes" || writable_state="no"
@@ -290,6 +288,7 @@ _env_path_snapshot() {
       entry_state="missing"
       writable_state="n/a"
     fi
+    [[ -n "$entry" && "$entry" != /* ]] && entry_state="relative"
     entry_states+=("$entry_state")
     entry_writable+=("$writable_state")
     entry_duplicates+=("$duplicate_state")
@@ -359,6 +358,19 @@ _env_path_report_case_variants() {
   done
 }
 
+_env_path_report_relative_entries() {
+  local -i count=0
+  local entry_state=""
+  for entry_state in "${_ENV_PATH_STATES[@]}"; do
+    case "$entry_state" in
+      relative|current-directory) (( ++count )) ;;
+    esac
+  done
+  (( count > 0 )) || return 0
+  _env_count_noun "$count" "PATH entry" "PATH entries"
+  _env_warn "Detected $REPLY resolved from the current directory."
+}
+
 env-path() {
   emulate -L zsh
   local list_mode="no"
@@ -405,8 +417,7 @@ env-path() {
       if [[ -z "$entry" ]]; then
         display_entry="<current-directory>"
       else
-        _env_visible_field "$entry"
-        display_entry="$REPLY"
+        display_entry="${(V)entry}"
       fi
       printf '%d\t%s\t%s\t%s\t%s\n' \
         "$index" "$display_entry" \
@@ -414,23 +425,24 @@ env-path() {
         "${_ENV_PATH_WRITABLE[index]}" \
         "${_ENV_PATH_DUPLICATE_FLAGS[index]}"
     done
+    _env_path_report_relative_entries
     _env_clear_path_snapshot
     return 0
   fi
 
   if [[ "$dedupe" == "no" ]]; then
     _env_header "PATH Inspection"
+    local -a rows=()
+    local row=""
     for (( index = 1; index <= ${#_ENV_PATH_ENTRIES[@]}; ++index )); do
       entry="${_ENV_PATH_ENTRIES[index]}"
-      if [[ -z "$entry" ]]; then
-        display_entry="<current-directory>"
-      else
-        _env_visible_field "$entry"
-        display_entry="$REPLY"
-      fi
-      _env_dim \
-        "$index. $display_entry | ${_ENV_PATH_STATES[index]} | writable=${_ENV_PATH_WRITABLE[index]} | duplicate=${_ENV_PATH_DUPLICATE_FLAGS[index]}"
+      _env_path_display "$entry"
+      row="$index"$'\t'"$REPLY"$'\t'"${_ENV_PATH_STATES[index]}"
+      row+=$'\t'"${_ENV_PATH_WRITABLE[index]}"$'\t'"${_ENV_PATH_DUPLICATE_FLAGS[index]}"
+      rows+=("$row")
     done
+    _env_table $'#\tEntry\tState\tWritable\tDuplicate' "${rows[@]}"
+    _env_path_report_relative_entries
     if (( ${#_ENV_PATH_DUPLICATES[@]} > 0 )); then
       _env_count_noun "${#_ENV_PATH_DUPLICATES[@]}" \
         "duplicate PATH entry" "duplicate PATH entries"
@@ -445,8 +457,9 @@ env-path() {
   fi
 
   _env_header "PATH Deduplication Plan"
-  _env_info "Entries before: ${#_ENV_PATH_ENTRIES[@]}"
-  _env_info "Entries after: ${#_ENV_PATH_UNIQUE[@]}"
+  _env_label "Entries before" "${#_ENV_PATH_ENTRIES[@]}"
+  _env_label "Entries after" "${#_ENV_PATH_UNIQUE[@]}"
+  _env_path_report_relative_entries
   if (( ${#_ENV_PATH_DUPLICATES[@]} == 0 )); then
     _env_path_report_case_variants
     _env_success "PATH is already deduplicated."

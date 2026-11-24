@@ -699,6 +699,22 @@ write_grammar_fixture() {
   [[ "$output" == *"git is not available"* ]]
 }
 
+@test "env dotenv: human paths are home relative and Git failures stay in Hygiene" {
+  write_dotenv .env 'A=1'
+  write_dotenv .env.example 'A='
+  run --separate-stderr run_zsh '
+    _env_run_with_timeout() { return 124; }
+    NO_COLOR=1 env-dotenv "$DOTENV_PROJECT/.env"
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" != *"$HOME/"* ]]
+  [[ "$stderr" == *"Dotenv file:"*"~/"*".env"* ]]
+  [[ "$stderr" == *"Example file:"*"~/"*".env.example"* ]]
+  [[ "$stderr" == *"Dotenv Check"*"Hygiene"*"Git did not answer"* ]]
+  [[ "$stderr" != *"Git did not answer"*"Dotenv Check"* ]]
+}
+
 @test "env dotenv: the menu row names a missing .env and dispatches the check" {
   run run_zsh 'cd "$DOTENV_PROJECT" && _env_menu_rows'
   [ "$status" -eq 0 ]

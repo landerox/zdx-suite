@@ -156,6 +156,32 @@ clip_hex() {
   [[ "$output" == *"PATH=$HOME/bin:$HOME/tools/:/usr/bin"* ]]
 }
 
+@test "env platform: PATH list preserves relative facts and complete visible entries" {
+  mkdir -p "$HOME/tree/bin"
+  run --separate-stderr run_zsh '
+    cd "$HOME/tree" || return 90
+    local literal="" long=""
+    printf -v long "%0300d" 0
+    literal="pipe|$long"$'\''\trow\nend'\''
+    local before=":.:./:bin:./bin:${HOME}/tree/bin:$literal"
+    export PATH="$before"
+    env-path --list >"$HOME/path-rows" || return $?
+    [[ "$PATH" == "$before" ]] || return 91
+    printf "%s\n" \
+      $'\''1\t<current-directory>\tcurrent-directory\tyes\tno'\'' \
+      $'\''2\t.\trelative\tyes\tno'\'' \
+      $'\''3\t./\trelative\tyes\tyes'\'' \
+      $'\''4\tbin\trelative\tyes\tno'\'' \
+      $'\''5\t./bin\trelative\tyes\tno'\'' \
+      $'\''6\t'\''"${HOME}/tree/bin"$'\''\texists\tyes\tno'\'' \
+      $'\''7\t'\''"${(V)literal}"$'\''\trelative\tn/a\tno'\'' >"$HOME/path-expected"
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  cmp "$HOME/path-rows" "$HOME/path-expected"
+  [[ "$stderr" == *"6 PATH entries resolved from the current directory"* ]]
+}
+
 @test "env platform: PATH entries that differ only by case are reported and kept" {
   mkdir -p "$HOME/Tools" "$HOME/tools"
   export ENV_TEST_PATH="$HOME/tools:$HOME/Tools:/usr/bin:/USR/BIN/"

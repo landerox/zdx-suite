@@ -65,9 +65,10 @@ and a backend that fails reports
 
 Export types and values are captured in invocation-local memory before Env
 implementation locals can hide them. Direct, nested, cold lazy and master
-routes inspect the caller's exported scalars; loader and selection preparation
-returns before that inspection. The master uses an unoccupied, non-exported
-selection local and refuses when its bounded allocation cannot succeed.
+routes inspect the caller's exported strings, integers, and floats.
+Inspection begins after the loader and selection preparation finish. The
+master uses an unoccupied, non-exported selection local and refuses when
+its bounded allocation cannot succeed.
 
 Before a picker copy, a visible export must retain its captured type and value.
 An ordinary `scalar-export` hidden by a registered non-exported local in a
@@ -88,8 +89,11 @@ touch it, and command substitution cannot suspend on TTY output.
 
 ## PATH and stream contract
 
-`env-path` is read-only by default. Empty PATH components are reported as the
-current directory rather than silently discarded. Entries are compared without
+`env-path` is read-only by default. An empty component has state
+`current-directory`. Nonempty relative entries such as `.`, `./`, and `bin`
+have state `relative`; their writability is checked in the current directory.
+The command warns on stderr with the count of current-directory and relative
+entries. Entries are compared without
 trailing slashes, so `/x/` duplicates an earlier `/x`. `--dedupe` removes
 later duplicates while preserving order and empty components, prints the
 exact removal plan, naming the kept entry when the text differs, such as
@@ -112,7 +116,9 @@ Documented stdout data is limited to:
 - `env-dotenv --json`: one `zdx.env-dotenv.v1` JSON object (see
   [Dotenv check](#dotenv-check)).
 
-Control-bearing display data is rendered visibly before entering records.
+Nonempty `env-path --list` entry fields use Zsh's visible `${(V)}` encoding.
+The representation preserves the entire field and literal pipes. It renders
+controls visibly and is intended for display and diagnostics.
 `NO_COLOR` and `TERM=dumb` suppress ANSI decoration. Clipboard support is
 optional; no clipboard backend is required for read-only commands. Interactive
 pickers require `fzf`, the Zsh `stat` and `system` modules, `mktemp`, `rm`,
