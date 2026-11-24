@@ -3383,4 +3383,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-16.
+Last reviewed: 2026-11-23.
