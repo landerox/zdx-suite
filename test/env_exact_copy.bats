@@ -81,6 +81,27 @@ copy_collision() {
   [ "$(file_size "$EC_ROOT/bytes")" -eq 0 ]
 }
 
+@test "env exact copy: numeric exports are listed and copied as their exported values" {
+  run run_ec '
+    export WAYLAND_DISPLAY=fixture
+    typeset -xi ZDX_ENV_NUMBER=271828
+    typeset -xF 3 parameter_type=1.253
+    env-list --list >"$EC_ROOT/names" || return $?
+    env-list --copy ZDX_ENV_NUMBER || return $?
+    command cp -- "$EC_ROOT/bytes" "$EC_ROOT/integer"
+    env-menu env-list --copy parameter_type
+  '
+  [ "$status" -eq 0 ]
+  grep -Fxq $'ZDX_ENV_NUMBER\t<hidden>' "$EC_ROOT/names"
+  grep -Fxq $'parameter_type\t<hidden>' "$EC_ROOT/names"
+  grep -Fxq $'SHLVL\t<hidden>' "$EC_ROOT/names"
+  printf '271828' > "$EC_ROOT/expected"
+  cmp "$EC_ROOT/expected" "$EC_ROOT/integer"
+  printf '1.253' > "$EC_ROOT/expected"
+  cmp "$EC_ROOT/expected" "$EC_ROOT/bytes"
+  [[ "$output" != *271828* && "$output" != *1.253* ]]
+}
+
 @test "env exact copy: direct menu dispatch preserves command_name" {
   run run_ec '''export WAYLAND_DISPLAY=fixture command_name=menu-export-value
     env-menu env-list --copy command_name'''

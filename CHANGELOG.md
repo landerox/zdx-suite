@@ -242,6 +242,10 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Environment: report relative PATH entries and preserve full visible PATH
+  data, include exported numeric scalars in the masked inventory and copy
+  path, and keep Git warnings inside the dotenv report.
+
 - File: enforce trash capacity before put while keeping exact-ID recovery,
   preserve failed scan and JSON renderer statuses, and diagnose invalid CLI
   input and missing terminal consent.

@@ -19,7 +19,6 @@ print headings and key-value lines through the core services when available,
 with plain standalone fallbacks. Plugin listings use the shared table service.
 The remaining gaps are:
 
-- Environment still prints most headings with its own `_env_header`.
 - The master `zdx` menu prints its own `ℹ [info]` and `✘ [error]` message
   forms instead of the glyphs below.
 

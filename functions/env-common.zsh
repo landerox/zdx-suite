@@ -23,6 +23,10 @@ _env_color_enabled() {
 }
 
 _env_header() {
+  if (( ${+functions[_zdx_ui_heading]} )); then
+    _zdx_ui_heading "$1"
+    return
+  fi
   if _env_color_enabled; then
     printf '\n\033[1;35m════ %s ════\033[0m\n\n' "${(V)1}" >&2
   else
@@ -80,6 +84,17 @@ _env_label() {
   printf '  %-18s %s\n' "${(V)${1-}%:}:" "${(V)2-}" >&2
 }
 
+# Render a report table through the shared stdout-free UI service.
+_env_table() {
+  if (( ${+functions[_zdx_ui_table]} )); then
+    _zdx_ui_table "$@" && return 0
+  fi
+  local row=""
+  for row in "$@"; do
+    _env_dim "${row//$'\t'/  }"
+  done
+}
+
 # A report sub-heading through the core service.
 # Usage: _env_section [--first] <title>
 _env_section() {
@@ -102,6 +117,13 @@ _env_command_display() {
     _zdx_ui_command_display "$@"
     return
   fi
+  if (( $# == 1 )) && [[ -n "${HOME:-}" ]] \
+    && [[ "$1" == "$HOME" || "$1" == "$HOME"/* ]]; then
+    local suffix="${1#"$HOME"}"
+    REPLY='~'
+    [[ -z "$suffix" ]] || REPLY+="/${(q-)${suffix#/}}"
+    return 0
+  fi
   REPLY="${(j: :)${(@q-)@}}"
 }
 
@@ -114,6 +136,10 @@ _env_count_noun() {
   local count="${1:-}" singular="${2:-}" plural="${3:-${2:-}s}"
   [[ "$count" == <-> && -n "$singular" ]] || return 2
   if (( count == 1 )); then REPLY="1 $singular"; else REPLY="$count $plural"; fi
+}
+
+_env_export_type_is_scalar() {
+  [[ "$1" == (scalar|integer|float)*export* ]]
 }
 
 # Capture exported scalars before helper locals can hide them. The two private
@@ -148,7 +174,7 @@ _env_with_export_snapshot() {
       [[ "$_env_export_key" == [A-Za-z_]* \
         && "$_env_export_key" != *[^A-Za-z0-9_]* \
         && ${#_env_export_key} -le 128 ]] || continue
-      [[ "${parameters[$_env_export_key]}" == scalar*export* ]] || continue
+      _env_export_type_is_scalar "${parameters[$_env_export_key]}" || continue
       _env_export_snapshot[type:$_env_export_key]="${parameters[$_env_export_key]}"
       _env_export_snapshot[value:$_env_export_key]="${(P)_env_export_key}"
       (( ${#_env_export_snapshot} <= _ENV_MAX_RECORDS * 16 + 4 )) || {

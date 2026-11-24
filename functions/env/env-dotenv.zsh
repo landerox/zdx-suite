@@ -240,6 +240,16 @@ _env_dotenv_git_facts() {
   return 0
 }
 
+_env_dotenv_report_git_failure() {
+  case "$1" in
+    timeout)
+      _env_warn \
+        "Git did not answer within ${_ENV_DOTENV_GIT_TIMEOUT}s; tracking and ignore rules were not checked."
+      ;;
+    failed) _env_warn "Git could not check tracking and ignore rules for $2." ;;
+  esac
+}
+
 # --- Reading and parsing ----------------------------------------------------
 
 # REPLY: the physical parent plus the unchanged leaf. Resolve symbolic links
@@ -990,12 +1000,6 @@ env-dotenv() {
   _env_dotenv_git_facts "$dotenv_absolute"
   local git_repository="${reply[1]}" git_tracked="${reply[2]}"
   local git_ignored="${reply[3]}" git_note="${reply[4]}"
-  if [[ "$git_note" == timeout ]]; then
-    _env_warn \
-      "Git did not answer within ${_ENV_DOTENV_GIT_TIMEOUT}s; tracking and ignore rules were not checked."
-  elif [[ "$git_note" == failed ]]; then
-    _env_warn "Git could not check tracking and ignore rules for $dotenv_path."
-  fi
 
   # Secret hygiene is advisory: it adds no issue and leaves the status alone.
   local sops_config="no" sops_config_path=""
@@ -1038,8 +1042,16 @@ env-dotenv() {
   [[ "$owned_by_user" == yes ]] || (( ++issue_count ))
   local -i result_rc=0
   (( issue_count == 0 )) || result_rc=1
+  local dotenv_display="" example_display=""
+  _env_command_display "$dotenv_path"
+  dotenv_display="$REPLY"
+  if [[ -n "$example_path" ]]; then
+    _env_command_display "$example_path"
+    example_display="$REPLY"
+  fi
 
   if [[ "$json_mode" == yes ]]; then
+    _env_dotenv_report_git_failure "$git_note" "$dotenv_display"
     local -a json_records=()
     local payload=""
     for key in "${dotenv_keys[@]}"; do json_records+=("dotenv-key"$'\t'"$key"); done
@@ -1070,7 +1082,6 @@ env-dotenv() {
     return $result_rc
   fi
 
-  local dotenv_display="$dotenv_path" example_display="$example_path"
   _env_header "Dotenv Check"
   _env_label "Dotenv file" "$dotenv_display"
   _env_label "Example file" "${example_display:-none found}"
@@ -1121,9 +1132,9 @@ env-dotenv() {
 
   _env_section "Hygiene"
   local git_directory="${dotenv_path:h}" git_name="${dotenv_path:t}"
-  # A timed-out or failed probe was reported above; its unknown facts are
-  # neither praised nor counted.
-  if [[ "$git_note" == unavailable ]]; then
+  if [[ "$git_note" == (timeout|failed) ]]; then
+    _env_dotenv_report_git_failure "$git_note" "$dotenv_display"
+  elif [[ "$git_note" == unavailable ]]; then
     _env_info "git is not available, so tracking and ignore rules were not checked."
   elif [[ "$git_repository" == no ]]; then
     _env_info "$dotenv_display is not in a Git repository."
