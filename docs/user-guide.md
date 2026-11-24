@@ -1696,11 +1696,11 @@ Set this in `~/.config/zdx/config.zsh`:
 
 ## ── Environment Suite (`env-menu`) ──
 
-The Environment suite inspects the current session's exported variables and
-`PATH`, and checks a project's dotenv file against its example. It never
-prints a variable value, reads dotenv files only as data and never loads them
-into the shell, reads no profile files, persists no state, and registers no
-automatic `chpwd` hook.
+The Environment suite masks exported variable values and shows PATH entries
+through `env-path`. It checks a project's dotenv file against its example
+using a data-only parser.
+It reads no profile files, persists no state, and registers no automatic
+`chpwd` hook.
 
 ### 🔍 Variable Diagnostics & Search
 

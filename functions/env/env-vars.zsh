@@ -1,10 +1,13 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# Env Suite: active-variable inspection and PATH diagnostics
+# Env Vars: masked export inspection and active-shell PATH deduplication
 # =============================================================================
 #
-# Loaded by env-menu.zsh. Raw secret values never enter menu rows, previews,
-# logs, warnings, or fallback output.
+# Loaded by env-menu.zsh after env-common.zsh.
+# Safe to re-source; defines functions and snapshot arrays.
+#
+# The picker displays masked names and classifications. Explicit copy sends
+# the selected value to the clipboard backend.
 #
 
 if [[ -n "${_ENV_VARS_SOURCED:-}" ]]; then
@@ -18,7 +21,7 @@ _env_exported_keys() {
   for key in ${(k)_env_export_snapshot}; do
     [[ "$key" == type:* ]] || continue
     key="${key#type:}"
-    [[ "$key" =~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$' ]] || continue
+    _env_is_export_name "$key" || continue
     parameter_type="${_env_export_snapshot[type:$key]-}"
     _env_export_type_is_scalar "$parameter_type" || continue
     exported_keys+=("$key")
@@ -44,8 +47,7 @@ _env_list_usage() {
 
 _env_copy_exported_variable() {
   local key="$1"
-  [[ "$key" =~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$' \
-    && -n "${_env_export_snapshot[type:$key]-}" ]] || {
+  _env_is_export_name "$key" && [[ -n "${_env_export_snapshot[type:$key]-}" ]] || {
     _env_error "No exported scalar variable named '$key' exists."
     return 1
   }
@@ -75,7 +77,7 @@ _env_list_requires_snapshot() {
   case "${1:-}" in
     "") (( $# == 0 )) ;;
     --list) (( $# == 1 )) ;;
-    --copy) (( $# == 2 )) ;;
+    --copy) (( $# == 2 )) && _env_is_export_name "$2" ;;
     *) return 1 ;;
   esac
 }
@@ -102,20 +104,29 @@ _env_list_execute() {
   local copy_key=""
   case "${1:-}" in
     "")
-      (( $# == 0 )) || return 2
+      (( $# == 0 )) || {
+        _env_error "Invalid env-list argument. The first operand is empty."
+        return 2
+      }
       ;;
     -h|--help)
-      (( $# == 1 )) || return 2
+      (( $# == 1 )) || {
+        _env_error "--help accepts no additional arguments."
+        return 2
+      }
       _env_list_usage
       return 0
       ;;
     --list)
-      (( $# == 1 )) || return 2
+      (( $# == 1 )) || {
+        _env_error "--list accepts no additional arguments."
+        return 2
+      }
       list_mode="yes"
       ;;
     --copy)
-      (( $# == 2 )) || {
-        _env_error "--copy requires exactly one variable name."
+      (( $# == 2 )) && _env_is_export_name "$2" || {
+        _env_error "--copy requires exactly one valid shell variable name."
         return 2
       }
       copy_key="$2"
@@ -373,6 +384,10 @@ _env_path_report_relative_entries() {
 
 env-path() {
   emulate -L zsh
+  if (( $# == 1 )) && [[ "$1" == (-h|--help) ]]; then
+    _env_path_usage
+    return 0
+  fi
   local list_mode="no"
   local dedupe="no"
   local dry_run="no"
@@ -381,9 +396,8 @@ env-path() {
   while (( $# > 0 )); do
     case "$1" in
       -h|--help)
-        (( $# == 1 )) || return 2
-        _env_path_usage
-        return 0
+        _env_error "--help accepts no additional arguments."
+        return 2
         ;;
       --list) list_mode="yes" ;;
       --dedupe) dedupe="yes" ;;
@@ -485,13 +499,19 @@ env-path() {
     _env_clear_path_snapshot
     return 0
   fi
+  local REPLY=""
   _env_confirm_mutation \
     "Apply this exact PATH deduplication plan?" "$auto_yes" || {
     local -i confirm_rc=$?
     _env_clear_path_snapshot
-    (( confirm_rc == 130 )) && return 0
     return $confirm_rc
   }
+  if [[ "$REPLY" != confirmed ]]; then
+    _env_clear_path_snapshot
+    [[ "$REPLY" == declined ]] && return 0
+    _env_error "Could not verify the PATH confirmation result."
+    return 1
+  fi
   [[ "$PATH" == "$original_path" ]] || {
     _env_error "PATH changed after review; refusing to apply a stale plan."
     _env_clear_path_snapshot

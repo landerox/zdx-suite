@@ -9,6 +9,68 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "env contract: bad arguments are diagnosed before an export snapshot or picker" {
+  run run_zsh '
+    _env_with_export_snapshot() { print -r -- snapshot >>"$HOME/unexpected"; return 97; }
+    fzf() { print -r -- picker >>"$HOME/unexpected"; return 97; }
+    forged-env-action() { print -r -- dispatch >>"$HOME/unexpected"; }
+    _env_timed() { print -r -- "$1" >>"$HOME/timing"; shift; "$@"; }
+    typeset -i failures=0
+    invalid_env_case() {
+      local expected="$1"
+      shift
+      local -i actual=0
+      "$@" >"$HOME/stdout" 2>"$HOME/stderr" || actual=$?
+      if (( actual != 2 )) || [[ -s "$HOME/stdout" ]] \
+        || ! command grep -Fq -- "$expected" "$HOME/stderr"; then
+        print -r -- "status $actual for ${(q)@}"
+        command cat "$HOME/stderr"
+        (( ++failures ))
+      fi
+    }
+    invalid_env_case "Invalid command argument" env-menu "" extra
+    invalid_env_case "Invalid command argument" env-menu :
+    invalid_env_case "Unknown Environment command" env-menu forged-env-action
+    _env_dispatch : || return 91
+    [[ ! -e "$HOME/timing" ]] || (( ++failures ))
+    invalid_env_case "--list accepts no additional arguments" env-list --list extra
+    invalid_env_case "--help accepts no additional arguments" env-list -h extra
+    invalid_env_case "Invalid env-list argument" env-list "" extra
+    invalid_env_case "--copy requires exactly one valid shell variable name" env-menu env-list --copy ""
+    invalid_env_case "--copy requires exactly one valid shell variable name" env-menu env-list --copy bad-name
+    invalid_env_case "--help accepts no additional arguments" env-path --help --list
+    invalid_env_case "--help accepts no additional arguments" env-path --list --help
+    invalid_env_case "--help accepts no additional arguments" env-menu env-path --dedupe --help
+    [[ ! -e "$HOME/unexpected" ]] || (( ++failures ))
+    (( failures == 0 ))
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "env contract: direct and nested PATH completion share the mode exclusions" {
+  local service
+  for service in env-path env-menu; do
+    export ENV_COMPLETION_SERVICE="$service"
+    run run_zsh '
+      service="$ENV_COMPLETION_SERVICE"
+      words=(env-path)
+      _arguments() {
+        if [[ "$1" == -C ]]; then
+          state=args
+          return 0
+        fi
+        print -rl -- "$@"
+      }
+      source "$TEST_SUITE_ROOT/completions/_env-menu"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(--dedupe --dry-run --yes)--list["* ]]
+    [[ "$output" == *"(--list)--dedupe["* ]]
+    [[ "$output" == *"(--list)--dry-run["* ]]
+    [[ "$output" == *"(--list)--yes["* ]]
+  done
+}
+
 contract_commands() {
   awk -F '\t' '!/^#/ && NF { print $1 }' "$ENV_CONTRACT" | sort
 }

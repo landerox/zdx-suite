@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# Env Suite: private UI, confirmation, masking, and picker primitives
+# Env Common: UI, export privacy, clipboard, WSL, and private temporary storage
 # =============================================================================
 #
 # Loaded by env-menu.zsh before every module under functions/env/.
@@ -142,6 +142,10 @@ _env_export_type_is_scalar() {
   [[ "$1" == (scalar|integer|float)*export* ]]
 }
 
+_env_is_export_name() {
+  [[ "$1" == [A-Za-z_]* && "$1" != *[^A-Za-z0-9_]* && ${#1} -le 128 ]]
+}
+
 # Capture exported scalars before helper locals can hide them. The two private
 # names preserve their own original type/value in the initializer before either
 # local exists. Invocation data stays in memory and never becomes global state.
@@ -171,9 +175,7 @@ _env_with_export_snapshot() {
         || "$_env_export_key" == _env_export_key ]] && continue
       # Validate the existing identifier grammar without changing MATCH before
       # capture; indirect lookup must only receive an ordinary variable name.
-      [[ "$_env_export_key" == [A-Za-z_]* \
-        && "$_env_export_key" != *[^A-Za-z0-9_]* \
-        && ${#_env_export_key} -le 128 ]] || continue
+      _env_is_export_name "$_env_export_key" || continue
       _env_export_type_is_scalar "${parameters[$_env_export_key]}" || continue
       _env_export_snapshot[type:$_env_export_key]="${parameters[$_env_export_key]}"
       _env_export_snapshot[value:$_env_export_key]="${(P)_env_export_key}"
@@ -366,21 +368,29 @@ _env_confirm() {
   _env_confirm_ask "$prompt"
 }
 
+# On success, REPLY is confirmed or declined. Operational failures and
+# returned interruptions use a status distinct from either disposition.
 _env_confirm_mutation() {
   local prompt="$1"
   local auto_yes="${2:-no}"
   local -i confirm_rc=0
+  REPLY=""
 
   _env_confirm "$prompt" "$auto_yes" || confirm_rc=$?
   case "$confirm_rc" in
-    0) return 0 ;;
+    0) REPLY=confirmed ;;
     1)
       _env_info "Cancelled."
-      return 130
+      REPLY=declined
       ;;
-    *)
+    2)
       _env_error "Confirmation requires a terminal; pass --yes to proceed."
-      return "$confirm_rc"
+      return 1
+      ;;
+    130|143) return "$confirm_rc" ;;
+    *)
+      _env_error "Could not obtain confirmation (status $confirm_rc)."
+      return 1
       ;;
   esac
 }

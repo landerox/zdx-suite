@@ -13,6 +13,7 @@ teardown() {
     export PATH="/usr/bin:/usr/bin"
     _env_confirm_mutation() {
       export PATH="/usr/local/bin:/usr/bin:/usr/bin"
+      REPLY=confirmed
       return 0
     }
     env-path --dedupe
@@ -25,6 +26,36 @@ teardown() {
   [[ "$output" == *"PATH=/usr/local/bin:/usr/bin:/usr/bin"* ]]
 }
 
+@test "env safety: consent distinguishes decline preconditions and returned interruptions" {
+  run run_zsh '
+    local -i model=0 expected=0 actual=0 failures=0
+    _env_confirm() { return "$model"; }
+    for model in 0 1 2 3 130 143; do
+      export PATH="/usr/bin:/usr/bin"
+      actual=0
+      env-path --dedupe >"$HOME/stdout" 2>"$HOME/stderr" || actual=$?
+      case "$model" in
+        0|1) expected=0 ;;
+        2|3) expected=1 ;;
+        *) expected=$model ;;
+      esac
+      if (( actual != expected )) || [[ -s "$HOME/stdout" ]] \
+        || { (( model == 0 )) && [[ "$PATH" != /usr/bin ]]; } \
+        || { (( model != 0 )) && [[ "$PATH" != /usr/bin:/usr/bin ]]; }; then
+        print -r -- "confirmation $model produced status $actual and PATH $PATH"
+        command cat "$HOME/stderr"
+        (( ++failures ))
+      fi
+      if [[ "$(<"$HOME/stderr")" == *"Cancelled."* ]] && (( model != 1 )); then
+        print -r -- "confirmation $model was reported as a decline"
+        (( ++failures ))
+      fi
+    done
+    (( failures == 0 ))
+  '
+  [ "$status" -eq 0 ]
+}
+
 @test "env safety: non-interactive PATH deduplication requires --yes" {
   run run_zsh '
     export PATH="/usr/bin:/usr/bin"
@@ -33,7 +64,7 @@ teardown() {
     [[ "$PATH" == "/usr/bin:/usr/bin" ]] || return 99
     return $dedupe_rc
   '
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"pass --yes"* ]]
 }
 
@@ -41,8 +72,8 @@ teardown() {
   run run_zsh '
     export PATH="/usr/bin:/usr/bin"
     local before="$PATH"
-    _env_confirm_mutation() { return 130; }
-    env-path --dedupe
+    _env_confirm_mutation() { REPLY=declined; }
+    env-path --dedupe || return $?
     [[ "$PATH" == "$before" ]]
   '
   [ "$status" -eq 0 ]
