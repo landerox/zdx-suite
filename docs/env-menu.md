@@ -20,7 +20,9 @@ public functions must remain aligned with it.
 
 `env-menu` with no arguments opens the interactive menu. It also accepts one
 canonical command followed by that command's unchanged arguments. Invalid
-syntax returns `2`; interactive cancellation returns success.
+syntax returns `2` with a diagnostic. A declined confirmation returns `0`,
+missing terminal consent or a picker failure returns `1`, and a returned
+interruption keeps status `130` or `143`.
 
 The command menu follows [`menu-spec.md`](menu-spec.md) with a single
 inspection section. The `env >` prompt and directory header orient the current

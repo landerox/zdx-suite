@@ -242,6 +242,9 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Environment: explain invalid arguments before inspection, keep help
+  exclusive, and distinguish declined consent from terminal and picker errors.
+
 - Environment: report relative PATH entries and preserve full visible PATH
   data, include exported numeric scalars in the masked inventory and copy
   path, and keep Git warnings inside the dotenv report.

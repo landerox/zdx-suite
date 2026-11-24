@@ -12,18 +12,18 @@ env_commands=(
 
 _env_complete_list() {
   _arguments \
-    '(-h --help)'{-h,--help}'[show command usage]' \
-    '(--copy)--list[emit masked TSV records]' \
-    '(--list)--copy[copy one exact exported value without printing it]:variable:'
+    '(- *)'{-h,--help}'[show command usage]' \
+    '(- *)--list[emit masked TSV records]' \
+    '(- *)--copy[copy one exact exported value without printing it]:variable:'
 }
 
 _env_complete_path() {
   _arguments \
-    '(-h --help)'{-h,--help}'[show command usage]' \
-    '(--dedupe)--list[emit PATH diagnostics as TSV]' \
+    '(- *)'{-h,--help}'[show command usage]' \
+    '(--dedupe --dry-run --yes)--list[emit PATH diagnostics as TSV]' \
     '(--list)--dedupe[review removal of later duplicate entries]' \
-    '--dry-run[print the exact deduplication plan]' \
-    '--yes[accept the reviewed plan non-interactively]'
+    '(--list)--dry-run[print the exact deduplication plan]' \
+    '(--list)--yes[accept the reviewed plan non-interactively]'
 }
 
 _env_complete_dotenv() {
@@ -46,7 +46,7 @@ case "$service" in
     ;;
   env-menu)
     _arguments -C \
-      '(-h --help)'{-h,--help}'[show usage]' \
+      '(- *)'{-h,--help}'[show usage]' \
       '1:Environment command:->command' \
       '*::command arguments:->args'
     case "$state" in

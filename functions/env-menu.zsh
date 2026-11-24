@@ -110,16 +110,23 @@ _env_menu_rows() {
 }
 
 _env_dispatch() {
-  _env_record_export_shadows _env_dispatch command_name
+  emulate -L zsh
+  _env_record_export_shadows _env_dispatch command_name || return $?
   local command_name="${1:-}"
   (( $# > 0 )) && shift
   case "$command_name" in
     :) return 0 ;;
-    env-list) env-list "$@" ;;
-    env-path) env-path "$@" ;;
-    env-dotenv) env-dotenv "$@" ;;
+    env-list)
+      _env_timed "env:env-list" env-list "$@"
+      ;;
+    env-path)
+      _env_timed "env:env-path" env-path "$@"
+      ;;
+    env-dotenv)
+      _env_timed "env:env-dotenv" env-dotenv "$@"
+      ;;
     *)
-      _env_error "Unknown Environment command: $command_name"
+      _env_error "Unknown Environment command. Use 'env-menu --help'."
       return 2
       ;;
   esac
@@ -171,37 +178,32 @@ _env_menu_interactive() {
   local command_name="${${selected#*|}%%|*}"
   [[ "$command_name" == ":" ]] && return 0
   _env_info "Executing: $command_name"
-  _env_timed "env:$command_name" _env_dispatch "$command_name"
+  _env_dispatch "$command_name"
 }
 
 env-menu() {
   emulate -L zsh
-  case "${1:-}" in
-    "")
-      (( $# == 0 )) || return 2
-      _env_with_export_snapshot _env_menu_execute "$@"
-      ;;
-    env-list)
-      if _env_list_requires_snapshot "${@:2}"; then
-        _env_with_export_snapshot _env_menu_execute "$@"
-      else
-        _env_menu_execute "$@"
-      fi
-      ;;
-    *) _env_menu_execute "$@" ;;
-  esac
+  if (( $# == 0 )) || { [[ "$1" == env-list ]] && _env_list_requires_snapshot "${@:2}"; }; then
+    _env_with_export_snapshot _env_menu_execute "$@"
+  else
+    _env_menu_execute "$@"
+  fi
 }
 
 _env_menu_execute() {
   emulate -L zsh
-  _env_record_export_shadows _env_menu_execute command_name REPLY reply \
+  _env_record_export_shadows _env_menu_execute REPLY reply \
     MATCH MBEGIN MEND match mbegin mend
   local REPLY="" MATCH="" MBEGIN=0 MEND=0
   local -a reply=() match=() mbegin=() mend=()
-  case "${1:-}" in
-    "")
-      (( $# == 0 )) || return 2
-      _env_menu_interactive
+  if (( $# == 0 )); then
+    _env_menu_interactive
+    return $?
+  fi
+  case "$1" in
+    ""|*:*)
+      _env_error "Invalid command argument. Use 'env-menu --help'."
+      return 2
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -215,10 +217,7 @@ _env_menu_execute() {
       return 2
       ;;
     *)
-      local command_name="$1"
-      shift
-      _env_timed "env:$command_name" \
-        _env_dispatch "$command_name" "$@"
+      _env_dispatch "$@"
       ;;
   esac
 }
