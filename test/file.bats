@@ -8,6 +8,37 @@ teardown() {
   cleanup_sandbox
 }
 
+@test "file: shared tree validation and discovery follow their declared module boundaries" {
+  mkdir -p "$HOME/tree/sub"
+  printf 'fixture\n' > "$HOME/tree/sub/.DS_Store"
+  cat > "$TEST_MOCK_BIN/timeout" <<'SH'
+#!/bin/sh
+[ "$1" = -k ] && [ "$2" = 2s ] && [ "$3" = 10s ] || exit 97
+case "${4##*/}:${5-}" in
+  uname:-s) printf 'Darwin\n' ;;
+  find:.) shift 3; exec "$@" ;;
+  *) exit 97 ;;
+esac
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/timeout"
+  run --separate-stderr zsh -f -c '
+    emulate -R zsh
+    source "$1/functions/file-common.zsh" || exit 90
+    _file_delete_mounts_clear "$HOME/tree" || exit $?
+    source "$1/functions/file/file-operations.zsh" || exit 91
+    source "$1/functions/file/file-discovery.zsh" || exit 92
+    source "$1/functions/file/file-discovery.zsh" || exit 93
+    (( ! ${+functions[file-compress]} && ! ${+functions[file-trash]} )) || exit 94
+    cd "$HOME/tree" || exit 95
+    file-clean-junk --dry-run
+  ' _ "$TEST_SUITE_ROOT"
+
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"Dry run: 1 file planned; nothing was deleted."* ]]
+  [ -f "$HOME/tree/sub/.DS_Store" ]
+}
+
 @test "file: loader sources all split modules" {
   run run_zsh '
     file-menu --help

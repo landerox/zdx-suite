@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# File Operations: transfer-tree validation and quarantined deletion
+# File Operations: reviewed plans and quarantined deletion
 # =============================================================================
 #
 # Loaded by file-menu.zsh after file-common.zsh.
@@ -10,107 +10,6 @@
 if [[ -n "${_FILE_OPERATIONS_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
-
-# Validates every node of a recursive transfer or deletion target: owned, not
-# group/world-writable, singly linked when a regular file, representable, and
-# free of links, special files, and mounts. The mount checks share the
-# caller's pass snapshot when one is declared (see _file_mount_snapshot).
-_file_validate_tree_for_transfer() {
-  emulate -L zsh
-  zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
-  local tree_root="$1" require_owner_rwx="${2:-no}"
-  [[ "$require_owner_rwx" == no || "$require_owner_rwx" == yes ]] || return 2
-  [[ ( -f "$tree_root" || -d "$tree_root" ) && ! -L "$tree_root" ]] \
-    || return 1
-  _file_require_cmd head "bounded tree inventory" || return 1
-  if (( ! ${+_file_mount_mode} )); then
-    local _file_mount_mode=""
-    local -A _file_mount_targets=()
-  fi
-  if [[ -z "$_file_mount_mode" ]]; then
-    _file_mount_snapshot || return $?
-  fi
-  # The staging helper returns through reply; callers such as
-  # _file_archive_inputs_plan accumulate their own results in reply.
-  local -a reply=()
-  _file_archive_stage_dir "${TMPDIR:-/tmp}" || return 1
-  local inventory_dir="${reply[1]}"
-  local inventory_identity="${reply[2]}"
-  local inventory_file="${inventory_dir}/tree"
-  local entry=""
-  local -i entry_count=0 scan_rc=1 producer_rc=1 cleanup_rc=0
-  {
-    setopt local_options pipefail
-    command find "$tree_root" -mindepth 1 -print0 2>/dev/null \
-      | command head -c "$(( _FILE_MAX_PICKER_BYTES + 1 ))" \
-        > "$inventory_file"
-    producer_rc=$?
-    local -A inventory_state=()
-    zmodload -F zsh/stat b:zstat 2>/dev/null \
-      && zstat -LH inventory_state -- "$inventory_file" 2>/dev/null \
-      || return 1
-    (( inventory_state[size] <= _FILE_MAX_PICKER_BYTES )) || {
-      _file_error "Transfer inventory exceeds the byte limit: $tree_root"
-      return 1
-    }
-    (( producer_rc == 0 )) || {
-      _file_error "Could not inventory transfer target: $tree_root"
-      if [[ "$require_owner_rwx" == yes ]]; then
-        _file_dim "Review tree directory access; trash requires owner read, write, and search permission. Use chmod u+rwx only after reviewing the affected directories."
-      fi
-      return 1
-    }
-    local -a inspected_entries=("$tree_root")
-    while IFS= read -r -d '' entry; do
-      (( ++entry_count <= _FILE_MAX_CANDIDATES )) || {
-        _file_error "Transfer inventory exceeds the entry limit: $tree_root"
-        return 1
-      }
-      if [[ -L "$entry" \
-        || ( ! -f "$entry" && ! -d "$entry" ) ]]; then
-        _file_error "Transfers refuse links and special files: $entry"
-        return 1
-      fi
-      inspected_entries+=("$entry")
-    done < "$inventory_file"
-    local inspected_entry=""
-    local -A entry_state=()
-    for inspected_entry in "${inspected_entries[@]}"; do
-      _file_path_is_displayable "$inspected_entry" \
-        && [[ "$inspected_entry" != *'|'* ]] || {
-        _file_error "Transfers refuse unrepresentable tree names."
-        return 1
-      }
-      entry_state=()
-      zstat -LH entry_state -- "$inspected_entry" 2>/dev/null || return 1
-      (( entry_state[uid] == EUID \
-        && (entry_state[mode] & 8#22) == 0 )) || {
-        _file_error \
-          "Transfers require owned, non-writable tree entries: $inspected_entry"
-        return 1
-      }
-      if [[ "$require_owner_rwx" == yes && -d "$inspected_entry" ]] \
-        && (( (entry_state[mode] & 8#700) != 8#700 )); then
-        _file_error "Trash requires owner read, write, and search permission: $inspected_entry"
-        _file_dim "Review the directory and use chmod u+rwx before retrying."
-        return 1
-      fi
-      if [[ -f "$inspected_entry" ]] && (( entry_state[nlink] != 1 )); then
-        _file_error \
-          "Transfers refuse hard-linked regular files: $inspected_entry"
-        return 1
-      fi
-      _file_mountpoint_clear "$inspected_entry" || return 1
-    done
-    _file_mount_table_clear_below "$tree_root" || return 1
-    scan_rc=0
-  } always {
-    _file_archive_cleanup_stage "$inventory_dir" "$inventory_identity" \
-      || cleanup_rc=$?
-    (( cleanup_rc == 0 )) || scan_rc=1
-  }
-  return $scan_rc
-}
 
 # Deletes one reviewed target through a same-directory quarantine.
 # Usage: _file_quarantine_delete [--require-owner-rwx] <target> <identity>

@@ -3,8 +3,7 @@
 # File Trash: rename-only trash with no-clobber restore and quarantined purge
 # =============================================================================
 #
-# Loaded by file-menu.zsh after file-common.zsh, file-archive.zsh, and
-# file-operations.zsh.
+# Loaded by file-menu.zsh after file-common.zsh and file-operations.zsh.
 # Safe to re-source; defines functions only.
 #
 # Trashed items live in ${XDG_DATA_HOME:-~/.local/share}/zdx/trash as

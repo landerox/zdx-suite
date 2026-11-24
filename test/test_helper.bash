@@ -695,6 +695,54 @@ run_zsh() {
   " < /dev/null
 }
 
+# Select the installed interpreter and make the same sampler available to
+# the test's Bash shell and the Zsh processes that it starts.
+_zdx_test_prepare_monotonic_clock() {
+  local candidate interpreter
+  export TEST_MONOTONIC_PYTHON=""
+  while IFS= read -r candidate; do
+    [[ "$candidate" == /* && "$candidate" != "$TEST_MOCK_BIN/"* ]] || continue
+    if [[ "$TEST_HOST_OS" == Darwin ]]; then
+      candidate=$(zsh -f -c 'emulate -R zsh; print -r -- "${1:A}"' _ "$candidate") || continue
+      # The Command Line Tools stub can start installation on a new host.
+      [[ "$candidate" != /usr/bin/python3 ]] || continue
+    fi
+    if interpreter=$("$candidate" -B -I -S -c '
+import sys
+import time
+
+minimum = (3, 10) if sys.platform == "darwin" else (3, 7)
+if sys.version_info < minimum or not hasattr(time, "monotonic_ns"):
+    sys.exit(1)
+print(sys.executable)
+' 2>/dev/null) && [[ "$interpreter" == /* && -x "$interpreter" ]]; then
+      TEST_MONOTONIC_PYTHON="$interpreter"
+      break
+    fi
+  done < <(type -ap python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3.7)
+  if [[ -z "$TEST_MONOTONIC_PYTHON" ]]; then
+    printf '%s\n' 'Elapsed-time tests require Python 3.7 or newer (3.10 on macOS).' >&2
+    return 1
+  fi
+
+  export TEST_MONOTONIC_CLOCK_FILE="$TEST_TEMP_DIR/monotonic-clock.sh"
+  cat > "$TEST_MONOTONIC_CLOCK_FILE" <<'SH'
+_zdx_test_monotonic_ns() {
+  local sample
+  sample=$("$TEST_MONOTONIC_PYTHON" -B -I -S -c 'from time import monotonic_ns; print(monotonic_ns())') || sample=""
+  case "$sample" in
+    ""|*[!0-9]*)
+      printf '%s\n' 'Could not sample the monotonic clock.' >&2
+      return 92
+      ;;
+  esac
+  printf '%s\n' "$sample"
+}
+SH
+  # shellcheck source=/dev/null
+  source "$TEST_MONOTONIC_CLOCK_FILE"
+}
+
 # Build real private metadata launchers; the base stdlib/framework remains installed.
 _zdx_test_dev_preview_private_python() {
   local candidate resolved bootstrap="" binary

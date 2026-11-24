@@ -29,6 +29,25 @@ teardown() {
   cleanup_sandbox
 }
 
+_platform_prepare_watchdog_clock() {
+  _zdx_test_prepare_monotonic_clock || return $?
+  export PLATFORM_WATCHDOG_CLOCK="$TEST_TEMP_DIR/watchdog-clock.zsh"
+  cat > "$PLATFORM_WATCHDOG_CLOCK" <<'ZSH'
+source "$TEST_MONOTONIC_CLOCK_FILE" || return $?
+
+_platform_watchdog_check_duration() {
+  emulate -L zsh
+  local ended
+  ended=$(_zdx_test_monotonic_ns) || return $?
+  local -i elapsed=$(( ended - $1 ))
+  if (( elapsed < 0 || elapsed >= $2 * 1000000000 )); then
+    printf 'returned after %.9fs monotonic (rc=%s)\n' "$(( elapsed / 1000000000.0 ))" "$3"
+    return 93
+  fi
+}
+ZSH
+}
+
 _platform_timeout_recorder() {
   local name="$1"
   cat > "$TEST_MOCK_BIN/$name" <<SH
@@ -82,14 +101,16 @@ SH
 }
 
 @test "platform tools: the Zsh watchdog bounds a command without timeout or gtimeout" {
+  _platform_prepare_watchdog_clock
   run run_zsh '
     source "$PLATFORM_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || return $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || return $?
     _zdx_run_with_timeout 1 sleep 20
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || return 93
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || return $?
     _zdx_run_with_timeout 5 zsh -fc "emulate -R zsh; exit 7"
     print -r -- "bounded=$timeout_rc passthrough=$?"
   '
@@ -734,6 +755,7 @@ ZSH
 # The real snapshot: a pass that named the tree as one word signaled nothing,
 # so the call returned only when the whole tree ended on its own.
 @test "platform tools: the standalone System watchdog signals every process of a tree" {
+  _platform_prepare_watchdog_clock
   _platform_pass_helpers
 
   run zsh -f -c '
@@ -744,11 +766,12 @@ ZSH
     source "$3" || exit 92
     zmodload zsh/datetime || exit 92
     export TMPDIR="$4"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || exit $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || exit $?
     _sys_run_with_timeout 3 zsh -f "$PLATFORM_THREE_LEVEL_TREE"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; exit 93; }
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || exit $?
     local -i attempt=0
     while [[ ! -s "$HOME/child.signal" ]] && (( ++attempt <= 500 )); do
       zselect -t 2
@@ -926,6 +949,7 @@ ZSH
 # its own. The caller waits for the watchdog's pass, which must give up on
 # the listing within a small fixed bound instead of holding the caller.
 @test "platform tools: a stalled process listing cannot hold the caller of a fired watchdog" {
+  _platform_prepare_watchdog_clock
   _platform_stalled_ps
   _platform_ps_fate
 
@@ -934,11 +958,12 @@ ZSH
   run run_zsh '
     source "$PLATFORM_ONE_SHOT_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || return $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || return $?
     _zdx_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; return 93; }
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || return $?
     eval "$PLATFORM_PS_FATE"
   '
 
@@ -948,6 +973,7 @@ ZSH
 }
 
 @test "platform tools: a stalled process listing cannot hold the caller of the standalone System watchdog" {
+  _platform_prepare_watchdog_clock
   _platform_stalled_ps
   _platform_ps_fate
 
@@ -960,11 +986,12 @@ ZSH
     source "$2" || exit 92
     zmodload zsh/datetime || exit 92
     export TMPDIR="$3"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || exit $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || exit $?
     _sys_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; exit 93; }
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || exit $?
     eval "$PLATFORM_PS_FATE"
   ' _ "$TEST_SUITE_ROOT" "$PLATFORM_ONE_SHOT_NO_TIMEOUT" "$PLATFORM_TMP"
 
@@ -977,15 +1004,17 @@ ZSH
 # one ignored the caller's stop request, kept its caller until the deadline
 # and then signaled the finished command's PID.
 @test "platform tools: a caller's TRAPTERM cannot hold the watchdog past a finished command" {
+  _platform_prepare_watchdog_clock
   run run_zsh '
     source "$PLATFORM_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
     TRAPTERM() { return 0; }
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || return $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || return $?
     _zdx_run_with_timeout 6 zsh -fc "emulate -R zsh; exit 7"
     local -i command_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 3 )) || { print -r -- "returned after ${elapsed}s"; return 93; }
+    _platform_watchdog_check_duration "$started" 3 "$command_rc" || return $?
     print -r -- "rc=$command_rc"
   '
 
@@ -998,6 +1027,7 @@ ZSH
 # of a fired watchdog would from repeated stop requests. Each signal must not
 # restart the listing's wait: its two-second bound is absolute.
 @test "platform tools: repeated stop requests cannot stretch the watchdog's process listing" {
+  _platform_prepare_watchdog_clock
   _platform_storming_ps
   _platform_ps_fate
 
@@ -1006,11 +1036,12 @@ ZSH
   run run_zsh '
     source "$PLATFORM_ONE_SHOT_NO_TIMEOUT" || return 90
     export TMPDIR="$PLATFORM_TMP"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || return $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || return $?
     _zdx_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 7 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; return 93; }
+    _platform_watchdog_check_duration "$started" 7 "$timeout_rc" || return $?
     eval "$PLATFORM_PS_FATE"
   '
 
@@ -1020,6 +1051,7 @@ ZSH
 }
 
 @test "platform tools: repeated stop requests cannot stretch the standalone System listing" {
+  _platform_prepare_watchdog_clock
   _platform_storming_ps
   _platform_ps_fate
 
@@ -1032,11 +1064,12 @@ ZSH
     source "$2" || exit 92
     zmodload zsh/datetime || exit 92
     export TMPDIR="$3"
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || exit $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || exit $?
     _sys_run_with_timeout 1 zsh -fc "emulate -R zsh; sleep 2"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 7 )) || { print -r -- "returned after ${elapsed}s (rc=$timeout_rc)"; exit 93; }
+    _platform_watchdog_check_duration "$started" 7 "$timeout_rc" || exit $?
     eval "$PLATFORM_PS_FATE"
   ' _ "$TEST_SUITE_ROOT" "$PLATFORM_ONE_SHOT_NO_TIMEOUT" "$PLATFORM_TMP"
 
@@ -1163,6 +1196,7 @@ ZSH
 # A fired watchdog replaces the caller's TRAPTERM before its pass, so the
 # caller's stop takes effect once the pass ends: no grace and no KILL pass.
 @test "platform tools: a caller's TRAPTERM cannot hold a fired watchdog either" {
+  _platform_prepare_watchdog_clock
   _platform_pass_helpers
 
   run run_zsh '
@@ -1174,11 +1208,12 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=10
     TRAPTERM() { return 0; }
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || return $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || return $?
     _zdx_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s"; return 93; }
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || return $?
     _platform_tree_outcome $timeout_rc
   '
 
@@ -1188,6 +1223,7 @@ ZSH
 }
 
 @test "platform tools: a caller's TRAPTERM cannot hold a fired standalone System watchdog" {
+  _platform_prepare_watchdog_clock
   _platform_pass_helpers
 
   run zsh -f -c '
@@ -1203,11 +1239,12 @@ ZSH
     }
     PLATFORM_PASS_PAUSE=10
     TRAPTERM() { return 0; }
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || exit $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || exit $?
     _sys_run_with_timeout 3 zsh -f "$PLATFORM_TREE"
     local -i timeout_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 8 )) || { print -r -- "returned after ${elapsed}s"; exit 93; }
+    _platform_watchdog_check_duration "$started" 8 "$timeout_rc" || exit $?
     _platform_tree_outcome $timeout_rc
   ' _ "$TEST_SUITE_ROOT" "$PLATFORM_NO_TIMEOUT" "$PLATFORM_PASS_HELPERS" \
     "$PLATFORM_TMP"
@@ -1218,6 +1255,7 @@ ZSH
 }
 
 @test "platform tools: a caller's TRAPTERM cannot hold the standalone System watchdog" {
+  _platform_prepare_watchdog_clock
   run zsh -f -c '
     emulate -R zsh
     source "$1/functions/sys-menu.zsh" || exit 90
@@ -1226,11 +1264,12 @@ ZSH
     zmodload zsh/datetime || exit 92
     export TMPDIR="$3"
     TRAPTERM() { return 0; }
-    local -F started=$EPOCHREALTIME
+    source "$PLATFORM_WATCHDOG_CLOCK" || exit $?
+    local started
+    started=$(_zdx_test_monotonic_ns) || exit $?
     _sys_run_with_timeout 6 zsh -fc "emulate -R zsh; exit 7"
     local -i command_rc=$?
-    local -F elapsed=$(( EPOCHREALTIME - started ))
-    (( elapsed < 3 )) || { print -r -- "returned after ${elapsed}s"; exit 93; }
+    _platform_watchdog_check_duration "$started" 3 "$command_rc" || exit $?
     print -r -- "rc=$command_rc"
   ' _ "$TEST_SUITE_ROOT" "$PLATFORM_NO_TIMEOUT" "$PLATFORM_TMP"
 

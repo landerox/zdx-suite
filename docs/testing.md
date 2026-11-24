@@ -263,9 +263,16 @@ actual wait. Its stale-PID assertion rejects any query or signal after reap.
 These finite controls do not prove perpetual PID ownership, every native
 signal race, or a monotonic deadline for the existing realtime watchdog.
 
+The elapsed-time assertions for watchdogs in `platform_tools.bats` and
+bounded pings in `vpn_mtu.bats` use a monotonic clock from installed Python.
+They require Python 3.7 or newer on Linux and WSL for nanosecond readings
+and Python 3.10 or newer on macOS for a clock shared across processes.
+The duration bounds accompany the status and behavior assertions.
+
 These files reproduce macOS and WSL path and tool differences through mocks
-and fixtures, so they pass on any host; the macOS workflow also runs them on an
-Apple Silicon runner. They do not replace acceptance of host-only behavior.
+and fixtures on hosts with their listed prerequisites. The macOS workflow
+also runs them on an Apple Silicon runner. Host-only behavior has its own
+acceptance checks.
 
 | File | Covered boundary |
 | --- | --- |
