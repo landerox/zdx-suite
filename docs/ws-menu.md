@@ -104,7 +104,7 @@ starting with a letter or digit.
 
 | Setting | Default | Rule |
 | --- | --- | --- |
-| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Absolute path to an existing directory; never `/`. An explicit empty value is kept and refused |
+| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Absolute UTF-8 path to an existing directory without control characters. The root `/` and empty values are refused |
 | `WS_MAX_DEPTH` | `3` | Integer from 1 to 10: the deepest repository level below the root |
 | `WS_EXCLUDE` | empty array | Relative subtrees below the root, such as `github/archive`; not patterns. Absolute, `.`, and `..` entries are refused |
 | `WS_FETCH_JOBS` | `4` | Integer from 1 to 16: concurrent fetches for `ws-status --fetch` |
@@ -123,16 +123,21 @@ Discovery never lists:
 - `WS_EXCLUDE` subtrees;
 - a repository inside another listed repository, such as a submodule checkout
   or a vendored clone;
-- a directory whose relative path contains a control character or `|`, which
+- a directory whose relative path contains an ASCII or C1 control character or `|`, which
   cannot be shown as one record. These are counted in one warning, such as
   `Skipped 2 directories whose names cannot be shown safely.`
 
 `fd` is preferred, including the `fdfind` name that Debian and Ubuntu install,
-with `--no-ignore` so `.gitignore` files cannot hide repositories. `find`
+with `--no-ignore` and `--show-errors`. `find`
 (GNU or BSD) is the fallback and produces the same list. The scan is bounded
 to 30 seconds and 8 MiB of output, and more than 2,000 repositories fail
 closed with advice to lower `WS_MAX_DEPTH` or add `WS_EXCLUDE` entries.
-Unreadable directories produce a warning; the rest of the scan still counts.
+The scan uses the standard Zsh `zsh/system` and `zsh/stat` modules for a
+private diagnostic file bounded to 64 KiB. It prints one generic warning
+for unreadable directories and keeps the other valid results. If diagnostics
+reach the limit, discovery fails and withholds the inventory.
+Names with invalid UTF-8 bytes are omitted with the existing skipped-name
+warning.
 
 The read-only commands accept a root reached through symbolic links, such as
 `~/workspaces` linked to another disk. `ws-clone` applies stricter ownership
@@ -179,10 +184,13 @@ back to the frozen path.
 
 The preview pane shows the branch (or `detached at <commit>`), the number of
 uncommitted changes (`clean` for none), and the last commit's age and subject.
-Its program text is constant: fzf supplies only the integer row index `{n}`,
-and the program reads the matching path from an owner-only snapshot file in a
-private directory below the validated `TMPDIR`. No path, name, or selected
-text is ever part of the program. It first clears the
+Its program is fixed. fzf supplies the integer row index `{n}`, and the
+program reads the matching path from an owner-only snapshot file in a
+private directory below the validated `TMPDIR`. The shell reads the snapshot
+and Git paths from the picker's environment. The preview uses the exact
+absolute Git executable that passed the suite's eligibility checks. A failed
+qualification leaves navigation available. An unsuccessful branch or
+working-tree observation shows `unknown`. The program first clears the
 [repository variables](#repository-variables), then runs only read-only Git
 commands (`symbolic-ref`, `rev-parse`,
 `--no-optional-locks status --porcelain`, and `log -1`), and removes control
@@ -332,15 +340,17 @@ returns `1`. The document is shown expanded here:
   depth one.
 - `branch` is `null` for a detached `HEAD`, and `head` is `null` before the
   first commit. `upstream_state` is `none`, `tracking`, or `gone`; `ahead` and
-  `behind` are `null` unless it is `tracking`.
+  `behind` are `null` unless it is `tracking`. A failed status probe leaves
+  `detached` and `upstream_state` at `null`.
 - `last_commit_at` is an ISO-8601 UTC timestamp or `null`.
 - `fetch` is `null` without `--fetch`, and otherwise `ok`, `failed`,
   `timed-out`, or `skipped`. `error` names a failed probe, such as
   `git status failed (status 128)`.
 - Remote URLs are never included, so no credential can leak through them.
 
-Repositories are ordered as in the text report. Exit statuses match the text
-mode.
+Repositories are ordered as in the text report. Both jq renders use compact,
+monochrome output, and the complete document is captured before publication.
+Exit statuses match the text mode.
 
 ## `ws-clone`
 

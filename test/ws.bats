@@ -141,6 +141,28 @@ EOF
   [ ! -e "$HOME/split" ]
 }
 
+@test "ws: the menu root fact agrees with command validation without scanning" {
+  touch "$HOME/workspace-file"
+  mkdir "$HOME/"$'canonical\nworkspace'
+  ln -s "$HOME/"$'canonical\nworkspace' "$HOME/workspace-alias"
+  run --separate-stderr run_zsh '
+    _ws_discovery_backend() { return 1; }
+    _ws_collect_repositories() { print -r -- reached >"$HOME/unexpected-scan"; return 97; }
+    local root=""
+    for root in / "$HOME/workspace-file" "$HOME/"$'\''bad\nroot'\'' \
+      "$HOME/workspace-alias" "$HOME/missing" "$HOME/workspaces"; do
+      WS_BASE_DIR="$root" _ws_menu_context
+      print -r -- "$REPLY"
+    done
+  '
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  [ ! -e "$HOME/unexpected-scan" ]
+  local root_states
+  root_states=$(printf '%s\n' "$output" | sed -n 's/^Root: \([^ ]*\) .*/\1/p')
+  [ "$root_states" = "$(printf '%s\n' invalid invalid invalid invalid missing present)" ]
+}
+
 @test "ws: menu cancellation returns 0 with empty stdout and a context header" {
   export MOCK_FZF_MODE="cancel"
   export MOCK_FZF_STATUS="130"

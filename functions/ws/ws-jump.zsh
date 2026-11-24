@@ -78,22 +78,36 @@ _ws_jump_pick() {
     absolute_paths+=("$root/$relative")
   done
 
-  # The preview program is constant: fzf supplies only the row index {n},
-  # and the snapshot path is a validated private file quoted for /bin/sh.
-  # It runs in fzf's shell, so it first clears the repository-local Git
-  # variables itself, as _ws_git_command does, or an inherited GIT_DIR would
-  # make every row describe the repository it names.
+  # fzf supplies only the row index {n}. The private snapshot and the
+  # qualified Git executable reach its preview shell as environment data.
+  # Clear the repository-local variables before running any Git probe.
+  local preview_git=""
+  _ws_git_program 2>/dev/null && preview_git="$REPLY"
   local preview="unset ${(j: :)${(@qq)_WS_GIT_LOCAL_ENV_VARS}}"$'\n'
-  preview+="s=${(qq)snapshot_file}"$'\n'
-  preview+='n={n}
+  preview+='s="$_WS_JUMP_PREVIEW_FILE"
+g="$_WS_JUMP_PREVIEW_GIT"
+n={n}
 case "$n" in ""|*[!0-9]*) exit 0 ;; esac
 d=$(sed -n "$((n + 1))p" "$s" 2>/dev/null)
 if [ -z "$d" ] || [ ! -d "$d" ]; then printf "%s\n" "Repository unavailable."; exit 0; fi
-if ! command -v git >/dev/null 2>&1; then printf "%s\n" "Git is not installed."; exit 0; fi
-b=$(git -c core.fsmonitor=false -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || b="detached at $(git -c core.fsmonitor=false -C "$d" rev-parse --short HEAD 2>/dev/null)"
-c=$(git --no-optional-locks -c core.fsmonitor=false -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d " ")
-[ "$c" = 0 ] && c=clean
-l=$(git -c core.fsmonitor=false -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
+if [ -z "$g" ]; then printf "%s\n" "Git preview is unavailable."; exit 0; fi
+b=$("$g" -c core.fsmonitor=false -C "$d" symbolic-ref --quiet --short HEAD </dev/null 2>/dev/null) || b=""
+if [ -z "$b" ]; then
+  h=$("$g" -c core.fsmonitor=false -C "$d" rev-parse --short HEAD </dev/null 2>/dev/null) || h=""
+  case "$h" in
+    ""|*[!0-9a-fA-F]*) b=unknown ;;
+    *) b="detached at $h" ;;
+  esac
+fi
+c=unknown
+if changes=$("$g" --no-optional-locks -c core.fsmonitor=false -C "$d" status --porcelain </dev/null 2>/dev/null); then
+  if [ -z "$changes" ]; then
+    c=clean
+  else
+    c=$(printf "%s\n" "$changes" | wc -l | tr -d " ")
+  fi
+fi
+l=$("$g" -c core.fsmonitor=false -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" </dev/null 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
 printf "Branch:      %s\nChanges:     %s\nLast commit: %s\n" "$b" "${c:-unknown}" "${l:-none}"'
 
   {
@@ -102,7 +116,7 @@ printf "Branch:      %s\nChanges:     %s\nLast commit: %s\n" "$b" "${c:-unknown}
       _ws_error "Could not write the private repository snapshot."
       operation_rc=1
     else
-      _ws_fzf_capture \
+      _WS_JUMP_PREVIEW_FILE="$snapshot_file" _WS_JUMP_PREVIEW_GIT="$preview_git" _ws_fzf_capture \
         --height='80%' \
         --delimiter='[|]' \
         --with-nth=1 \

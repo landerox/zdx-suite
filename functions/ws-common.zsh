@@ -1094,7 +1094,19 @@ _ws_name_valid() {
 # True when a relative path can appear in a picker record, a table cell, or a
 # preview snapshot line without changing its structure.
 _ws_path_displayable() {
-  [[ -n "${1-}" && "$1" != *'|'* && "$1" != *[[:cntrl:]]* ]]
+  [[ -n "${1-}" && "$1" != *'|'* ]] && _ws_path_is_utf8_text "$1"
+}
+
+# Validate UTF-8 path text and reject ASCII and C1 controls in every locale.
+_ws_path_is_utf8_text() {
+  emulate -L zsh
+  unsetopt multibyte
+  local LC_ALL=C MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
+  local sequence=$'[\x20-\x7e]|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]'
+  sequence+=$'|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]'
+  sequence+=$'|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2}'
+  [[ "$1" =~ "^(${sequence})*$" ]]
 }
 
 # REPLY: the byte length of a value, independent of the locale.
@@ -1105,18 +1117,24 @@ _ws_byte_length() {
 }
 
 # reply: the configured workspace root as written (without trailing slashes)
-# and its canonical directory. Read-only commands accept a root reached
+# and its canonical directory. REPLY is the root state for the menu.
+# Read-only commands accept a root reached
 # through symbolic links; ws-clone applies its own ownership checks.
 _ws_workspace_root() {
   emulate -L zsh
   reply=()
-  local base="${WS_BASE_DIR-}" REPLY=""
+  local base="${WS_BASE_DIR-}"
+  REPLY=invalid
   [[ -n "$base" ]] || {
     _ws_error "WS_BASE_DIR is empty; set it to an absolute path."
     return 1
   }
-  [[ "$base" == /* && "$base" != *[[:cntrl:]]* ]] || {
+  [[ "$base" == /* ]] || {
     _ws_error "WS_BASE_DIR must be an absolute path."
+    return 1
+  }
+  _ws_path_is_utf8_text "$base" || {
+    _ws_error "WS_BASE_DIR must be valid UTF-8 without control characters."
     return 1
   }
   while [[ "$base" != / && "$base" == */ ]]; do
@@ -1128,16 +1146,27 @@ _ws_workspace_root() {
   }
   if [[ ! -d "$base" ]]; then
     _ws_command_display "$base"
-    _ws_error "The workspace root does not exist: $REPLY"
-    _ws_info "Create it, or set WS_BASE_DIR in ~/.config/zdx/config.zsh."
+    if [[ -e "$base" || -L "$base" ]]; then
+      _ws_error "The workspace root is not a directory: $REPLY"
+      REPLY=invalid
+    else
+      _ws_error "The workspace root does not exist: $REPLY"
+      _ws_info "Create it, or set WS_BASE_DIR in ~/.config/zdx/config.zsh."
+      REPLY=missing
+    fi
     return 1
   fi
   local canonical="${base:A}"
-  [[ -d "$canonical" && "$canonical" != / ]] || {
-    _ws_error "The workspace root is not a directory."
+  [[ "$canonical" != / ]] || {
+    _ws_error "WS_BASE_DIR cannot resolve to the filesystem root."
+    return 1
+  }
+  [[ -d "$canonical" ]] && _ws_path_is_utf8_text "$canonical" || {
+    _ws_error "WS_BASE_DIR must resolve to a directory with a valid UTF-8 path and no control characters."
     return 1
   }
   reply=("$base" "$canonical")
+  REPLY=present
 }
 
 # REPLY: the validated WS_MAX_DEPTH, an integer from 1 to 10.
@@ -1199,6 +1228,75 @@ _ws_discovery_backend() {
   fi
 }
 
+# reply holds the bounded NUL scan and a flag saying whether stderr was used.
+# The diagnostic file stays private and only its size is inspected.
+_ws_capture_discovery_scan() {
+  emulate -L zsh
+  { zmodload zsh/system && zmodload -F zsh/stat b:zstat; } 2>/dev/null || {
+    _ws_error "Zsh file-descriptor support is required for repository discovery."
+    return 1
+  }
+  local file_limit=""
+  file_limit=$(builtin ulimit -Sf 2>/dev/null) || {
+    _ws_error "Could not read the file-size limit for repository discovery."
+    return 1
+  }
+  # Zsh reports and sets this limit in 512-byte blocks.
+  local -i diagnostic_blocks=128
+  if [[ "$file_limit" == <-> ]] && (( file_limit < diagnostic_blocks )); then
+    diagnostic_blocks=$file_limit
+  fi
+  (( diagnostic_blocks > 0 )) || {
+    _ws_error "The file-size limit prevents private discovery diagnostics."
+    return 1
+  }
+  _ws_private_dir_create scan || return $?
+  local directory="${reply[1]}" identity="${reply[2]}"
+  reply=()
+  local -i diagnostics_fd=-1 capture_rc=1
+  local scan="" has_diagnostics=0
+  local -A diagnostic_state=()
+  {
+    sysopen -w -o creat,excl,nofollow,cloexec -m 600 -u diagnostics_fd \
+      -- "$directory/stderr" 2>/dev/null || {
+      _ws_error "Could not open private repository discovery diagnostics."
+      return 1
+    }
+    scan=$(
+      (
+        builtin ulimit -Sc 0 && builtin ulimit -Sf "$diagnostic_blocks" || exit 125
+        _ws_run_with_timeout "$_WS_SCAN_TIMEOUT" "$@" </dev/null
+      ) 2>&$(( diagnostics_fd )) | command head -c "$(( _WS_MAX_SCAN_BYTES + 1 ))"
+      print -rn -- $'\0'"status:${pipestatus[1]}:${pipestatus[2]}"
+    ) || {
+      _ws_error "Could not collect repository discovery output."
+      return 1
+    }
+    zstat -H diagnostic_state -f "$diagnostics_fd" 2>/dev/null \
+      && (( (diagnostic_state[mode] & 8#170000) == 8#100000 \
+        && (diagnostic_state[mode] & 8#77) == 0 \
+        && diagnostic_state[uid] == EUID && diagnostic_state[nlink] == 1 )) \
+      || {
+        _ws_error "Could not verify private repository discovery diagnostics."
+        return 1
+      }
+    (( diagnostic_state[size] < diagnostic_blocks * 512 )) || {
+      _ws_error "Repository discovery diagnostics exceeded their size limit."
+      return 1
+    }
+    (( diagnostic_state[size] > 0 )) && has_diagnostics=1
+    reply=("$scan" "$has_diagnostics")
+    capture_rc=0
+  } always {
+    (( diagnostics_fd >= 0 )) && exec {diagnostics_fd}>&-
+    _ws_private_dir_remove "$directory" "$identity" || {
+      reply=()
+      capture_rc=1
+    }
+  }
+  return "$capture_rc"
+}
+
 # reply: the repositories below a canonical workspace root, as sorted
 # relative paths. A repository is a directory with a .git entry (a directory,
 # or the file of a linked worktree or submodule) at most WS_MAX_DEPTH levels
@@ -1208,6 +1306,8 @@ _ws_discovery_backend() {
 # their names cannot be shown safely. Usage: _ws_collect_repositories <root>
 _ws_collect_repositories() {
   emulate -L zsh
+  local MATCH="" MBEGIN=0 MEND=0
+  local -a match=() mbegin=() mend=()
   reply=()
   REPLY=0
   local root="${1-}"
@@ -1228,7 +1328,7 @@ _ws_collect_repositories() {
   if [[ "${backend[2]}" == fd ]]; then
     # fd skips hidden directories, and --no-ignore keeps .gitignore rules
     # from hiding repositories. It never follows symbolic links by default.
-    scan_command=("${backend[1]}" --no-ignore --type d --max-depth "$depth"
+    scan_command=("${backend[1]}" --no-ignore --show-errors --type d --max-depth "$depth"
       --print0 --color never . "$root")
   else
     scan_command=("${backend[1]}" "$root" -mindepth 1 -maxdepth "$depth"
@@ -1236,13 +1336,9 @@ _ws_collect_repositories() {
   fi
 
   # The status pair follows the NUL-separated data after a final NUL.
-  local scan_output=""
-  scan_output=$(
-    _ws_run_with_timeout "$_WS_SCAN_TIMEOUT" "${scan_command[@]}" \
-      </dev/null 2>/dev/null \
-      | command head -c "$(( _WS_MAX_SCAN_BYTES + 1 ))"
-    print -rn -- $'\0'"status:${pipestatus[1]}:${pipestatus[2]}"
-  )
+  _ws_capture_discovery_scan "${scan_command[@]}" || return $?
+  local scan_output="${reply[1]}" has_diagnostics="${reply[2]}"
+  reply=()
   local status_field="${scan_output##*$'\0'}"
   local scan_data="${scan_output%$'\0'*}"
   [[ "$status_field" =~ '^status:([0-9]+):([0-9]+)$' ]] || {
@@ -1263,12 +1359,12 @@ _ws_collect_repositories() {
   elif (( limit_rc != 0 && limit_rc != 141 )); then
     _ws_error "Repository discovery could not read its results (status $limit_rc)."
     return 1
-  elif (( scan_rc == 1 )); then
-    # Unreadable directories are reported and skipped; the rest still count.
-    _ws_warn "Some directories below the workspace root could not be read."
-  elif (( scan_rc != 0 )); then
+  elif (( scan_rc != 0 && scan_rc != 1 )); then
     _ws_error "Repository discovery failed (status $scan_rc)."
     return 1
+  fi
+  if (( scan_rc == 1 || has_diagnostics )); then
+    _ws_warn "Some directories below the workspace root could not be read."
   fi
 
   local -a entries=() candidates=()

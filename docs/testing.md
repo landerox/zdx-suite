@@ -976,6 +976,10 @@ focused regression cases.
 
 ### Workspace coverage
 
+`ws_jump.bats` and `ws_status.bats` cover an eligible preview executable,
+unknown Git facts, invalid UTF-8 names, bounded private discovery diagnostics,
+and suppression of output after a failed final jq render.
+
 `ws_input_safety.bats` proves real UTF-8 libc range widening before testing
 ASCII name/URL/hostname/alias refusal, valid ASCII limits, caller locale/match
 isolation and the SSH child's unchanged locale. Real private Git monitor

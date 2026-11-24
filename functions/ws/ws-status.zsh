@@ -746,7 +746,7 @@ ws-status() {
   local -i now=$EPOCHSECONDS
   local relative="" workspace="" name="" platform="" identity=""
   local branch_cell="" changes_cell="" sync_cell="" stash_cell="" age_cell=""
-  local commit_at="" fetch_outcome="" object="" row="" error_text=""
+  local commit_at="" fetch_outcome="" object="" row="" error_text="" detached_json=""
   local -a attention_rows=() quiet_rows=() attention_objects=()
   local -a quiet_objects=() reasons=() error_lines=() probe=()
   local -i attention_count=0 error_count=0 needs_attention=0 detached=0
@@ -795,7 +795,12 @@ ws-status() {
     fi
 
     if (( json )); then
-      object=$(command "$jq_path" -nc \
+      detached_json=null
+      if [[ "${probe[1]}" == ok ]]; then
+        detached_json=false
+        (( detached )) && detached_json=true
+      fi
+      object=$(command "$jq_path" -cM -n \
         --arg path "$root/$relative" \
         --arg relative_path "$relative" \
         --arg workspace "$workspace" \
@@ -803,7 +808,7 @@ ws-status() {
         --arg identity "$identity" \
         --arg repository "$name" \
         --arg branch "${probe[2]}" \
-        --argjson detached "$(( detached ? 1 : 0 ))" \
+        --argjson detached "$detached_json" \
         --arg head "${probe[4]}" \
         --arg upstream "${probe[5]}" \
         --arg upstream_state "${probe[6]}" \
@@ -826,10 +831,10 @@ ws-status() {
            identity: ($identity | text),
            repository: $repository,
            branch: ($branch | text),
-           detached: ($detached == 1),
+           detached: $detached,
            head: ($head | text),
            upstream: ($upstream | text),
-           upstream_state: $upstream_state,
+           upstream_state: (if $detached == null then null else $upstream_state end),
            ahead: ($ahead | count),
            behind: ($behind | count),
            changes: ($changes | count),
@@ -841,6 +846,10 @@ ws-status() {
            error: ($error | text)
          }') || {
         _ws_error "jq could not build the ws-status JSON document."
+        return 1
+      }
+      [[ "$object" == '{'*'}' && "$object" != *$'\n'* ]] || {
+        _ws_error "jq could not build a complete ws-status repository object."
         return 1
       }
       if (( needs_attention )); then
@@ -909,13 +918,17 @@ ws-status() {
   fi
 
   if (( json )); then
-    {
-      (( ${#attention_objects[@]} > 0 )) \
-        && print -rl -- "${attention_objects[@]}"
-      (( ${#quiet_objects[@]} > 0 )) \
-        && print -rl -- "${quiet_objects[@]}"
-      true
-    } | command "$jq_path" -c -n \
+    local document=""
+    document=$(
+      setopt pipefail
+      {
+        if (( ${#attention_objects[@]} > 0 )); then
+          print -rl -- "${attention_objects[@]}" || return $?
+        fi
+        if (( ${#quiet_objects[@]} > 0 )); then
+          print -rl -- "${quiet_objects[@]}" || return $?
+        fi
+      } | command "$jq_path" -cM -n \
       --arg schema "zdx.ws-status.v1" \
       --arg base "$root" \
       --argjson fetched "$fetch" \
@@ -932,10 +945,16 @@ ws-status() {
            errors: $errors
          },
          repositories: [inputs]
-       }' || {
+       }'
+    ) || {
       _ws_error "jq could not build the ws-status JSON document."
       return 1
     }
+    [[ "$document" == '{'*'}' && "$document" != *$'\n'* ]] || {
+      _ws_error "jq could not build a complete ws-status JSON document."
+      return 1
+    }
+    print -r -- "$document"
     return $final_rc
   fi
 

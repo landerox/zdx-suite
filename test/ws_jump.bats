@@ -87,6 +87,101 @@ collect_with() {
   [ "$output" = "$expected" ]
 }
 
+@test "ws jump: successful fd diagnostics warn once without leaking their content" {
+  cat > "$TEST_MOCK_BIN/fd" <<'SH'
+#!/bin/sh
+[ "$2" = --show-errors ] || exit 97
+printf 'synthetic private diagnostic\n' >&2
+printf '%s\000' "$WS/github/personal/alpha"
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/fd"
+  run --separate-stderr run_zsh '
+    _ws_collect_repositories "$WS" || return $?
+    print -rl -- "${reply[@]}"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = github/personal/alpha ]
+  [[ "$stderr" == *"Some directories below the workspace root could not be read."* ]]
+  [[ "$stderr" != *"synthetic private diagnostic"* ]]
+}
+
+@test "ws jump: oversized private diagnostics refuse a discovery result" {
+  cat > "$TEST_MOCK_BIN/fd" <<'SH'
+#!/bin/sh
+printf '%s\000' "$WS/github/personal/alpha"
+dd if=/dev/zero bs=1024 count=70 >&2
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/fd"
+  run --separate-stderr run_zsh '
+    _ws_collect_repositories "$WS" || return $?
+    print -rl -- "${reply[@]}"
+  '
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"Repository discovery diagnostics exceeded their size limit."* ]]
+  [ -z "$(find "$TMPDIR" -name 'zdx-ws-scan.*' -print -quit)" ]
+}
+
+@test "ws jump: byte validation accepts UTF-8 independently of the locale" {
+  run run_zsh '
+    export LC_ALL=C
+    _ws_path_displayable $'\''caf\303\251-\346\227\245'\'' || return 91
+    for invalid in $'\''bad-\377'\'' $'\''short-\303'\'' $'\''overlong-\300\257'\'' \
+      $'\''control-\302\233'\''; do
+      if _ws_path_displayable "$invalid"; then return 92; fi
+    done
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "ws jump: fzf placeholders cannot change a private snapshot path" {
+  install_preview_fzf
+  export WS_PREVIEW_TMP="$TEST_TEMP_DIR/snapshot-{n}"
+  mkdir -m 700 "$WS_PREVIEW_TMP"
+  run run_zsh '
+    _ws_git_program() { return 17; }
+    TMPDIR="$WS_PREVIEW_TMP" ws-jump
+  '
+  [ "$status" -eq 0 ]
+  grep -Fxq "Git preview is unavailable." "$PREVIEW_OUT"
+  ! grep -Fq "Repository unavailable." "$PREVIEW_OUT" || false
+}
+
+@test "ws jump: a failed Git qualification keeps the picker usable without preview probes" {
+  install_preview_fzf
+  cat > "$TEST_MOCK_BIN/git" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/git-attempts"
+exit 17
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/git"
+  run run_zsh 'ws-jump'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/git-attempts")" = --version ]
+  grep -Fq "Git preview is unavailable." "$PREVIEW_OUT"
+}
+
+@test "ws jump: failed preview reads show unknown branch and changes" {
+  install_preview_fzf
+  cat > "$TEST_MOCK_BIN/git" <<'SH'
+#!/bin/sh
+case "$*" in
+  --version) printf 'git version 2.45.0\n' ;;
+  *' symbolic-ref '*) exit 1 ;;
+  *' rev-parse '*) printf 'deadbee\n'; exit 17 ;;
+  *' status '*) printf ' M partial\n'; exit 17 ;;
+  *' log '*) exit 17 ;;
+  *) exit 97 ;;
+esac
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/git"
+  run run_zsh 'ws-jump'
+  [ "$status" -eq 0 ]
+  grep -Fxq 'Branch:      unknown' "$PREVIEW_OUT"
+  grep -Fxq 'Changes:     unknown' "$PREVIEW_OUT"
+  ! grep -Eq '^(Branch|Changes):.*(deadbee|partial|clean)' "$PREVIEW_OUT" || false
+}
+
 @test "ws jump: discovery keeps byte order when LC_ALL names another locale" {
   local locale_name=""
   locale_name=$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -n 1)
