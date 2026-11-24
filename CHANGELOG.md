@@ -242,6 +242,16 @@ verification, and remaining limitations.
 
 ### Fixed
 
+- Workspace: report empty navigation as a successful no-op, explain invalid
+  routes and dash-prefixed queries, and preserve directory hook output. Missing
+  clone confirmation returns status `1` and interruptions keep their status.
+  Delegated Git output follows the clone report's heading and timing policy.
+
+- Workspace: keep discovery diagnostics private, omit invalid UTF-8 paths,
+  and report unknown status and preview facts accurately. Publish one complete
+  monochrome JSON report after rendering succeeds. Error rows use `null` for
+  `detached` and `upstream_state` in the v1 schema.
+
 - Environment: explain invalid arguments before inspection, keep help
   exclusive, and distinguish declined consent from terminal and picker errors.
 

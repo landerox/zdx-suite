@@ -661,6 +661,24 @@ write_grammar_fixture() {
   [ ! -s "$HOME/json.stdout" ]
 }
 
+@test "env dotenv: a failed jq report publishes none of the producer output" {
+  write_dotenv .env 'A=fixture-secret'
+  cat > "$TEST_MOCK_BIN/jq" <<'SH'
+#!/bin/sh
+printf '%s\n' '{"partial":true}' | tee "$DOTENV_PROJECT/jq.stdout"
+exit 42
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/jq"
+
+  run_dotenv --json
+  [ "$output" = "rc=1" ]
+  [ "$(cat "$DOTENV_PROJECT/jq.stdout")" = '{"partial":true}' ]
+  [ -f "$TEST_TEMP_DIR/dotenv.stdout" ]
+  [ ! -s "$TEST_TEMP_DIR/dotenv.stdout" ]
+  [[ "$DOTENV_STDERR" == *"jq could not build the env-dotenv JSON report."* ]]
+  [[ "$DOTENV_STDERR" != *fixture-secret* && "$DOTENV_STDERR" != *'"partial"'* ]]
+}
+
 @test "env dotenv: unusable or slow Git leaves its facts unknown" {
   write_dotenv .env 'A=1'
 

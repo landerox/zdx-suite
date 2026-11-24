@@ -366,8 +366,34 @@ make_outside_repository() {
   printf '%s\n' "$output" | jq -e '
     .counts.errors == 1
     and ([.repositories[] | select(.repository == "stashed")][0]
-      | .error == "git status failed (status 128)" and .attention_reasons == ["error"])
+      | .error == "git status failed (status 128)" and .attention_reasons == ["error"]
+        and .detached == null and .upstream_state == null)
   ' >/dev/null
+}
+
+@test "ws status: a failed final jq render publishes no partial data" {
+  export WS_REAL_JQ
+  WS_REAL_JQ=$(type -P jq)
+  [ -n "$WS_REAL_JQ" ]
+  cat > "$TEST_MOCK_BIN/jq" <<'SH'
+#!/bin/sh
+printf '%s\n' "$1" >> "$HOME/jq-flags"
+for argument do
+  if [ "$argument" = zdx.ws-status.v1 ]; then
+    cat >/dev/null
+    printf '{"schema":"zdx.ws-status.v1"}\n'
+    exit 17
+  fi
+done
+exec "$WS_REAL_JQ" "$@"
+SH
+  chmod -- 700 "$TEST_MOCK_BIN/jq"
+  run --separate-stderr run_zsh 'ws-status --json'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"jq could not build the ws-status JSON document."* ]]
+  [ "$(sort -u "$HOME/jq-flags")" = -cM ]
+  [ "$(wc -l < "$HOME/jq-flags")" -gt 1 ]
 }
 
 @test "ws status: an empty workspace and a missing jq are handled" {

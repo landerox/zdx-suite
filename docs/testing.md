@@ -147,6 +147,10 @@ create a separate test file merely because a production file exists.
 
 ### Core output coverage
 
+`json_contract.bats` checks the shipped JSON schema inventory, the jq compact
+and monochrome options, and guarded capture before publication. Each suite's
+runtime fixtures verify its own document, streams, and status.
+
 | File | Covered boundary |
 | --- | --- |
 | `output.bats` | Service availability before any suite in lazy and eager loading; the single duration format with rounding edges, invalid input, and a decimal-comma locale; counted nouns; the twelve-token outcome vocabulary and classes; top-level, suppressed, and verbose-demoted headings; key-value lines with one key width, an added colon, and a theme-safe bold key; report sections that follow the step depth and reuse a heading's blank line with `--first`; step summaries omitted inside a step unless verbose; exact step banners and result lines, including a first banner that reuses a heading's blank line; display-width table alignment with all-or-nothing validation; step-slot reconciliation with exit statuses, subshell reports, and caller `REPLY`; captured execution that hides success output, replays a bounded, color-stripped, credential-redacted tail on failure, keeps the caller umask, closes stdin, never runs on invalid arguments or an unsafe `TMPDIR`, streams under `ZDX_VERBOSE=1`, and never shows `replay 0` output; the in-shell capture that keeps shell changes; the outermost-only timing footer with per-level telemetry using registered command labels; and the core `_zdx_spinner` helper, which returns its command's output |
@@ -975,6 +979,15 @@ that appears during quarantine, and `.virtualenvs` count bounds still require
 focused regression cases.
 
 ### Workspace coverage
+
+`ws.bats`, `ws_jump.bats`, and `ws_clone.bats` cover literal Workspace timers,
+query help and empty navigation, directory hook output, a directory moved
+just before `cd`, clone confirmation statuses, and the delegated Git heading
+and footer policy.
+
+`ws_jump.bats` and `ws_status.bats` cover an eligible preview executable,
+unknown Git facts, invalid UTF-8 names, bounded private discovery diagnostics,
+and suppression of output after a failed final jq render.
 
 `ws_input_safety.bats` proves real UTF-8 libc range widening before testing
 ASCII name/URL/hostname/alias refusal, valid ASCII limits, caller locale/match

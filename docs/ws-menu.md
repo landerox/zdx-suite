@@ -65,7 +65,8 @@ it.
 
 `ws-menu` with no arguments opens the interactive menu. It also accepts one
 canonical command followed by that command's unchanged arguments. Invalid
-syntax returns `2`; interactive cancellation returns `0`.
+syntax returns `2` and a diagnostic. Interactive cancellation returns `0`.
+Named actions use the same command timer from either route.
 
 ## Menu presentation
 
@@ -104,7 +105,7 @@ starting with a letter or digit.
 
 | Setting | Default | Rule |
 | --- | --- | --- |
-| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Absolute path to an existing directory; never `/`. An explicit empty value is kept and refused |
+| `WS_BASE_DIR` | `${HOME:A}/workspaces` | Absolute UTF-8 path to an existing directory without control characters. The root `/` and empty values are refused |
 | `WS_MAX_DEPTH` | `3` | Integer from 1 to 10: the deepest repository level below the root |
 | `WS_EXCLUDE` | empty array | Relative subtrees below the root, such as `github/archive`; not patterns. Absolute, `.`, and `..` entries are refused |
 | `WS_FETCH_JOBS` | `4` | Integer from 1 to 16: concurrent fetches for `ws-status --fetch` |
@@ -123,16 +124,21 @@ Discovery never lists:
 - `WS_EXCLUDE` subtrees;
 - a repository inside another listed repository, such as a submodule checkout
   or a vendored clone;
-- a directory whose relative path contains a control character or `|`, which
+- a directory whose relative path contains an ASCII or C1 control character or `|`, which
   cannot be shown as one record. These are counted in one warning, such as
   `Skipped 2 directories whose names cannot be shown safely.`
 
 `fd` is preferred, including the `fdfind` name that Debian and Ubuntu install,
-with `--no-ignore` so `.gitignore` files cannot hide repositories. `find`
+with `--no-ignore` and `--show-errors`. `find`
 (GNU or BSD) is the fallback and produces the same list. The scan is bounded
 to 30 seconds and 8 MiB of output, and more than 2,000 repositories fail
 closed with advice to lower `WS_MAX_DEPTH` or add `WS_EXCLUDE` entries.
-Unreadable directories produce a warning; the rest of the scan still counts.
+The scan uses the standard Zsh `zsh/system` and `zsh/stat` modules for a
+private diagnostic file bounded to 64 KiB. It prints one generic warning
+for unreadable directories and keeps the other valid results. If diagnostics
+reach the limit, discovery fails and withholds the inventory.
+Names with invalid UTF-8 bytes are omitted with the existing skipped-name
+warning.
 
 The read-only commands accept a root reached through symbolic links, such as
 `~/workspaces` linked to another disk. `ws-clone` applies stricter ownership
@@ -165,7 +171,8 @@ in the caller's shell, including through `ws-menu ws-jump` and `zdx ws
 ws-jump`. In a subshell or command substitution it warns that the change
 cannot reach the caller.
 
-Without `QUERY`, it opens a picker of every repository. `QUERY` selects the
+Without `QUERY`, it opens a picker of every repository. An empty workspace
+returns `0` with an informational line. `QUERY` selects the
 repositories named exactly `QUERY`; when none is, it selects those whose
 relative path contains `QUERY` with any letter case. One match changes
 directory at once; several open the picker with only those repositories; none
@@ -179,10 +186,13 @@ back to the frozen path.
 
 The preview pane shows the branch (or `detached at <commit>`), the number of
 uncommitted changes (`clean` for none), and the last commit's age and subject.
-Its program text is constant: fzf supplies only the integer row index `{n}`,
-and the program reads the matching path from an owner-only snapshot file in a
-private directory below the validated `TMPDIR`. No path, name, or selected
-text is ever part of the program. It first clears the
+Its program is fixed. fzf supplies the integer row index `{n}`, and the
+program reads the matching path from an owner-only snapshot file in a
+private directory below the validated `TMPDIR`. The shell reads the snapshot
+and Git paths from the picker's environment. The preview uses the exact
+absolute Git executable that passed the suite's eligibility checks. A failed
+qualification leaves navigation available. An unsuccessful branch or
+working-tree observation shows `unknown`. The program first clears the
 [repository variables](#repository-variables), then runs only read-only Git
 commands (`symbolic-ref`, `rev-parse`,
 `--no-optional-locks status --porcelain`, and `log -1`), and removes control
@@ -191,10 +201,11 @@ preview has no timeout of its own; fzf replaces it when the cursor moves.
 
 After a selection, the target must still be a real, non-symlink directory at
 the same canonical path below the root with a `.git` entry; otherwise
-`ws-jump` refuses it with status `1`. It then runs `builtin cd`, so `chpwd`
-hooks run as for any directory change, and prints `Now in <path>` on stderr.
-Cancellation leaves the directory unchanged and returns `0`. stdout stays
-empty.
+`ws-jump` refuses it with status `1`. A successful directory change runs
+`chpwd` hooks on the caller's streams and prints `Now in <path>` on stderr.
+A failed directory change prints a Workspace diagnostic and returns `1`.
+Cancellation leaves the directory unchanged and returns `0`.
+The navigation command's own feedback uses stderr.
 
 ## `ws-status`
 
@@ -332,15 +343,17 @@ returns `1`. The document is shown expanded here:
   depth one.
 - `branch` is `null` for a detached `HEAD`, and `head` is `null` before the
   first commit. `upstream_state` is `none`, `tracking`, or `gone`; `ahead` and
-  `behind` are `null` unless it is `tracking`.
+  `behind` are `null` unless it is `tracking`. A failed status probe leaves
+  `detached` and `upstream_state` at `null`.
 - `last_commit_at` is an ISO-8601 UTC timestamp or `null`.
 - `fetch` is `null` without `--fetch`, and otherwise `ok`, `failed`,
   `timed-out`, or `skipped`. `error` names a failed probe, such as
   `git status failed (status 128)`.
 - Remote URLs are never included, so no credential can leak through them.
 
-Repositories are ordered as in the text report. Exit statuses match the text
-mode.
+Repositories are ordered as in the text report. Both jq renders use compact,
+monochrome output, and the complete document is captured before publication.
+Exit statuses match the text mode.
 
 ## `ws-clone`
 
@@ -446,9 +459,9 @@ The workspace line says whether the identity came from an option, was
 inferred, or was selected. New directories are listed as `New directory`
 lines. `--dry-run` stops with `Dry run: 1 clone planned; nothing was cloned.`
 Otherwise `ws-clone` asks `Clone app into ~/workspaces/github/personal?`; a
-decline prints `Cancelled: nothing was cloned.` and returns `0`, and without a
-terminal and without `--yes` it fails closed with status `2`. `--yes` skips
-only the prompt.
+decline prints `Cancelled: nothing was cloned.` and returns `0`. Missing
+terminal confirmation returns `1` and a confirmation interruption retains
+`130` or `143`. `--yes` skips only the prompt.
 
 After authorization, the root and every existing workspace directory must
 keep the device and inode they had while planning, planned directories must
@@ -488,11 +501,12 @@ git-menu git-identity-switcher --switch <identity> local
 ```
 
 An inherited `GIT_DIR` therefore cannot redirect the profile to another
-repository. The Git suite validates the profile and writes the local
-configuration; that command has no prompt of its own, and the clone plan
-already named it. If it fails, or `git-menu` is not loaded, the clone is kept,
-the exact retry command is printed, and the status is `1`. The caller's
-directory never changes.
+repository. With the core loaded, the delegated heading is subordinate and
+the Git timer's footer is suppressed. The Git suite validates the profile
+and writes the local configuration. The clone plan names the profile, and the
+Git command runs without a prompt. If it fails or `git-menu` is not loaded,
+the clone is kept, the exact retry command is printed, and the status is `1`.
+The caller's directory never changes.
 
 On success `ws-clone` prints the destination's absolute path on stdout, so
 `cd "$(ws-clone URL --yes)"` works.
@@ -502,9 +516,9 @@ On success `ws-clone` prints the destination's absolute path on stdout, so
 | Status | Meaning |
 | --- | --- |
 | `0` | Success, an empty workspace, a dry run, or a cancellation |
-| `1` | A missing or unsafe root, a failed probe, fetch, clone, or identity step, a refused selection, or no matching repository |
-| `2` | Invalid arguments, a refused URL, or a choice that needs a terminal |
-| `130`, `143` | An interrupted clone or fetch batch; no clone was published and later fetches are not scheduled |
+| `1` | A missing or unsafe root, a failed probe, fetch, clone, or identity step, unavailable clone confirmation, a refused selection, or no matching repository |
+| `2` | Invalid arguments, a refused URL, or a missing required URL or identity choice |
+| `130`, `143` | An interrupted clone confirmation, clone, or fetch batch. A clone interrupted before publication leaves no destination and an interrupted fetch batch schedules no later fetches |
 
 UI, plans, warnings, prompts, picker chrome, and child-tool output use stderr.
 Documented stdout data is limited to the `ws-status --json` document and the

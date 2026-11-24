@@ -41,8 +41,9 @@ _ws_complete_clone() {
 }
 
 _ws_complete_jump() {
-  _arguments \
+  _arguments -S \
     '(- *)'{-h,--help}'[show command help]' \
+    '--[end options before a query beginning with a dash]' \
     '1:repository name or path fragment:'
 }
 

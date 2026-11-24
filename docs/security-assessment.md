@@ -3153,7 +3153,10 @@ memory or CPU during inspection.
   Missing job-state infrastructure uses the transparent foreground callback.
   These checks do not eliminate every asynchronous PID or signal race.
 - Workspace discovery runs under a 30-second deadline with an 8 MiB output
-  ceiling and fails closed above 2,000 repositories. Each `ws-status` probe and
+  ceiling and fails closed above 2,000 repositories. A private file bounds
+  discovery diagnostics to 64 KiB. Successful scans report a generic warning
+  when diagnostics are present and omit paths with invalid UTF-8 bytes.
+  Each `ws-status` probe and
   each SSH alias or Git configuration probe is bounded through the core timeout
   service, and `ws-status --fetch` runs at most `WS_FETCH_JOBS` fetches at a
   time with a 60-second work deadline, Git/GCM prompt suppression and closed
@@ -3165,6 +3168,7 @@ memory or CPU during inspection.
   stale numeric PID/group. First-observed `130`/`143` prevents later scheduling
   and survives cleanup. Missing proof retains private state, reports its escaped
   path, and fails instead of claiming completion or publishing partial JSON.
+  The final JSON report is also withheld when its renderer fails.
   The boundary covers same-group descendants; trusted transports may detach,
   inherited caller descriptors and startup/configuration remain trusted, and
   an externally stopped owner can prevent bounded completion. No real SSH,
@@ -3379,4 +3383,4 @@ Review and update this document whenever:
 For each change, record the threat, implemented control, tests, and remaining
 risk. Do not describe a planned control as already present.
 
-Last reviewed: 2026-11-16.
+Last reviewed: 2026-11-23.

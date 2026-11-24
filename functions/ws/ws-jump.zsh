@@ -19,6 +19,7 @@ fi
 
 _ws_jump_usage() {
   print -u2 -r -- "Usage: ws-jump [QUERY]"
+  print -u2 -r -- "       ws-jump -- QUERY"
   print -u2 -r -- "       ws-jump --help"
   print -u2 -r -- ""
   print -u2 -r -- \
@@ -30,6 +31,7 @@ _ws_jump_usage() {
   print -u2 -r -- \
     "it, ignoring case. One match changes directory at once; several open the"
   print -u2 -r -- "picker with only those repositories."
+  print -u2 -r -- "Use -- before a query that starts with -."
   print -u2 -r -- ""
   print -u2 -r -- \
     "Settings: WS_BASE_DIR, WS_MAX_DEPTH (1-10, default 3), and WS_EXCLUDE."
@@ -78,22 +80,36 @@ _ws_jump_pick() {
     absolute_paths+=("$root/$relative")
   done
 
-  # The preview program is constant: fzf supplies only the row index {n},
-  # and the snapshot path is a validated private file quoted for /bin/sh.
-  # It runs in fzf's shell, so it first clears the repository-local Git
-  # variables itself, as _ws_git_command does, or an inherited GIT_DIR would
-  # make every row describe the repository it names.
+  # fzf supplies only the row index {n}. The private snapshot and the
+  # qualified Git executable reach its preview shell as environment data.
+  # Clear the repository-local variables before running any Git probe.
+  local preview_git=""
+  _ws_git_program 2>/dev/null && preview_git="$REPLY"
   local preview="unset ${(j: :)${(@qq)_WS_GIT_LOCAL_ENV_VARS}}"$'\n'
-  preview+="s=${(qq)snapshot_file}"$'\n'
-  preview+='n={n}
+  preview+='s="$_WS_JUMP_PREVIEW_FILE"
+g="$_WS_JUMP_PREVIEW_GIT"
+n={n}
 case "$n" in ""|*[!0-9]*) exit 0 ;; esac
 d=$(sed -n "$((n + 1))p" "$s" 2>/dev/null)
 if [ -z "$d" ] || [ ! -d "$d" ]; then printf "%s\n" "Repository unavailable."; exit 0; fi
-if ! command -v git >/dev/null 2>&1; then printf "%s\n" "Git is not installed."; exit 0; fi
-b=$(git -c core.fsmonitor=false -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || b="detached at $(git -c core.fsmonitor=false -C "$d" rev-parse --short HEAD 2>/dev/null)"
-c=$(git --no-optional-locks -c core.fsmonitor=false -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d " ")
-[ "$c" = 0 ] && c=clean
-l=$(git -c core.fsmonitor=false -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
+if [ -z "$g" ]; then printf "%s\n" "Git preview is unavailable."; exit 0; fi
+b=$("$g" -c core.fsmonitor=false -C "$d" symbolic-ref --quiet --short HEAD </dev/null 2>/dev/null) || b=""
+if [ -z "$b" ]; then
+  h=$("$g" -c core.fsmonitor=false -C "$d" rev-parse --short HEAD </dev/null 2>/dev/null) || h=""
+  case "$h" in
+    ""|*[!0-9a-fA-F]*) b=unknown ;;
+    *) b="detached at $h" ;;
+  esac
+fi
+c=unknown
+if changes=$("$g" --no-optional-locks -c core.fsmonitor=false -C "$d" status --porcelain </dev/null 2>/dev/null); then
+  if [ -z "$changes" ]; then
+    c=clean
+  else
+    c=$(printf "%s\n" "$changes" | wc -l | tr -d " ")
+  fi
+fi
+l=$("$g" -c core.fsmonitor=false -C "$d" -c log.showSignature=false log -1 --format="%cr: %s" </dev/null 2>/dev/null | LC_ALL=C tr -d "\000-\037\177")
 printf "Branch:      %s\nChanges:     %s\nLast commit: %s\n" "$b" "${c:-unknown}" "${l:-none}"'
 
   {
@@ -102,7 +118,7 @@ printf "Branch:      %s\nChanges:     %s\nLast commit: %s\n" "$b" "${c:-unknown}
       _ws_error "Could not write the private repository snapshot."
       operation_rc=1
     else
-      _ws_fzf_capture \
+      _WS_JUMP_PREVIEW_FILE="$snapshot_file" _WS_JUMP_PREVIEW_GIT="$preview_git" _ws_fzf_capture \
         --height='80%' \
         --delimiter='[|]' \
         --with-nth=1 \
@@ -208,10 +224,10 @@ ws-jump() {
     _ws_count_noun "$skipped" directory directories
     _ws_warn "Skipped $REPLY whose names cannot be shown safely."
   fi
-  (( ${#repositories[@]} > 0 )) || {
-    _ws_warn "No repositories were found below $root_display."
-    return 1
-  }
+  if (( ! have_query && ${#repositories[@]} == 0 )); then
+    _ws_info "No repositories were found below $root_display."
+    return 0
+  fi
 
   local -a candidates=("${repositories[@]}")
   if (( have_query )); then
@@ -245,10 +261,23 @@ ws-jump() {
     _ws_error "The repository changed or no longer exists: $target_display"
     return 1
   fi
-  builtin cd -- "$target" || {
+  builtin cd -q -- "$target" 2>/dev/null || {
     _ws_error "Could not change to $target_display"
     return 1
   }
+  # Keep the builtin's path diagnostic private and run the directory hooks
+  # with their original streams. The direct hook can update the array.
+  if (( ${+functions[chpwd]} )); then
+    'chpwd' || :
+  fi
+  if [[ "${(t)chpwd_functions}" == array* ]]; then
+    local ws_chpwd_hook=""
+    for ws_chpwd_hook in "${chpwd_functions[@]}"; do
+      if [[ -n "$ws_chpwd_hook" ]] && (( ${+functions[$ws_chpwd_hook]} )); then
+        "$ws_chpwd_hook" || :
+      fi
+    done
+  fi
   _ws_success "Now in $target_display"
 }
 

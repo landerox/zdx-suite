@@ -122,13 +122,13 @@ _ws_menu_context() {
   local root="${WS_BASE_DIR-}" root_state="present" discovery="none"
   local profiles="none" scope_value=""
   local -a reply=()
+  _ws_workspace_root 2>/dev/null || :
+  root_state="$REPLY"
   if [[ -z "$root" || "$root" != /* ]]; then
     scope_value="not set"
-    root_state="invalid"
   else
     _ws_command_display "$root"
     scope_value="$REPLY"
-    [[ -d "$root" ]] || root_state="missing"
   fi
   _ws_discovery_backend && discovery="${reply[2]}"
   if [[ "${(t)ZDX_GIT_IDENTITIES-}" == *association* ]] \
@@ -185,16 +185,25 @@ _ws_menu_interactive() {
   local command_name="${${selected#*|}%%|*}"
   [[ "$command_name" == ":" ]] && return 0
   # ws-jump changes the directory of this shell, so dispatch stays in it.
-  _ws_timed "ws:$command_name" _ws_dispatch "$command_name"
+  _ws_dispatch "$command_name"
 }
 
 ws-menu() {
   emulate -L zsh
 
-  case "${1:-}" in
+  if (( $# == 0 )); then
+    _ws_menu_interactive
+    return $?
+  fi
+
+  case "$1" in
     "")
-      (( $# == 0 )) || return 2
-      _ws_menu_interactive
+      _ws_error "Invalid empty Workspace command."
+      return 2
+      ;;
+    *:*)
+      _ws_error "Invalid Workspace command. Run ws-menu --help for usage."
+      return 2
       ;;
     -h|--help)
       (( $# == 1 )) || {
@@ -208,10 +217,7 @@ ws-menu() {
       return 2
       ;;
     *)
-      local command_name="$1"
-      shift
-      _ws_timed "ws:$command_name" \
-        _ws_dispatch "$command_name" "$@"
+      _ws_dispatch "$@"
       ;;
   esac
 }

@@ -76,7 +76,7 @@ assert_contract_matches() {
   local actual
   actual=$(
     sed -n '/^_ws_dispatch()/,/^}/p' "$TEST_SUITE_ROOT/functions/ws-common.zsh" \
-      | sed -nE 's/^[[:space:]]*(ws(-[a-z]+)+)\)[[:space:]].*$/\1/p' \
+      | sed -nE 's/^[[:space:]]*(ws(-[a-z]+)+)\)([[:space:]].*)?$/\1/p' \
       | sort
   )
   assert_contract_matches "$actual"

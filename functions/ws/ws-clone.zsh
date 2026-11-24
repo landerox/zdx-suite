@@ -692,11 +692,13 @@ ws-clone() {
 
   local auto_yes="no"
   (( assume_yes )) && auto_yes="yes"
-  local -i confirm_rc=0
   _ws_confirm_mutation "Clone $name into $identity_display?" "$auto_yes" \
-    "Cancelled: nothing was cloned." || confirm_rc=$?
-  (( confirm_rc == 130 )) && return 0
-  (( confirm_rc == 0 )) || return $confirm_rc
+    "Cancelled: nothing was cloned." || return $?
+  case "$REPLY" in
+    confirmed) ;;
+    declined) return 0 ;;
+    *) return 1 ;;
+  esac
 
   # Revalidate after authorization: the tree may have changed meanwhile.
   local -i check_index=0
@@ -823,9 +825,12 @@ ws-clone() {
       # repository in a subshell, so this shell keeps its directory, and
       # without inherited repository variables such as GIT_DIR, which would
       # make it configure the repository they name instead of the clone.
-      ( builtin cd -q -- "$destination" \
-        && _ws_git_command 0 git-menu git-identity-switcher \
-          --switch "$identity" local ) \
+      local -a identity_command=(git-menu git-identity-switcher --switch "$identity" local)
+      if (( ${+functions[_zdx_delegate]} )); then
+        identity_command=(_zdx_delegate "${identity_command[@]}")
+      fi
+      ( builtin cd -q -- "$destination" 2>/dev/null \
+        && _ws_git_command 0 "${identity_command[@]}" ) \
         || identity_rc=$?
       if (( identity_rc != 0 )); then
         _ws_error "The identity profile was not applied (status $identity_rc); the clone is kept."
