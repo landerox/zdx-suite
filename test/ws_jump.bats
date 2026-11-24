@@ -300,6 +300,55 @@ EOF
   [[ "$output" == *"pwd:$HOME"* ]]
 }
 
+@test "ws jump: successful navigation preserves directory hook output and order" {
+  run --separate-stderr run_zsh '
+    builtin cd -- "$HOME" || return 91
+    chpwd() {
+      print -u2 -r -- "direct:$#:$OLDPWD:$PWD"
+      chpwd_functions=(missing_hook named_hook last_hook)
+      return 17
+    }
+    named_hook() { print -r -- "named:$#"; return 19; }
+    last_hook() { print -u2 -r -- "last:$#"; }
+    chpwd_functions=()
+    TRAPZERR() {
+      local -i hook_rc=$?
+      if (( hook_rc == 17 || hook_rc == 19 )); then
+        print -u2 -r -- "Unexpected hook error: $hook_rc"
+      fi
+    }
+    ws-jump alpha
+    (( $? == 0 )) || return 92
+    [[ "$PWD" == "$WS/github/personal/alpha" && "$OLDPWD" == "$HOME" ]]
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "named:0" ]
+  [[ "$stderr" == "direct:0:$HOME:$WS/github/personal/alpha"$'\nlast:0\n'*"Now in ~/workspaces/github/personal/alpha"* ]]
+}
+
+@test "ws jump: a late cd failure is reported on the suite stream" {
+  run --separate-stderr run_zsh '
+    builtin cd -- "$HOME" || return 90
+    TRAPDEBUG() {
+      if [[ "$ZSH_DEBUG_CMD" == '\''builtin cd -q -- "$target"'\''* \
+        && -d "$WS/github/personal/alpha" ]]; then
+        command mv -- "$WS/github/personal/alpha" "$WS/github/personal/moved" || return 91
+        print -r -- reached >"$HOME/late-cd"
+      fi
+      return 0
+    }
+    local -i jump_rc=0
+    ws-jump alpha || jump_rc=$?
+    [[ "$PWD" == "$HOME" ]] || return 92
+    return $jump_rc
+  '
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [ -f "$HOME/late-cd" ]
+  [[ "$stderr" == *"Could not change to ~/workspaces/github/personal/alpha"* ]]
+  [[ "$stderr" != *":cd:"* && "$stderr" != *"$WS/github/personal/alpha"* ]]
+}
+
 @test "ws jump: hostile directory names are listed as data or skipped" {
   local hostile="$WS/github/personal/it's \$(touch \"\$TMPDIR\"pwned) \`id\` repo"
   mkdir -p "$hostile/.git"
@@ -421,17 +470,29 @@ EOF
   [[ "$output" == *"zdx:$WS/gitlab/work/gamma"* ]]
 }
 
-@test "ws jump: a missing root or an empty workspace fails clearly" {
+@test "ws jump: an empty workspace without a query is a no-op" {
   run run_zsh 'WS_BASE_DIR="$HOME/nowhere"; ws-jump'
   [ "$status" -eq 1 ]
   [[ "$output" == *"The workspace root does not exist: ~/nowhere"* ]]
 
   mkdir -p "$HOME/empty"
-  run run_zsh 'WS_BASE_DIR="$HOME/empty"; ws-jump'
+  run --separate-stderr run_zsh 'WS_BASE_DIR="$HOME/empty"; ws-jump'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"No repositories were found below ~/empty."* ]]
+
+  run run_zsh 'WS_BASE_DIR="$HOME/empty"; ws-jump alpha'
   [ "$status" -eq 1 ]
-  [[ "$output" == *"No repositories were found below ~/empty."* ]]
+  [[ "$output" == *"No repository below ~/empty matches 'alpha'."* ]]
 
   run run_zsh 'WS_BASE_DIR=relative/path; ws-jump'
   [ "$status" -eq 1 ]
   [[ "$output" == *"WS_BASE_DIR must be an absolute path."* ]]
+}
+
+@test "ws jump: help documents the separator for queries beginning with a dash" {
+  run --separate-stderr run_zsh 'ws-jump --help'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"ws-jump -- QUERY"* ]]
 }

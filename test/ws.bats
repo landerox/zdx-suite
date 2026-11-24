@@ -141,6 +141,26 @@ EOF
   [ ! -e "$HOME/split" ]
 }
 
+@test "ws: only public actions enter a timer with a fixed label" {
+  run --separate-stderr run_zsh '
+    _timed() { print -r -- "timer:$1"; shift; "$@"; }
+    ws-status() { print -r -- "status:$#:${(j.|.)@}"; }
+    ws-menu ws-status --json || return 81
+    _ws_dispatch : || return 82
+    ws-menu "" && return 83
+    (( $? == 2 )) || return 84
+    ws-menu : && return 85
+    (( $? == 2 )) || return 86
+    ws-menu ws-unknown && return 87
+    (( $? == 2 )) || return 88
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'timer:ws:ws-status\nstatus:1:--json')" ]
+  [[ "$stderr" == *"Invalid empty Workspace command."* ]]
+  [[ "$stderr" == *"Invalid Workspace command."* ]]
+  [[ "$stderr" != *ws-unknown* ]]
+}
+
 @test "ws: the menu root fact agrees with command validation without scanning" {
   touch "$HOME/workspace-file"
   mkdir "$HOME/"$'canonical\nworkspace'

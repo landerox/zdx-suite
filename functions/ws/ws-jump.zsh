@@ -19,6 +19,7 @@ fi
 
 _ws_jump_usage() {
   print -u2 -r -- "Usage: ws-jump [QUERY]"
+  print -u2 -r -- "       ws-jump -- QUERY"
   print -u2 -r -- "       ws-jump --help"
   print -u2 -r -- ""
   print -u2 -r -- \
@@ -30,6 +31,7 @@ _ws_jump_usage() {
   print -u2 -r -- \
     "it, ignoring case. One match changes directory at once; several open the"
   print -u2 -r -- "picker with only those repositories."
+  print -u2 -r -- "Use -- before a query that starts with -."
   print -u2 -r -- ""
   print -u2 -r -- \
     "Settings: WS_BASE_DIR, WS_MAX_DEPTH (1-10, default 3), and WS_EXCLUDE."
@@ -222,10 +224,10 @@ ws-jump() {
     _ws_count_noun "$skipped" directory directories
     _ws_warn "Skipped $REPLY whose names cannot be shown safely."
   fi
-  (( ${#repositories[@]} > 0 )) || {
-    _ws_warn "No repositories were found below $root_display."
-    return 1
-  }
+  if (( ! have_query && ${#repositories[@]} == 0 )); then
+    _ws_info "No repositories were found below $root_display."
+    return 0
+  fi
 
   local -a candidates=("${repositories[@]}")
   if (( have_query )); then
@@ -259,10 +261,23 @@ ws-jump() {
     _ws_error "The repository changed or no longer exists: $target_display"
     return 1
   fi
-  builtin cd -- "$target" || {
+  builtin cd -q -- "$target" 2>/dev/null || {
     _ws_error "Could not change to $target_display"
     return 1
   }
+  # Keep the builtin's path diagnostic private and run the directory hooks
+  # with their original streams. The direct hook can update the array.
+  if (( ${+functions[chpwd]} )); then
+    'chpwd' || :
+  fi
+  if [[ "${(t)chpwd_functions}" == array* ]]; then
+    local ws_chpwd_hook=""
+    for ws_chpwd_hook in "${chpwd_functions[@]}"; do
+      if [[ -n "$ws_chpwd_hook" ]] && (( ${+functions[$ws_chpwd_hook]} )); then
+        "$ws_chpwd_hook" || :
+      fi
+    done
+  fi
   _ws_success "Now in $target_display"
 }
 

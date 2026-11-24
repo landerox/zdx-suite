@@ -672,23 +672,30 @@ _ws_confirm() {
 }
 
 # Usage: _ws_confirm_mutation <prompt> [auto-yes] [cancellation message]
-# Status 130 means the user declined; 2 means no terminal and no --yes.
+# On success, REPLY is confirmed or declined. Operational failures and
+# returned interruptions use a status distinct from either disposition.
 _ws_confirm_mutation() {
   local prompt="$1"
   local auto_yes="${2:-no}"
   local cancelled_message="${3:-Cancelled.}"
   local -i confirm_rc=0
+  REPLY=""
 
   _ws_confirm "$prompt" "$auto_yes" || confirm_rc=$?
   case "$confirm_rc" in
-    0) return 0 ;;
+    0) REPLY=confirmed ;;
     1)
       _ws_info "$cancelled_message"
-      return 130
+      REPLY=declined
       ;;
-    *)
+    2)
       _ws_error "Confirmation requires a terminal; pass --yes to proceed."
-      return 2
+      return 1
+      ;;
+    130|143) return "$confirm_rc" ;;
+    *)
+      _ws_error "Could not obtain confirmation (status $confirm_rc)."
+      return 1
       ;;
   esac
 }
@@ -1437,16 +1444,23 @@ _ws_collect_repositories() {
 # --- Dispatcher -------------------------------------------------------------
 
 _ws_dispatch() {
+  emulate -L zsh
   local command_name="${1:-}"
   shift 2>/dev/null || true
 
   case "$command_name" in
-    ws-clone)  ws-clone "$@" ;;
-    ws-jump)   ws-jump "$@" ;;
-    ws-status) ws-status "$@" ;;
+    ws-clone)
+      _ws_timed "ws:ws-clone" ws-clone "$@"
+      ;;
+    ws-jump)
+      _ws_timed "ws:ws-jump" ws-jump "$@"
+      ;;
+    ws-status)
+      _ws_timed "ws:ws-status" ws-status "$@"
+      ;;
     :)         return 0 ;;
     *)
-      _ws_error "Unknown Workspace command: $command_name"
+      _ws_error "Invalid Workspace command. Run ws-menu --help for usage."
       return 2
       ;;
   esac

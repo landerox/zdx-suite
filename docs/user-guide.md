@@ -557,8 +557,10 @@ choose an action, or call a command directly.
   Without a query it opens a picker whose details pane shows the branch, the
   number of uncommitted changes, and the last commit. A query that names one
   repository exactly, or matches one path with any letter case, jumps at once;
-  `ws-jump zdx` opens the picker with only the matching repositories. Only
-  directories that contain `.git` are listed, down to `WS_MAX_DEPTH` levels
+  `ws-jump zdx` opens the picker with only the matching repositories.
+  Use `ws-jump -- QUERY` if the query starts with `-`. An empty workspace
+  returns success without a query. The picker lists directories with a
+  `.git` entry down to `WS_MAX_DEPTH` levels
   (3 by default); hidden directories, symbolic links, nested repositories,
   and `WS_EXCLUDE` subtrees are left out. `fd` makes discovery faster;
   without it, `find` produces the same list.

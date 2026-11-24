@@ -976,6 +976,11 @@ focused regression cases.
 
 ### Workspace coverage
 
+`ws.bats`, `ws_jump.bats`, and `ws_clone.bats` cover literal Workspace timers,
+query help and empty navigation, directory hook output, a directory moved
+just before `cd`, clone confirmation statuses, and the delegated Git heading
+and footer policy.
+
 `ws_jump.bats` and `ws_status.bats` cover an eligible preview executable,
 unknown Git facts, invalid UTF-8 names, bounded private discovery diagnostics,
 and suppression of output after a failed final jq render.

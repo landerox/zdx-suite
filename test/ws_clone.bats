@@ -295,19 +295,21 @@ clone_count() {
 }
 
 @test "ws clone: the identity profile is applied through git-menu inside the clone" {
-  run run_zsh '
+  run --separate-stderr run_zsh '
     typeset -gA ZDX_GIT_IDENTITIES=(personal "Name|Jane Doe;Email|jane@example.com")
     git-menu() {
       print -r -- "git-menu|$PWD|$#|${(j:|:)@}" >> "$MOCK_GIT_MENU_LOG"
+      _timed git:git-identity-switcher _zdx_ui_heading "Git Identity Plan"
     }
     builtin cd -- "$HOME" || return
-    ws-clone https://github.com/acme/app.git --identity personal --yes \
-      2>/dev/null || return
+    NO_COLOR=1 ws-clone https://github.com/acme/app.git --identity personal --yes || return
     print -r -- "pwd:$PWD"
   '
   [ "$status" -eq 0 ]
   [ "$(cat "$MOCK_GIT_MENU_LOG")" = "git-menu|$WS/github/personal/app|4|git-identity-switcher|--switch|personal|local" ]
-  [[ "$output" == *"pwd:$HOME"* ]]
+  [ "$output" = "$(printf '%s\n' "$WS/github/personal/app" "pwd:$HOME")" ]
+  [[ "$stderr" == *"▸ Git Identity Plan"* ]]
+  [[ "$stderr" != *"git:git-identity-switcher completed in"* ]]
 
   : > "$MOCK_GIT_MENU_LOG"
   run run_zsh '
@@ -397,7 +399,7 @@ EOF
 
 @test "ws clone: without a terminal, confirmation and identity choices fail closed" {
   run run_zsh 'ws-clone https://github.com/acme/app.git --identity personal'
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"Confirmation requires a terminal; pass --yes to proceed."* ]]
 
   run run_zsh 'ws-clone https://github.com/acme/app.git --yes'
@@ -428,6 +430,24 @@ EOF
   [[ "$output" == *"Cancelled: nothing was cloned."* ]]
   [ "$(clone_count)" -eq 0 ]
   [ -z "$(ls -A "$WS/github/personal")" ]
+}
+
+@test "ws clone: returned confirmation interruptions preserve their status" {
+  local rc result=0
+  for rc in 130 143; do
+    export WS_CONFIRM_TEST_STATUS="$rc"
+    run --separate-stderr run_zsh '
+      _ws_confirm() { return "$WS_CONFIRM_TEST_STATUS"; }
+      ws-clone https://github.com/acme/app.git --identity personal
+    '
+    if [[ "$status" != "$rc" || -n "$output" || "$stderr" == *Cancelled* ]]; then
+      printf 'expected status %s, got %s\n%s\n' "$rc" "$status" "$stderr"
+      result=1
+    fi
+  done
+  [ "$result" -eq 0 ]
+  [ "$(clone_count)" -eq 0 ]
+  [ ! -e "$WS/github/personal/app" ]
 }
 
 @test "ws clone: the identity picker offers directories and profiles for the host" {

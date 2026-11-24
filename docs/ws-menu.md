@@ -65,7 +65,8 @@ it.
 
 `ws-menu` with no arguments opens the interactive menu. It also accepts one
 canonical command followed by that command's unchanged arguments. Invalid
-syntax returns `2`; interactive cancellation returns `0`.
+syntax returns `2` and a diagnostic. Interactive cancellation returns `0`.
+Named actions use the same command timer from either route.
 
 ## Menu presentation
 
@@ -170,7 +171,8 @@ in the caller's shell, including through `ws-menu ws-jump` and `zdx ws
 ws-jump`. In a subshell or command substitution it warns that the change
 cannot reach the caller.
 
-Without `QUERY`, it opens a picker of every repository. `QUERY` selects the
+Without `QUERY`, it opens a picker of every repository. An empty workspace
+returns `0` with an informational line. `QUERY` selects the
 repositories named exactly `QUERY`; when none is, it selects those whose
 relative path contains `QUERY` with any letter case. One match changes
 directory at once; several open the picker with only those repositories; none
@@ -199,10 +201,11 @@ preview has no timeout of its own; fzf replaces it when the cursor moves.
 
 After a selection, the target must still be a real, non-symlink directory at
 the same canonical path below the root with a `.git` entry; otherwise
-`ws-jump` refuses it with status `1`. It then runs `builtin cd`, so `chpwd`
-hooks run as for any directory change, and prints `Now in <path>` on stderr.
-Cancellation leaves the directory unchanged and returns `0`. stdout stays
-empty.
+`ws-jump` refuses it with status `1`. A successful directory change runs
+`chpwd` hooks on the caller's streams and prints `Now in <path>` on stderr.
+A failed directory change prints a Workspace diagnostic and returns `1`.
+Cancellation leaves the directory unchanged and returns `0`.
+The navigation command's own feedback uses stderr.
 
 ## `ws-status`
 
@@ -456,9 +459,9 @@ The workspace line says whether the identity came from an option, was
 inferred, or was selected. New directories are listed as `New directory`
 lines. `--dry-run` stops with `Dry run: 1 clone planned; nothing was cloned.`
 Otherwise `ws-clone` asks `Clone app into ~/workspaces/github/personal?`; a
-decline prints `Cancelled: nothing was cloned.` and returns `0`, and without a
-terminal and without `--yes` it fails closed with status `2`. `--yes` skips
-only the prompt.
+decline prints `Cancelled: nothing was cloned.` and returns `0`. Missing
+terminal confirmation returns `1` and a confirmation interruption retains
+`130` or `143`. `--yes` skips only the prompt.
 
 After authorization, the root and every existing workspace directory must
 keep the device and inode they had while planning, planned directories must
@@ -498,11 +501,12 @@ git-menu git-identity-switcher --switch <identity> local
 ```
 
 An inherited `GIT_DIR` therefore cannot redirect the profile to another
-repository. The Git suite validates the profile and writes the local
-configuration; that command has no prompt of its own, and the clone plan
-already named it. If it fails, or `git-menu` is not loaded, the clone is kept,
-the exact retry command is printed, and the status is `1`. The caller's
-directory never changes.
+repository. With the core loaded, the delegated heading is subordinate and
+the Git timer's footer is suppressed. The Git suite validates the profile
+and writes the local configuration. The clone plan names the profile, and the
+Git command runs without a prompt. If it fails or `git-menu` is not loaded,
+the clone is kept, the exact retry command is printed, and the status is `1`.
+The caller's directory never changes.
 
 On success `ws-clone` prints the destination's absolute path on stdout, so
 `cd "$(ws-clone URL --yes)"` works.
@@ -512,9 +516,9 @@ On success `ws-clone` prints the destination's absolute path on stdout, so
 | Status | Meaning |
 | --- | --- |
 | `0` | Success, an empty workspace, a dry run, or a cancellation |
-| `1` | A missing or unsafe root, a failed probe, fetch, clone, or identity step, a refused selection, or no matching repository |
-| `2` | Invalid arguments, a refused URL, or a choice that needs a terminal |
-| `130`, `143` | An interrupted clone or fetch batch; no clone was published and later fetches are not scheduled |
+| `1` | A missing or unsafe root, a failed probe, fetch, clone, or identity step, unavailable clone confirmation, a refused selection, or no matching repository |
+| `2` | Invalid arguments, a refused URL, or a missing required URL or identity choice |
+| `130`, `143` | An interrupted clone confirmation, clone, or fetch batch. A clone interrupted before publication leaves no destination and an interrupted fetch batch schedules no later fetches |
 
 UI, plans, warnings, prompts, picker chrome, and child-tool output use stderr.
 Documented stdout data is limited to the `ws-status --json` document and the
